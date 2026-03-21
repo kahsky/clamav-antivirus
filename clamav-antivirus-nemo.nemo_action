@@ -1,0 +1,7 @@
+[Nemo Action]
+Name=Scan with ClamAV Antivirus
+Comment=Analyser avec ClamAV Antivirus
+Exec=/opt/clamav-antivirus/clamav-scan-nemo.sh %F
+Icon-Name=/opt/clamav-antivirus/icons/shield-green.svg
+Selection=Any
+Extensions=any;

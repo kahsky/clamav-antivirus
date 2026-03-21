@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClamAV Antivirus</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+</head>
+<body>
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- SIDEBAR                                                            -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <aside class="sidebar">
+        <div class="sidebar-logo">
+            <svg class="logo-shield" viewBox="0 0 40 46" fill="none">
+                <path d="M20 2L4 10v12c0 11.1 6.8 21.4 16 24 9.2-2.6 16-12.9 16-24V10L20 2z" 
+                      fill="url(#shieldGrad)" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+                <path d="M16 23l4 4 8-8" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                <defs>
+                    <linearGradient id="shieldGrad" x1="4" y1="2" x2="36" y2="38">
+                        <stop offset="0%" stop-color="#22c55e"/>
+                        <stop offset="100%" stop-color="#059669"/>
+                    </linearGradient>
+                </defs>
+            </svg>
+            <span class="logo-text">ClamAV<br><small>Antivirus</small></span>
+        </div>
+
+        <nav class="sidebar-nav">
+            <button class="nav-btn active" data-tab="dashboard" onclick="switchTab('dashboard')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="7" height="7" rx="1"/>
+                    <rect x="14" y="3" width="7" height="7" rx="1"/>
+                    <rect x="3" y="14" width="7" height="7" rx="1"/>
+                    <rect x="14" y="14" width="7" height="7" rx="1"/>
+                </svg>
+                Tableau de bord
+            </button>
+            <button class="nav-btn" data-tab="scan" onclick="switchTab('scan')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"/>
+                    <path d="M21 21l-4.35-4.35"/>
+                </svg>
+                Scanner
+            </button>
+            <button class="nav-btn" data-tab="update" onclick="switchTab('update')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.66 0 3-4.03 3-9s-1.34-9-3-9m0 18c-1.66 0-3-4.03-3-9s1.34-9 3-9"/>
+                </svg>
+                Mises à jour
+            </button>
+            <button class="nav-btn" data-tab="logs" onclick="switchTab('logs')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                    <polyline points="14,2 14,8 20,8"/>
+                    <line x1="16" y1="13" x2="8" y2="13"/>
+                    <line x1="16" y1="17" x2="8" y2="17"/>
+                </svg>
+                Journaux
+            </button>
+            <button class="nav-btn" data-tab="quarantine" onclick="switchTab('quarantine')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    <line x1="9" y1="9" x2="15" y2="15"/>
+                    <line x1="15" y1="9" x2="9" y2="15"/>
+                </svg>
+                Quarantaine
+                <span class="nav-badge" id="quarantineBadge" style="display:none">0</span>
+            </button>
+            <button class="nav-btn" data-tab="install" onclick="switchTab('install')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                    <polyline points="7,10 12,15 17,10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Installation
+            </button>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="status-pill" id="statusPill">
+                <span class="status-dot"></span>
+                <span class="status-text">Chargement...</span>
+            </div>
+            <small class="version">v1.2.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;">Crédits</a></small>
+        </div>
+    </aside>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- MAIN CONTENT                                                       -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <main class="content">
+
+        <!-- ── DASHBOARD ────────────────────────────────────────────── -->
+        <section class="tab-panel active" id="tab-dashboard">
+            <div class="page-header">
+                <h1>Tableau de bord</h1>
+                <p class="subtitle">Vue d'ensemble de la protection</p>
+            </div>
+
+            <div class="cards-grid">
+                <div class="card card-status" id="cardStatus">
+                    <div class="card-icon">
+                        <svg class="shield-large" viewBox="0 0 60 70" fill="none">
+                            <path d="M30 4L8 14v16c0 16 9.5 30.5 22 34 12.5-3.5 22-18 22-34V14L30 4z" 
+                                  fill="url(#statusGrad)" opacity="0.15"/>
+                            <path d="M30 4L8 14v16c0 16 9.5 30.5 22 34 12.5-3.5 22-18 22-34V14L30 4z" 
+                                  stroke="url(#statusGrad)" stroke-width="2" fill="none"/>
+                            <path class="shield-check" d="M22 35l6 6 12-12" stroke="url(#statusGrad)" 
+                                  stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                            <defs>
+                                <linearGradient id="statusGrad" x1="8" y1="4" x2="52" y2="54">
+                                    <stop offset="0%" stop-color="var(--status-color, #22c55e)"/>
+                                    <stop offset="100%" stop-color="var(--status-color-dark, #059669)"/>
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                    </div>
+                    <div class="card-body">
+                        <h3 id="statusTitle">Vérification...</h3>
+                        <p id="statusMessage" class="text-muted">Analyse du statut en cours</p>
+                    </div>
+                </div>
+
+                <!-- Initial scan prompt (hidden by default, shown if never scanned) -->
+                <div class="card card-initial-scan" id="cardInitialScan" style="display:none;">
+                    <div class="initial-scan-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        </svg>
+                    </div>
+                    <div class="card-body">
+                        <h3>Première utilisation — Scan initial recommandé</h3>
+                        <p class="text-muted">Aucun scan n'a encore été effectué sur ce système. Nous recommandons un scan complet pour vérifier l'intégrité de votre machine.</p>
+                        <button class="btn btn-primary" onclick="startFullSystemScan()">
+                            Lancer le scan initial complet
+                        </button>
+                    </div>
+                </div>
+
+                <div class="card card-action" onclick="switchTab('scan')">
+                    <div class="card-icon accent-blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+                        </svg>
+                    </div>
+                    <div class="card-body">
+                        <h3>Lancer un scan</h3>
+                        <p class="text-muted">Analyser vos répertoires</p>
+                    </div>
+                    <svg class="card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M5 12h14M12 5l7 7-7 7"/>
+                    </svg>
+                </div>
+
+                <div class="card card-action" onclick="switchTab('update')">
+                    <div class="card-icon accent-amber">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+                        </svg>
+                    </div>
+                    <div class="card-body">
+                        <h3>Mettre à jour</h3>
+                        <p class="text-muted">Actualiser les signatures</p>
+                    </div>
+                    <svg class="card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M5 12h14M12 5l7 7-7 7"/>
+                    </svg>
+                </div>
+
+                <div class="card card-info" id="cardDbInfo">
+                    <h4>Base de données virales</h4>
+                    <div id="dbInfoContent" class="db-info">
+                        <p class="text-muted">Chargement...</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── SCAN ─────────────────────────────────────────────────── -->
+        <section class="tab-panel" id="tab-scan">
+            <div class="page-header">
+                <h1>Scanner</h1>
+                <p class="subtitle">Sélectionnez un répertoire à analyser</p>
+            </div>
+
+            <div class="full-scan-section">
+                <button class="btn btn-full-scan" id="btnFullScan" onclick="startFullSystemScan()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        <polyline points="9,12 12,15 15,9"/>
+                    </svg>
+                    Scan complet du système
+                </button>
+                <small class="text-muted">Analyse /home, /etc, /var, /opt, /usr et /tmp — peut prendre plusieurs minutes</small>
+            </div>
+
+            <div class="scan-targets">
+                <h4>Répertoires rapides</h4>
+                <div class="target-grid">
+                    <button class="target-btn" onclick="startScan('/home')" data-path="/home">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+                            <polyline points="9,22 9,12 15,12 15,22"/>
+                        </svg>
+                        <span>/home</span>
+                        <small>Répertoire personnel</small>
+                    </button>
+                    <button class="target-btn" onclick="startScan('/etc')" data-path="/etc">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+                        </svg>
+                        <span>/etc</span>
+                        <small>Configuration système</small>
+                    </button>
+                    <button class="target-btn" onclick="startScan('/var')" data-path="/var">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                        </svg>
+                        <span>/var</span>
+                        <small>Données variables</small>
+                    </button>
+                    <button class="target-btn" onclick="startScan('/opt')" data-path="/opt">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/>
+                        </svg>
+                        <span>/opt</span>
+                        <small>Logiciels optionnels</small>
+                    </button>
+                    <button class="target-btn" onclick="startScan('/usr')" data-path="/usr">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+                        </svg>
+                        <span>/usr</span>
+                        <small>Programmes utilisateur</small>
+                    </button>
+                    <button class="target-btn" onclick="startScan('/tmp')" data-path="/tmp">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                            <polyline points="14,2 14,8 20,8"/>
+                        </svg>
+                        <span>/tmp</span>
+                        <small>Fichiers temporaires</small>
+                    </button>
+                </div>
+            </div>
+
+            <div class="custom-scan">
+                <h4>Chemin personnalisé</h4>
+                <div class="input-row">
+                    <input type="text" id="customPath" placeholder="/chemin/vers/repertoire" class="input-field">
+                    <button class="btn btn-primary" onclick="startScan(document.getElementById('customPath').value)">
+                        Scanner
+                    </button>
+                </div>
+            </div>
+
+            <div class="console-box" id="scanConsole" style="display:none;">
+                <div class="console-header">
+                    <span class="console-title">
+                        <span class="pulse-dot"></span>
+                        Analyse en cours...
+                    </span>
+                    <button class="btn-icon" onclick="document.getElementById('scanConsole').style.display='none'">✕</button>
+                </div>
+                <div class="console-output" id="scanOutput"></div>
+            </div>
+        </section>
+
+        <!-- ── UPDATE ───────────────────────────────────────────────── -->
+        <section class="tab-panel" id="tab-update">
+            <div class="page-header">
+                <h1>Mises à jour</h1>
+                <p class="subtitle">Gestion des signatures antivirales</p>
+            </div>
+
+            <div class="update-section">
+                <div class="card card-update">
+                    <div class="card-icon accent-green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+                        </svg>
+                    </div>
+                    <div class="card-body">
+                        <h3>Mettre à jour freshclam</h3>
+                        <p class="text-muted">Télécharger les dernières définitions de virus depuis les serveurs ClamAV.</p>
+                        <button class="btn btn-primary" id="btnUpdate" onclick="triggerUpdate()">
+                            Lancer la mise à jour
+                        </button>
+                    </div>
+                </div>
+
+                <div id="dbDetails" class="db-details-card">
+                    <h4>Fichiers de signatures</h4>
+                    <div id="dbDetailsList" class="db-list">
+                        <p class="text-muted">Chargement...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="console-box" id="updateConsole" style="display:none;">
+                <div class="console-header">
+                    <span class="console-title">
+                        <span class="pulse-dot"></span>
+                        Mise à jour en cours...
+                    </span>
+                </div>
+                <div class="console-output" id="updateOutput"></div>
+            </div>
+        </section>
+
+        <!-- ── LOGS ─────────────────────────────────────────────────── -->
+        <section class="tab-panel" id="tab-logs">
+            <div class="page-header">
+                <h1>Journaux</h1>
+                <p class="subtitle">Historique des analyses</p>
+            </div>
+
+            <div class="log-actions">
+                <button class="btn btn-secondary" onclick="loadLogs()">Rafraîchir</button>
+                <button class="btn btn-danger" onclick="clearLogs()">Vider les journaux</button>
+            </div>
+
+            <div class="console-box" id="logConsole">
+                <div class="console-header">
+                    <span class="console-title">Historique</span>
+                </div>
+                <div class="console-output" id="logOutput">
+                    <p class="text-muted center">Aucun journal disponible</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── QUARANTINE ──────────────────────────────────────────── -->
+        <section class="tab-panel" id="tab-quarantine">
+            <div class="page-header">
+                <h1>Quarantaine</h1>
+                <p class="subtitle">Fichiers infectés isolés lors des scans</p>
+            </div>
+
+            <div class="quarantine-actions">
+                <button class="btn btn-secondary" onclick="loadQuarantine()">Rafraîchir</button>
+                <button class="btn btn-danger" id="btnEmptyQuarantine" onclick="emptyQuarantine()">Vider la quarantaine</button>
+            </div>
+
+            <div class="quarantine-info">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="info-icon">
+                    <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+                </svg>
+                <p>Les fichiers infectés détectés lors des scans sont automatiquement déplacés ici. Vous pouvez les supprimer définitivement ou les restaurer si vous êtes sûr qu'il s'agit de faux positifs.</p>
+            </div>
+
+            <div id="quarantineList" class="quarantine-list">
+                <p class="text-muted center">Chargement...</p>
+            </div>
+        </section>
+
+        <!-- ── INSTALL ──────────────────────────────────────────────── -->
+        <section class="tab-panel" id="tab-install">
+            <div class="page-header">
+                <h1>Installation</h1>
+                <p class="subtitle">Installer ClamAV et freshclam</p>
+            </div>
+
+            <div class="install-section">
+                <div class="card card-install">
+                    <div class="install-icon">
+                        <svg viewBox="0 0 80 80" fill="none">
+                            <circle cx="40" cy="40" r="36" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 4" opacity="0.3"/>
+                            <path d="M40 20v25l15 10" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+                            <circle cx="40" cy="40" r="4" fill="var(--accent)"/>
+                        </svg>
+                    </div>
+                    <h3>Installer ClamAV</h3>
+                    <p class="text-muted">Installe <code>clamav</code>, <code>clamav-daemon</code> et <code>clamav-freshclam</code> via apt. Les droits administrateur seront demandés.</p>
+                    <button class="btn btn-primary btn-lg" id="btnInstall" onclick="installClamAV()">
+                        Installer maintenant
+                    </button>
+                </div>
+            </div>
+
+            <div class="console-box" id="installConsole" style="display:none;">
+                <div class="console-header">
+                    <span class="console-title">
+                        <span class="pulse-dot"></span>
+                        Installation...
+                    </span>
+                </div>
+                <div class="console-output" id="installOutput"></div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- CREDITS MODAL                                                      -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="modal-overlay" id="creditsModal" onclick="closeCredits(event)">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h2>Crédits</h2>
+                <button class="btn-icon" onclick="closeCredits()">✕</button>
+            </div>
+            <div class="modal-tabs">
+                <button class="modal-tab active" onclick="switchCreditsTab('app', this)">ClamAV Antivirus</button>
+                <button class="modal-tab" onclick="switchCreditsTab('clamav', this)">ClamAV</button>
+                <button class="modal-tab" onclick="switchCreditsTab('freshclam', this)">Freshclam</button>
+                <button class="modal-tab" onclick="switchCreditsTab('licence', this)">Licence</button>
+            </div>
+            <div class="modal-body">
+                <div class="credits-panel active" id="credits-app">
+                    <div class="credits-app-header">
+                        <svg class="credits-shield" viewBox="0 0 40 46" fill="none">
+                            <path d="M20 2L4 10v12c0 11.1 6.8 21.4 16 24 9.2-2.6 16-12.9 16-24V10L20 2z" fill="url(#credShield)" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+                            <path d="M16 23l4 4 8-8" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                            <defs><linearGradient id="credShield" x1="4" y1="2" x2="36" y2="38"><stop offset="0%" stop-color="#22c55e"/><stop offset="100%" stop-color="#059669"/></linearGradient></defs>
+                        </svg>
+                        <div>
+                            <h3>ClamAV Antivirus</h3>
+                            <span class="credits-version">Version 1.2.0</span>
+                        </div>
+                    </div>
+                    <p>Interface graphique moderne pour ClamAV sur Linux. Conçue pour simplifier la gestion de votre antivirus : mise à jour des signatures, scans de répertoires, quarantaine automatique et surveillance système via un bouclier dans la barre des tâches.</p>
+                    <p>Développée en Python (GTK3 + WebKit2) avec une interface HTML/CSS/JS entièrement personnalisable.</p>
+                    <div class="credits-dev-card">
+                        <div class="credits-dev-info">
+                            <h4>Développeur</h4>
+                            <p class="credits-name">Karl Bustamante</p>
+                            <p class="credits-company">Dukiwi SA</p>
+                            <p class="credits-email">info@dukiwi.com</p>
+                        </div>
+                        <div class="credits-badge">
+                            <svg width="18" height="18" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M0 0h32v32H0z" fill="#da291c"></path>
+                                <path d="M13 6h6v7h7v6h-7v7h-6v-7H6v-6h7z" fill="#fff"></path>
+                            </svg>
+                            <span>Proudly made<br>in Switzerland</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="credits-panel" id="credits-clamav">
+                    <h3>ClamAV</h3>
+                    <p>ClamAV est un moteur antivirus open source conçu pour détecter les trojans, virus, malwares et autres menaces. Il est largement utilisé sur les serveurs de messagerie et comme solution antivirus sur les systèmes Unix/Linux.</p>
+                    <div class="credits-features">
+                        <div class="credits-feature">
+                            <strong>Moteur de scan</strong>
+                            <span><code>clamscan</code> — Analyseur en ligne de commande pour scanner fichiers et répertoires de manière récursive.</span>
+                        </div>
+                        <div class="credits-feature">
+                            <strong>Daemon</strong>
+                            <span><code>clamd</code> — Service en arrière-plan pour des scans plus rapides via un socket, idéal pour l'intégration avec d'autres logiciels.</span>
+                        </div>
+                        <div class="credits-feature">
+                            <strong>Base de données</strong>
+                            <span>Signatures virales maintenues par Cisco Talos, mises à jour quotidiennement avec des millions de signatures.</span>
+                        </div>
+                    </div>
+                    <p class="credits-link-ext">Site officiel : <code>https://www.clamav.net</code></p>
+                </div>
+
+                <div class="credits-panel" id="credits-freshclam">
+                    <h3>Freshclam</h3>
+                    <p>Freshclam est l'outil de mise à jour automatique des bases de données virales de ClamAV. Il télécharge les dernières signatures depuis les serveurs miroirs de ClamAV.</p>
+                    <div class="credits-features">
+                        <div class="credits-feature">
+                            <strong>Mise à jour automatique</strong>
+                            <span>Le service <code>clamav-freshclam</code> tourne en arrière-plan et vérifie régulièrement les nouvelles signatures (toutes les heures par défaut).</span>
+                        </div>
+                        <div class="credits-feature">
+                            <strong>Bases de données</strong>
+                            <span><code>main.cvd</code> — Base principale. <code>daily.cvd</code> — Mises à jour quotidiennes. <code>bytecode.cvd</code> — Signatures bytecode avancées.</span>
+                        </div>
+                        <div class="credits-feature">
+                            <strong>Configuration</strong>
+                            <span>Configurable via <code>/etc/clamav/freshclam.conf</code> — fréquence, miroirs, proxy, notifications.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="credits-panel" id="credits-licence">
+                    <h3>Licence</h3>
+                    <p>ClamAV est distribué sous licence <strong>GPL v2</strong> (GNU General Public License version 2). ClamAV est un projet de <strong>Cisco Talos Intelligence Group</strong>.</p>
+                    <p>ClamAV Antivirus (cette interface graphique) est un logiciel libre distribué sous licence <strong>GPL v3</strong> (GNU General Public License version 3), développé par <strong>Dukiwi SA</strong>. L'interface utilise les composants suivants :</p>
+                    <div class="credits-features">
+                        <div class="credits-feature">
+                            <strong>Python 3 + GTK3</strong>
+                            <span>Framework d'interface graphique native pour Linux (LGPL)</span>
+                        </div>
+                        <div class="credits-feature">
+                            <strong>WebKit2GTK</strong>
+                            <span>Moteur de rendu web intégré pour l'interface HTML/CSS/JS (LGPL)</span>
+                        </div>
+                        <div class="credits-feature">
+                            <strong>AppIndicator3</strong>
+                            <span>Intégration barre des tâches pour les environnements de bureau Linux (LGPL)</span>
+                        </div>
+                    </div>
+                    <p class="credits-copyright">© 2026 Dukiwi SA — Estavayer-le-Lac, Suisse. Distribué sous licence <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank">GNU GPL v3</a>.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

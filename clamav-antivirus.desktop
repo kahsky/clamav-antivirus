@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=ClamAV Antivirus
+Comment=Interface graphique pour ClamAV
+Comment[fr]=Interface graphique pour ClamAV
+Exec=/opt/clamav-antivirus/clamav-antivirus.py
+Icon=/opt/clamav-antivirus/icons/shield-green.svg
+Terminal=false
+Type=Application
+Categories=System;Security;
+Keywords=antivirus;clamav;security;virus;scan;
+StartupNotify=true
+X-GNOME-Autostart-enabled=true

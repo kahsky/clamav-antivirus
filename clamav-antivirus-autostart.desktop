@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=ClamAV Antivirus Tray
+Comment=Bouclier ClamAV Antivirus dans la barre des tâches
+Exec=/opt/clamav-antivirus/clamav-antivirus.py --tray
+Icon=/opt/clamav-antivirus/icons/shield-green.svg
+Terminal=false
+Type=Application
+X-GNOME-Autostart-enabled=true
+Hidden=false
+NoDisplay=true
