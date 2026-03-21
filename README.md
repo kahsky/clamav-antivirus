@@ -1,7 +1,9 @@
 # 🛡️ ClamAV Antivirus
 
-Interface graphique moderne pour **ClamAV** sur Linux Mint.  
+Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
+
+![Interface ClamAV Antivirus](https://www.dukiwi.com/imgs/clamav-antivirus.png)
 
 ---
 
@@ -14,6 +16,10 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   - 🔵 **Bleu** : Protégé, mise à jour recommandée
   - 🔴 **Rouge** : Non protégé, MàJ > 2 jours
 - **Interface HTML/CSS** — Facilement modifiable (fichiers dans `ui/`)
+
+## Téléchargement
+
+[Télécharger clamav-antivirus_1.2.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.2.4_all.deb)
 
 ---
 
@@ -44,12 +50,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.2.2_all.deb`
+Résultat : `clamav-antivirus_1.2.4_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.2.2_all.deb
+sudo dpkg -i clamav-antivirus_1.2.4_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
