@@ -19,7 +19,7 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.2.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.2.4_all.deb)
+[Télécharger clamav-antivirus_1.3.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.3.0_all.deb)
 
 ---
 
@@ -50,12 +50,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.2.4_all.deb`
+Résultat : `clamav-antivirus_1.3.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.2.4_all.deb
+sudo dpkg -i clamav-antivirus_1.3.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

@@ -83,7 +83,7 @@
                 <span class="status-dot"></span>
                 <span class="status-text">Chargement...</span>
             </div>
-            <small class="version">v1.2.4 — <a href="#" class="credits-link" onclick="openCredits(); return false;">Crédits</a></small>
+            <small class="version">v1.3.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;">Crédits</a></small>
         </div>
     </aside>
 
@@ -91,6 +91,20 @@
     <!-- MAIN CONTENT                                                       -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <main class="content">
+
+        <!-- ── BARRE DE SCAN STICKY (haut de fenêtre, tous onglets) ─── -->
+        <div class="scan-topbar" id="scanTopbar" style="display:none;">
+            <div class="scan-topbar-bar">
+                <div class="scan-topbar-fill" id="scanTopbarFill"></div>
+            </div>
+            <div class="scan-topbar-info">
+                <span class="pulse-dot"></span>
+                <span id="scanTopbarCount">0 / 0 (0%)</span>
+                <span class="scan-topbar-sep">—</span>
+                <span id="scanTopbarFile" class="scan-topbar-file"></span>
+            </div>
+        </div>
+
 
         <!-- ── DASHBOARD ────────────────────────────────────────────── -->
         <section class="tab-panel active" id="tab-dashboard">
@@ -174,6 +188,28 @@
                     <div id="dbInfoContent" class="db-info">
                         <p class="text-muted">Chargement...</p>
                     </div>
+                </div>
+
+                <!-- Scan en cours (affiché pendant un scan actif) -->
+                <div class="card card-scan-live" id="dashScanLive" style="display:none;">
+                    <div class="scan-live-header">
+                        <span class="pulse-dot"></span>
+                        <span>Scan en cours</span>
+                        <span class="scan-live-count" id="dashScanCount">0 / 0 fichiers (0%)</span>
+                    </div>
+                    <div class="dash-progress-bar">
+                        <div class="dash-progress-fill" id="dashProgressFill"></div>
+                    </div>
+                    <div class="scan-current-file" id="dashCurrentFile"></div>
+                </div>
+
+                <!-- Scan interrompu (affiché au démarrage si scan précédent non terminé) -->
+                <div class="card card-resume-scan" id="dashResumeScan" style="display:none;" onclick="resumeScan()">
+                    <div class="card-body">
+                        <h4>Scan interrompu détecté</h4>
+                        <p class="text-muted">Reprendre le scan de <strong id="resumeScanPath"></strong></p>
+                    </div>
+                    <button class="btn btn-primary" style="white-space:nowrap;flex-shrink:0">Reprendre</button>
                 </div>
             </div>
         </section>
@@ -260,7 +296,7 @@
                 <div class="console-header">
                     <span class="console-title">
                         <span class="pulse-dot"></span>
-                        Analyse en cours...
+                        Sortie du scan
                     </span>
                     <button class="btn-icon" onclick="document.getElementById('scanConsole').style.display='none'">✕</button>
                 </div>

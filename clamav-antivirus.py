@@ -24,9 +24,31 @@ from datetime import datetime, timedelta
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 UI_DIR = os.path.join(APP_DIR, "ui")
 ICONS_DIR = os.path.join(APP_DIR, "icons")
-LOG_FILE = os.path.expanduser("~/.local/share/clamav-antivirus/scan.log")
-STATE_FILE = os.path.expanduser("~/.local/share/clamav-antivirus/state.json")
-QUARANTINE_DIR = os.path.expanduser("~/.local/share/clamav-antivirus/quarantine")
+LOG_FILE           = os.path.expanduser("~/.local/share/clamav-antivirus/scan.log")
+STATE_FILE         = os.path.expanduser("~/.local/share/clamav-antivirus/state.json")
+QUARANTINE_DIR     = os.path.expanduser("~/.local/share/clamav-antivirus/quarantine")
+SCAN_PROGRESS_FILE = os.path.expanduser("~/.local/share/clamav-antivirus/scan_progress.json")
+SCAN_FILES_CACHE   = os.path.expanduser("~/.local/share/clamav-antivirus/scan_filelist.txt")
+
+# Répertoires exclus du scan (inutiles ou problématiques sur Linux Mint 22.3)
+SCAN_EXCLUDE = [
+    '/proc/*', '/sys/*', '/dev/*', '/run/*',           # systèmes de fichiers virtuels
+    '/home/.ecryptfs/*',                               # vault eCryptFS (chiffré)
+    '/snap/*', '/var/lib/snapd/*',                     # paquets snap (squashfs protégés)
+    '/var/cache/apt/*', '/var/cache/debconf/*',        # cache paquets APT
+    '/var/cache/man/*',                                # cache man pages
+    '/usr/share/doc/*', '/usr/share/man/*',            # documentation
+    '/usr/share/info/*', '/usr/share/locale/*',        # données de locale
+    '/usr/share/i18n/*', '/usr/share/fonts/*',         # polices
+    '/usr/share/icons/*', '/usr/share/themes/*',       # icônes / thèmes
+    '/usr/share/pixmaps/*', '/usr/share/backgrounds/*',# images décoratives
+    '/home/*/.cache/*',                                # caches utilisateurs
+    '/home/*/.local/share/Trash/*',                    # corbeilles
+    '/home/*/.thumbnails/*',                           # miniatures
+    '/home/*/.mozilla/*/Cache*/*',                     # cache Firefox
+    '/home/*/.config/google-chrome/*/Cache*/*',        # cache Chrome
+    '/root/.cache/*',                                  # cache root
+]
 
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 os.makedirs(QUARANTINE_DIR, exist_ok=True)
@@ -110,26 +132,112 @@ class ClamAVBackend:
         threading.Thread(target=run, daemon=True).start()
 
     @staticmethod
-    def scan_directory(path, callback):
-        """Scan a directory with clamscan, quarantine infected files."""
+    def count_and_save_files(path, use_sudo=False):
+        """List all files under path with find, save sorted list, return it."""
+        prefix = ['pkexec'] if use_sudo else []
+        cmd = prefix + ['find', path, '-type', 'f']
+        for excl in SCAN_EXCLUDE:
+            cmd += ['!', '-path', excl]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            files = sorted(l for l in result.stdout.strip().split('\n') if l.strip())
+        except subprocess.TimeoutExpired:
+            files = []
+        with open(SCAN_FILES_CACHE, 'w') as f:
+            f.write('\n'.join(files))
+        return files
+
+    @staticmethod
+    def scan_directory(path, callback, resume=False, use_sudo=False):
+        """Scan a directory with clamscan, with progress tracking and resume support."""
         def run():
+            nonlocal resume
+            start_idx = 0
+            all_files = []
             try:
+                # ── Resume logic ──────────────────────────────────────────
+                if resume:
+                    try:
+                        with open(SCAN_PROGRESS_FILE) as f:
+                            prog = json.load(f)
+                        if prog.get('path') == path and prog.get('in_progress'):
+                            with open(SCAN_FILES_CACHE) as f:
+                                all_files = [l.strip() for l in f if l.strip()]
+                            last_file = prog.get('last_file', '')
+                            if last_file and last_file in all_files:
+                                start_idx = all_files.index(last_file) + 1
+                        else:
+                            resume = False
+                    except Exception:
+                        resume = False
+
+                # ── Initial count ─────────────────────────────────────────
+                if not resume:
+                    GLib.idle_add(callback, "progress", "▶ Comptage des fichiers...")
+                    all_files = ClamAVBackend.count_and_save_files(path, use_sudo=use_sudo)
+                    start_idx = 0
+                    with open(SCAN_PROGRESS_FILE, 'w') as f:
+                        json.dump({'path': path, 'total': len(all_files),
+                                   'last_file': '', 'in_progress': True}, f)
+
+                total = len(all_files)
+                if total == 0:
+                    with open(SCAN_PROGRESS_FILE, 'w') as f:
+                        json.dump({'path': path, 'in_progress': False}, f)
+                    GLib.idle_add(callback, "clean", "Aucun fichier trouvé")
+                    return
+
+                GLib.idle_add(callback, "scan_progress",
+                              json.dumps({"scanned": start_idx, "total": total, "file": ""}))
+                GLib.idle_add(callback, "progress",
+                              f"▶ {total} fichier(s) à analyser — démarrage du scan...")
+
+                # ── Write remaining files to temp list ────────────────────
+                tmp_list = SCAN_FILES_CACHE + '.tmp'
+                with open(tmp_list, 'w') as f:
+                    f.write('\n'.join(all_files[start_idx:]))
+
+                prefix = ['pkexec'] if use_sudo else []
                 proc = subprocess.Popen(
-                    ["clamscan", "-r", "--bell", "--infected",
-                     "--suppress-ok-results",
-                     f"--move={QUARANTINE_DIR}", path],
+                    prefix + ["clamscan", "--verbose", "--bell", "--suppress-ok-results",
+                              f"--move={QUARANTINE_DIR}", f"--file-list={tmp_list}"],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
                 )
+
+                scanned = start_idx
                 infected_count = 0
+                # Sauvegarde disque tous les 0.5% — mise à jour UI max 300 fois
+                save_every     = max(1, total // 200)
+                ui_every       = max(1, total // 300)
+
                 for line in proc.stdout:
-                    GLib.idle_add(callback, "progress", line.strip())
-                    if "FOUND" in line:
-                        infected_count += 1
-                    with open(LOG_FILE, "a") as f:
-                        f.write(f"[{datetime.now().isoformat()}] {line}")
+                    line_s = line.strip()
+                    if not line_s:
+                        continue
+                    if line_s.startswith('Scanning '):
+                        current_file = line_s[9:]
+                        scanned += 1
+                        if scanned % save_every == 0:
+                            with open(SCAN_PROGRESS_FILE, 'w') as f:
+                                json.dump({'path': path, 'total': total,
+                                           'last_file': current_file, 'in_progress': True}, f)
+                        # Limiter les appels au webview pour éviter de saturer la main loop
+                        if scanned % ui_every == 0:
+                            GLib.idle_add(callback, "scan_progress",
+                                          json.dumps({"scanned": scanned, "total": total,
+                                                      "file": current_file}))
+                    elif not line_s.startswith('LibClamAV'):
+                        GLib.idle_add(callback, "progress", line_s)
+                        if "FOUND" in line_s:
+                            infected_count += 1
+                        with open(LOG_FILE, "a") as f:
+                            f.write(f"[{datetime.now().isoformat()}] {line_s}\n")
+
                 proc.wait()
 
-                # Save scan timestamp
+                # ── Mark complete ─────────────────────────────────────────
+                with open(SCAN_PROGRESS_FILE, 'w') as f:
+                    json.dump({'path': path, 'in_progress': False}, f)
                 save_state({
                     "last_scan": datetime.now().isoformat(),
                     "last_scan_path": path,
@@ -138,11 +246,9 @@ class ClamAVBackend:
 
                 summary = f"Scan terminé — {infected_count} menace(s) détectée(s)"
                 if infected_count > 0:
-                    summary += f" — fichiers déplacés en quarantaine"
-                if infected_count == 0:
-                    GLib.idle_add(callback, "clean", summary)
-                else:
-                    GLib.idle_add(callback, "infected", summary)
+                    summary += " — fichiers déplacés en quarantaine"
+                GLib.idle_add(callback, "clean" if infected_count == 0 else "infected", summary)
+
             except Exception as e:
                 GLib.idle_add(callback, "error", str(e))
         threading.Thread(target=run, daemon=True).start()
@@ -418,7 +524,10 @@ class ClamAVAntivirusApp:
 
             elif action == "scan":
                 path = data.get("path", os.path.expanduser("~"))
-                ClamAVBackend.scan_directory(path, self.operation_callback)
+                resume = data.get("resume", False)
+                use_sudo = data.get("use_sudo", False)
+                ClamAVBackend.scan_directory(path, self.operation_callback,
+                                             resume=resume, use_sudo=use_sudo)
 
             elif action == "get_db_info":
                 info = ClamAVBackend.get_db_info()
@@ -460,9 +569,12 @@ class ClamAVAntivirusApp:
 
     def operation_callback(self, status, message):
         """Callback for async ClamAV operations."""
-        self.send_to_js("operationResult", {"status": status, "message": message})
-        if status in ("success", "clean", "infected"):
-            self.tray.update_status()
+        if status == "scan_progress":
+            self.send_to_js("scanProgress", json.loads(message))
+        else:
+            self.send_to_js("operationResult", {"status": status, "message": message})
+            if status in ("success", "clean", "infected"):
+                self.tray.update_status()
 
     def quarantine_callback(self, status, message):
         """Callback for quarantine operations."""
@@ -485,6 +597,17 @@ class ClamAVAntivirusApp:
             daemon_active = daemon.stdout.strip() == "active"
         except Exception:
             daemon_active = False
+        scan_in_progress = False
+        scan_progress_path = None
+        try:
+            with open(SCAN_PROGRESS_FILE) as f:
+                prog = json.load(f)
+            if prog.get('in_progress'):
+                scan_in_progress = True
+                scan_progress_path = prog.get('path')
+        except Exception:
+            pass
+
         self.send_to_js("statusUpdate", {
             "color": color,
             "message": message,
@@ -494,7 +617,9 @@ class ClamAVAntivirusApp:
             "fully_installed": installed and freshclam_installed,
             "last_scan": state.get("last_scan"),
             "last_scan_path": state.get("last_scan_path"),
-            "never_scanned": state.get("last_scan") is None
+            "never_scanned": state.get("last_scan") is None,
+            "scan_in_progress": scan_in_progress,
+            "scan_progress_path": scan_progress_path
         })
 
     def send_to_js(self, event, data):

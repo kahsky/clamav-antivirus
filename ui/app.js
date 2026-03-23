@@ -45,6 +45,9 @@ function onBackendMessage(msg) {
         case 'operationResult':
             handleOperationResult(data);
             break;
+        case 'scanProgress':
+            updateScanProgress(data);
+            break;
         case 'logContent':
             renderLogs(data.lines);
             break;
@@ -108,6 +111,66 @@ function updateDashboardStatus(data) {
     updateStatusUI(data.color, data.message, data.installed);
     toggleInstallTab(!data.fully_installed);
     toggleInitialScanPrompt(data.never_scanned && data.fully_installed);
+
+    // Scan interrompu : proposer la reprise
+    const resumeEl = document.getElementById('dashResumeScan');
+    if (resumeEl) {
+        if (data.scan_in_progress && data.scan_progress_path && !isScanning) {
+            document.getElementById('resumeScanPath').textContent = data.scan_progress_path;
+            resumeEl.style.display = '';
+        } else {
+            resumeEl.style.display = 'none';
+        }
+    }
+}
+
+function updateScanProgress({ scanned, total, file }) {
+    const pct = total > 0 ? Math.round(scanned / total * 100) : 0;
+
+    // Topbar sticky (haut de fenêtre)
+    const topbar = document.getElementById('scanTopbar');
+    if (topbar) topbar.style.display = '';
+
+    const topFill = document.getElementById('scanTopbarFill');
+    if (topFill) topFill.style.width = pct + '%';
+
+    const topCount = document.getElementById('scanTopbarCount');
+    if (topCount) topCount.textContent =
+        `${scanned.toLocaleString()} / ${total.toLocaleString()} fichiers (${pct}%)`;
+
+    const topFile = document.getElementById('scanTopbarFile');
+    if (topFile) topFile.textContent = file || '';
+
+    // Carte dashboard live
+    const liveCard = document.getElementById('dashScanLive');
+    if (liveCard) liveCard.style.display = '';
+
+    const dashFill = document.getElementById('dashProgressFill');
+    if (dashFill) dashFill.style.width = pct + '%';
+
+    const dashCount = document.getElementById('dashScanCount');
+    if (dashCount) dashCount.textContent =
+        `${scanned.toLocaleString()} / ${total.toLocaleString()} fichiers (${pct}%)`;
+
+    const dashFile = document.getElementById('dashCurrentFile');
+    if (dashFile && file) dashFile.textContent = file;
+}
+
+function resumeScan() {
+    if (isScanning) return;
+    const path = document.getElementById('resumeScanPath').textContent;
+    if (!path) return;
+
+    document.getElementById('dashResumeScan').style.display = 'none';
+    isScanning = true;
+    switchTab('scan');
+
+    const consoleBox = document.getElementById('scanConsole');
+    const output = document.getElementById('scanOutput');
+    if (consoleBox) consoleBox.style.display = 'block';
+    if (output) output.innerHTML = '';
+    appendLine(output, `▶ Reprise du scan de ${path}...`, 'info');
+    sendToBackend({ action: 'scan', path: path, resume: true });
 }
 
 function toggleInstallTab(show) {
@@ -130,6 +193,9 @@ function startFullSystemScan() {
         return;
     }
 
+    // Masquer définitivement la carte de scan initial
+    toggleInitialScanPrompt(false);
+
     // Switch to scan tab to see output
     switchTab('scan');
 
@@ -146,9 +212,9 @@ function startFullSystemScan() {
     }
 
     // Scan all main directories sequentially via a single / scan
-    appendLine(output, '▶ Scan complet du système lancé — /home /etc /var /opt /usr /tmp', 'info');
-    appendLine(output, '  Cela peut prendre plusieurs minutes...', 'info');
-    sendToBackend({ action: 'scan', path: '/' });
+    appendLine(output, '▶ Scan complet du système lancé (sudo) — /home /etc /var /opt /usr /tmp', 'info');
+    appendLine(output, '  Une fenêtre d\'authentification peut s\'ouvrir...', 'info');
+    sendToBackend({ action: 'scan', path: '/', use_sudo: true });
 }
 
 function updateStatusUI(color, message, installed) {
@@ -388,20 +454,15 @@ function handleOperationResult(data) {
 
     switch (status) {
         case 'progress':
-            // Route to the appropriate console
-            const activeConsoles = {
-                scan: 'scanOutput',
-                update: 'updateOutput',
-                install: 'installOutput'
-            };
-            for (const [key, id] of Object.entries(activeConsoles)) {
-                const el = document.getElementById(id);
-                if (el && document.getElementById(`${key}Console`)?.style.display !== 'none') {
-                    appendLine(el, message);
+            if (isScanning) {
+                appendLine(document.getElementById('scanOutput'), message);
+                // Extraire le chemin du fichier (format ClamAV : "/chemin/fichier: OK")
+                const match = message.match(/^(\/[^:]+):/);
+                if (match) {
+                    const el = document.getElementById('scanCurrentFile');
+                    if (el) el.textContent = match[1];
                 }
             }
-            // Fallback: write to all visible consoles
-            if (isScanning) appendLine(document.getElementById('scanOutput'), message);
             if (isUpdating) appendLine(document.getElementById('updateOutput'), message);
             if (isInstalling) appendLine(document.getElementById('installOutput'), message);
             break;
@@ -444,6 +505,26 @@ function resetOperationState() {
     isScanning = false;
     isUpdating = false;
     isInstalling = false;
+
+    // Compléter puis masquer la progression
+    const fill = document.getElementById('scanProgressFill');
+    if (fill) { fill.style.animation = 'none'; fill.style.width = '100%'; }
+    const currentFile = document.getElementById('scanCurrentFile');
+    if (currentFile) currentFile.textContent = '';
+
+    // Topbar : 100% puis masquer
+    const topFill = document.getElementById('scanTopbarFill');
+    if (topFill) topFill.style.width = '100%';
+    const dashFill = document.getElementById('dashProgressFill');
+    if (dashFill) dashFill.style.width = '100%';
+    setTimeout(() => {
+        const topbar = document.getElementById('scanTopbar');
+        if (topbar) topbar.style.display = 'none';
+        if (topFill) topFill.style.width = '0%';
+        const liveCard = document.getElementById('dashScanLive');
+        if (liveCard) liveCard.style.display = 'none';
+        if (dashFill) dashFill.style.width = '0%';
+    }, 3000);
 
     document.querySelectorAll('.target-btn').forEach(btn => btn.classList.remove('scanning'));
 
