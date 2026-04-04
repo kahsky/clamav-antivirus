@@ -13,6 +13,7 @@ gi.require_version('AppIndicator3', '0.1')
 from gi.repository import Gtk, WebKit2, GLib, AppIndicator3, Gdk
 import subprocess
 import threading
+import socket
 import json
 import os
 import time
@@ -24,6 +25,7 @@ from datetime import datetime, timedelta
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 UI_DIR = os.path.join(APP_DIR, "ui")
 ICONS_DIR = os.path.join(APP_DIR, "icons")
+INSTANCE_SOCKET    = os.path.expanduser("~/.local/share/clamav-antivirus/instance.sock")
 LOG_FILE           = os.path.expanduser("~/.local/share/clamav-antivirus/scan.log")
 STATE_FILE         = os.path.expanduser("~/.local/share/clamav-antivirus/state.json")
 QUARANTINE_DIR     = os.path.expanduser("~/.local/share/clamav-antivirus/quarantine")
@@ -495,6 +497,7 @@ class ClamAVAntivirusApp:
         self.tray = TrayIcon(self)
 
         self.window.show_all()
+        self.window.iconify()  # Démarrage minimisé dans la barre des tâches
 
     def on_close(self, widget, event):
         """Minimize to tray instead of quitting."""
@@ -629,8 +632,54 @@ class ClamAVAntivirusApp:
         self.webview.run_javascript(js, None, None, None)
 
 
+def try_activate_existing():
+    """Si une instance tourne déjà, lui demander d'afficher sa fenêtre. Retourne True si trouvée."""
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        sock.connect(INSTANCE_SOCKET)
+        sock.sendall(b"show\n")
+        sock.close()
+        return True
+    except (ConnectionRefusedError, FileNotFoundError, OSError):
+        return False
+
+
+def start_instance_server(app):
+    """Écouter les demandes d'activation depuis de nouvelles instances."""
+    try:
+        os.unlink(INSTANCE_SOCKET)
+    except FileNotFoundError:
+        pass
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(INSTANCE_SOCKET)
+    server.listen(1)
+    server.settimeout(1)
+
+    def listen():
+        while True:
+            try:
+                conn, _ = server.accept()
+                msg = conn.recv(16).decode().strip()
+                conn.close()
+                if msg == "show":
+                    GLib.idle_add(app.window.present)
+            except socket.timeout:
+                continue
+            except Exception:
+                break
+
+    threading.Thread(target=listen, daemon=True).start()
+    return server
+
+
 def main():
+    if try_activate_existing():
+        sys.exit(0)
+
     app = ClamAVAntivirusApp()
+    start_instance_server(app)
     Gtk.main()
 
 
