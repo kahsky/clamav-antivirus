@@ -1,9 +1,9 @@
-# 🛡️ ClamAV Antivirus
+# 🛡️ ClamAV Antivirus GUI
 
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus](https://www.dukiwi.com/imgs/clamav-antivirus.png)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.8.1)
 
 ---
 
@@ -66,6 +66,14 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   passe, sauvegardes, faux support, ingénierie sociale, Wi-Fi public, mot de passe admin, réaction
   à une attaque, extensions. Un **conseil du jour** apparaît en popup au démarrage (bouton
   « Lire plus » ouvre la leçon ; désactivable dans Paramètres). Contenu dans `ui/awareness.js`.
+- **« C'est moi »** — chaque alerte (programme inconnu du système qui modifie des fichiers ou se
+  connecte à Internet, entrée de démarrage inconnue, extension hors store) propose un bouton
+  « C'est moi » : le programme ou l'entrée passe en liste d'approbation (Paramètres → Programmes
+  approuvés) et ne déclenche plus jamais de message ; un processus suspendu est repris. Un binaire
+  remplacé pendant son exécution (Chrome mis à jour, par exemple) n'est plus considéré comme inconnu.
+- **Conseils lus** — une leçon ouverte au moins 5 secondes via « Lire plus » est marquée « Lu » et ne
+  revient plus en popup ; quand tout est lu, le popup du jour disparaît (badge cliquable pour
+  remettre une leçon en non lu).
 - **Paquets classés** (État du système) — chaque mise à jour en attente est étiquetée
   **Sécurité** (correctif de faille), **Recommandé** (application / bibliothèque) ou **Décalé**
   (phased update Ubuntu, avec le pourcentage de déploiement). Si rien n'est en attente, la carte
@@ -87,7 +95,7 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
 ## Avertissement et limitation de responsabilité
 
-ClamAV Antivirus est fourni par **Dukiwi SA « EN L'ÉTAT » (as is)**, sans aucune garantie,
+ClamAV Antivirus GUI est fourni par **Dukiwi SA « EN L'ÉTAT » (as is)**, sans aucune garantie,
 expresse ou implicite. Il constitue tout au plus une **première barrière** : aucun antivirus,
 pare-feu ou outil de détection ne peut identifier toutes les menaces, et un voyant vert ne
 garantit en rien qu'un ordinateur est sain. Seul un comportement prudent et informé de
@@ -120,7 +128,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.8.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.8.0_all.deb)
+[Télécharger clamav-antivirus_1.8.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.8.1_all.deb)
 
 ---
 
@@ -151,12 +159,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.8.0_all.deb`
+Résultat : `clamav-antivirus_1.8.1_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.8.0_all.deb
+sudo dpkg -i clamav-antivirus_1.8.1_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

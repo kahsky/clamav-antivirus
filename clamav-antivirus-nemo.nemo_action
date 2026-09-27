@@ -1,6 +1,6 @@
 [Nemo Action]
-Name=Scan with ClamAV Antivirus
-Comment=Analyser avec ClamAV Antivirus
+Name=Scan with ClamAV Antivirus GUI
+Comment=Analyser avec ClamAV Antivirus GUI
 Exec=/opt/clamav-antivirus/clamav-scan-nemo.sh %F
 Icon-Name=/opt/clamav-antivirus/icons/logo.svg
 Selection=Any

@@ -8,7 +8,7 @@
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.8.0"
+VERSION="1.8.1"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -108,7 +108,7 @@ Depends: python3 (>= 3.8), python3-gi, python3-pyudev, python3-apt, gir1.2-webki
 Recommends: libnotify-bin, mintupdate | update-manager, rkhunter, debsums, chkrootkit
 Maintainer: Dukiwi SA <info@dukiwi.ch>
 Homepage: https://dukiwi.ch
-Description: ClamAV Antivirus - Interface graphique ClamAV
+Description: ClamAV Antivirus GUI - Interface graphique ClamAV
  Interface graphique moderne pour ClamAV avec :
  - Service système : scan complet et mises à jour sans mot de passe
  - Mises à jour planifiées tous les jours à 07:00 et 5 min après le démarrage
@@ -122,7 +122,7 @@ Description: ClamAV Antivirus - Interface graphique ClamAV
  - Scan rapide de répertoires avec progression détaillée
  - Quarantaine automatique des fichiers infectés
  - Icône bouclier dans la barre des tâches
- - Intégration Nemo (clic droit : Scan with ClamAV Antivirus)
+ - Intégration Nemo (clic droit : Scan with ClamAV Antivirus GUI)
  - Interface HTML/CSS facilement personnalisable
  .
  Développé par Dukiwi SA, Estavayer-le-Lac, Suisse.
@@ -165,7 +165,7 @@ fi
 
 echo ""
 echo "═══════════════════════════════════════════════════"
-echo "  ✅ ClamAV Antivirus installé avec succès !"
+echo "  ✅ ClamAV Antivirus GUI installé avec succès !"
 echo ""
 echo "  Lancez-le depuis le menu Applications > Système"
 echo "  ou via: /opt/clamav-antivirus/clamav-antivirus.py"

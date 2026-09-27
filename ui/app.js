@@ -139,6 +139,7 @@ function onBackendMessage(msg) {
         case 'alertsList':      alerts = data.alerts || []; renderAlerts(data.available !== false); break;
         case 'securityStatus':  onSecurityStatus(data); break;
         case 'settingsData':    onSettingsData(data); break;
+        case 'trustedList':     onTrustedList(data); break;
         case 'securityData':    onSecurityData(data); break;
         case 'overall':         overall = data; renderSimpleView(); renderAdmin(); break;
         case 'error':           showToast(data.message, 'error'); break;
@@ -204,10 +205,11 @@ function renderAwareness(containerId, openId) {
     const el = $(containerId);
     if (!el) return;
     el.innerHTML = lessons().map((l, i) => `
-        <details class="lesson" id="${containerId}-${escapeHtml(l.id)}" ${openId === l.id ? 'open' : ''}>
+        <details class="lesson ${readLessons.has(l.id) ? 'read' : ''}" id="${containerId}-${escapeHtml(l.id)}" data-id="${escapeHtml(l.id)}" ${openId === l.id ? 'open' : ''}>
             <summary>
                 <span class="lesson-num">${i + 1}</span>
                 <span class="lesson-head"><span class="lesson-title">${escapeHtml(l.title)}</span><span class="lesson-summary">${escapeHtml(l.summary)}</span></span>
+                <span class="lesson-read" title="${t('awareness.mark_unread')}" onclick="markLessonUnread(event, '${escapeJs(l.id)}')">✓ ${t('awareness.read')}</span>
                 <span class="lesson-more">${t('popup.btn.read_more')}</span>
             </summary>
             <div class="lesson-body">
@@ -215,6 +217,36 @@ function renderAwareness(containerId, openId) {
                 ${(l.tips || []).length ? `<h5>${t('awareness.tips')}</h5><ul>${l.tips.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul>` : ''}
             </div>
         </details>`).join('');
+    el.querySelectorAll('details.lesson').forEach(d => d.addEventListener('toggle', () => onLessonToggle(d)));
+    if (openId) { const d = $(`${containerId}-${openId}`); if (d) onLessonToggle(d); }
+}
+
+// Une leçon est « lue » quand elle est restée ouverte au moins 5 secondes (« Lire plus »)
+const LESSON_READ_DELAY_MS = 5000;
+let readLessons = new Set();
+
+function onLessonToggle(d) {
+    clearTimeout(d._readTimer);
+    if (!d.open) return;
+    d._readTimer = setTimeout(() => { if (d.open && document.body.contains(d)) markLessonRead(d.dataset.id); }, LESSON_READ_DELAY_MS);
+}
+
+function markLessonRead(id) {
+    if (!id || readLessons.has(id)) return;
+    readLessons.add(id);
+    updateLessonBadges();
+    sendToBackend({ action: 'lesson_read', id });
+}
+
+function markLessonUnread(ev, id) {
+    ev.preventDefault(); ev.stopPropagation();
+    readLessons.delete(id);
+    updateLessonBadges();
+    sendToBackend({ action: 'lesson_unread', id });
+}
+
+function updateLessonBadges() {
+    document.querySelectorAll('details.lesson').forEach(d => d.classList.toggle('read', readLessons.has(d.dataset.id)));
 }
 
 function showAwareness() {
@@ -434,7 +466,8 @@ function renderConnections() {
                 <span class="alert-program">${escapeHtml(p.comm)}</span>
                 <span class="alert-meta">pid ${p.pid}${p.user ? ` · ${escapeHtml(p.user)}` : ''}</span>
                 ${p.trusted === false ? `<span class="scope-badge scope-danger">${t('system.alert.untrusted')}</span>` : p.trusted ? `<span class="scope-badge scope-user">${t('system.connections.trusted')}</span>` : ''}
-                <span class="alert-exe conn-exe">${escapeHtml(p.exe || '')}</span>
+                <span class="alert-exe conn-exe">${escapeHtml(p.exe || '')}${p.exe_replaced ? ` · ${t('system.exe_replaced')}` : ''}</span>
+                ${p.trusted === false && p.exe ? `<button class="btn btn-secondary btn-sm" onclick="trustProgram('${escapeJs(p.exe)}','${escapeJs(p.comm || '')}')">${t('popup.btn.its_me')}</button>` : ''}
             </div>
             <div class="conn-remotes">${Object.values(p.remotes || {}).map(r => `<span class="conn-remote ${r.flagged ? 'flagged' : ''}" title="${escapeHtml(r.org || '')}">${r.country ? `<span class="conn-flag">${escapeHtml(r.country)}</span>` : ''}${escapeHtml(r.ip)}:${(r.ports || []).join(',')}${r.org ? ` <em>${escapeHtml(r.org)}</em>` : ''}${r.flagged ? ` <strong>${t('system.connections.flagged')}</strong>` : ''}</span>`).join('')}</div>
         </div>`).join('') : `<p class="text-muted">${t('system.connections.none')}</p>`;
@@ -451,7 +484,7 @@ function renderPersistence() {
             <span class="package-name">${escapeHtml(i.name)}</span>
             <span class="package-versions" title="${escapeHtml(i.path)}">${escapeHtml(i.exec || i.path)}</span>
             ${i.user ? `<span class="alert-meta">${escapeHtml(i.user)}</span>` : ''}
-            ${i.trusted ? `<span class="scope-badge scope-user">${escapeHtml(i.owner || t('system.connections.trusted'))}</span>` : `<span class="scope-badge scope-danger">${t('system.persistence.unknown')}</span>`}
+            ${i.approved ? `<span class="scope-badge scope-user" title="${escapeHtml(i.key || '')}">${t('system.persistence.approved')}</span> <button class="btn btn-secondary btn-sm" onclick="acknowledgePersistence('${escapeJs(i.key || '')}', true)">${t('settings.trusted.remove')}</button>` : i.trusted ? `<span class="scope-badge scope-user">${escapeHtml(i.owner || t('system.connections.trusted'))}</span>` : `<span class="scope-badge scope-danger">${t('system.persistence.unknown')}</span> <button class="btn btn-secondary btn-sm" onclick="acknowledgePersistence('${escapeJs(i.key || '')}')">${t('popup.btn.its_me')}</button>`}
         </div>`).join('') : `<p class="text-muted">${t('system.persistence.none')}</p>`;
     const exts = p.extensions || [];
     $('extensionsList').innerHTML = exts.length ? exts.map(e => `
@@ -460,7 +493,7 @@ function renderPersistence() {
             <span class="package-name">${escapeHtml(e.name)}</span>
             <span class="package-versions">${escapeHtml(e.id)} · ${escapeHtml(e.version)}${e.enabled === false ? ` · ${t('system.extensions.disabled')}` : ''}</span>
             <span class="alert-meta">${escapeHtml(e.user)}</span>
-            ${e.from_store ? `<span class="scope-badge scope-user">${t('system.extensions.store')}</span>` : `<span class="scope-badge scope-danger">${t('system.extensions.outside_store')}</span>`}
+            ${e.approved ? `<span class="scope-badge scope-user">${t('system.persistence.approved')}</span> <button class="btn btn-secondary btn-sm" onclick="acknowledgePersistence('${escapeJs(e.key || '')}', true)">${t('settings.trusted.remove')}</button>` : e.from_store ? `<span class="scope-badge scope-user">${t('system.extensions.store')}</span>` : `<span class="scope-badge scope-danger">${t('system.extensions.outside_store')}</span> <button class="btn btn-secondary btn-sm" onclick="acknowledgePersistence('${escapeJs(e.key || '')}')">${t('popup.btn.its_me')}</button>`}
         </div>`).join('') : `<p class="text-muted">${t('system.extensions.none')}</p>`;
 }
 
@@ -716,6 +749,41 @@ function sshToggle(enabled) {
 
 function loadSettings() {
     sendToBackend({ action: 'get_settings' });
+    sendToBackend({ action: 'get_trusted' });
+}
+
+// ─── « C'est moi » : programmes et entrées approuvés (plus d'alerte) ─────────
+
+let trustedData = { programs: [], acknowledged: [] };
+
+function trustProgram(exe, comm) { sendToBackend({ action: 'trust_program', exe, comm }); }
+function untrustProgram(exe) { sendToBackend({ action: 'untrust_program', exe }); }
+function acknowledgePersistence(key, remove = false) { sendToBackend({ action: 'acknowledge_persistence', key, remove }); }
+
+function onTrustedList(data) {
+    trustedData = { programs: (data && data.programs) || [], acknowledged: (data && data.acknowledged) || [] };
+    renderTrusted();
+}
+
+function renderTrusted() {
+    const el = $('trustedList');
+    if (!el) return;
+    const progs = trustedData.programs, ack = trustedData.acknowledged;
+    if (!progs.length && !ack.length) { el.innerHTML = `<p class="text-muted">${t('settings.trusted.none')}</p>`; return; }
+    el.innerHTML = [
+        ...progs.map(p => `<div class="package-item">
+            <span class="scope-badge scope-user">${t('settings.trusted.program')}</span>
+            <span class="package-name">${escapeHtml(p.comm || '')}</span>
+            <span class="package-versions" title="${escapeHtml(p.exe)}">${escapeHtml(p.exe)}</span>
+            <span class="alert-meta">${escapeHtml(p.by || '')}${p.added ? ` · ${formatDateTime(p.added)}` : ''}</span>
+            <button class="btn btn-secondary btn-sm" onclick="untrustProgram('${escapeJs(p.exe)}')">${t('settings.trusted.remove')}</button>
+        </div>`),
+        ...ack.map(k => `<div class="package-item">
+            <span class="scope-badge scope-user">${t('settings.trusted.persistence')}</span>
+            <span class="package-versions" title="${escapeHtml(k)}">${escapeHtml(k)}</span>
+            <button class="btn btn-secondary btn-sm" onclick="acknowledgePersistence('${escapeJs(k)}', true)">${t('settings.trusted.remove')}</button>
+        </div>`),
+    ].join('');
 }
 
 function onSettingsData(data) {
@@ -807,6 +875,7 @@ function updateDashboardStatus(data) {
     if (data.view_mode && data.view_mode !== viewMode) setViewMode(data.view_mode, false);
     if (data.security) securityStatus = data.security;
     if (data.overall) overall = data.overall;
+    if (Array.isArray(data.read_lessons)) { readLessons = new Set(data.read_lessons); updateLessonBadges(); }
     if (data.app_update && !secData.app_update) secData.app_update = data.app_update;
     if (data.disclaimer_accepted === false && legalAccepted) { legalAccepted = false; openLegal(); }
     else if (data.disclaimer_accepted === true) legalAccepted = true;
@@ -1128,8 +1197,8 @@ function renderAlerts(available = true) {
                 <span class="alert-meta">${formatDateTime(a.time)} · pid ${a.pid}${a.user ? ` · ${escapeHtml(a.user)}` : ''}</span>
             </div>
             <div class="alert-body">${t('popup.connection.body', { program: escapeHtml(a.comm || '?'), ip: escapeHtml(a.ip || ''), port: escapeHtml(String(a.port || '')), where: escapeHtml([a.country, a.org].filter(Boolean).join(' · ') || '?') })}</div>
-            ${a.exe ? `<div class="alert-exe">${escapeHtml(a.exe)}</div>` : ''}
-            ${a.suspended ? `<div class="alert-actions"><button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'kill'})">${t('popup.btn.kill')}</button> <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'continue'})">${t('popup.btn.resume')}</button></div>` : ''}
+            ${a.exe ? `<div class="alert-exe">${escapeHtml(a.exe)}${a.exe_replaced ? ` · ${t('system.exe_replaced')}` : ''}</div>` : ''}
+            <div class="alert-actions">${a.flagged || !a.exe ? '' : `<button class="btn btn-secondary btn-sm" onclick="trustProgram('${escapeJs(a.exe)}','${escapeJs(a.comm || '')}')">${t('popup.btn.its_me')}</button> `}${a.suspended ? `<button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'kill'})">${t('popup.btn.kill')}</button> <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'continue'})">${t('popup.btn.resume')}</button>` : ''}</div>
         </div>`;
         }
         if (a.kind === 'persistence' || a.kind === 'integrity' || a.kind === 'update') {
@@ -1168,11 +1237,11 @@ function renderAlerts(available = true) {
                 <span class="alert-meta">${formatDateTime(a.time)} · pid ${a.pid}${a.user ? ` · ${escapeHtml(a.user)}` : ''}</span>
             </div>
             <div class="alert-body">${t('system.alert.files', { count: formatNumber(a.count || 0), seconds: a.window || 15, dir: escapeHtml(a.top_dir || '/') })}${a.trusted ? '' : ` · ${t('system.alert.untrusted')}`}</div>
-            ${a.exe ? `<div class="alert-exe">${escapeHtml(a.exe)}${a.cmdline ? ` — ${escapeHtml(a.cmdline)}` : ''}</div>` : ''}
+            ${a.exe ? `<div class="alert-exe">${escapeHtml(a.exe)}${a.cmdline ? ` — ${escapeHtml(a.cmdline)}` : ''}${a.exe_replaced ? ` · ${t('system.exe_replaced')}` : ''}</div>` : ''}
             ${reasons ? `<div class="alert-reasons">${escapeHtml(reasons)}</div>` : ''}
             ${infected.length ? `<div class="alert-infected">${infected.map(escapeHtml).join('<br>')}</div>` : ''}
             ${(a.sample || []).length ? `<details class="alert-sample"><summary>${t('system.alert.sample', { n: (a.sample || []).length })}</summary>${(a.sample || []).map(p => `<div>${escapeHtml(p)}</div>`).join('')}</details>` : ''}
-            <div class="alert-actions"><button class="btn btn-secondary btn-sm" onclick="startScan('${escapeJs(a.top_dir || '/')}')">${t('popup.btn.scan_folder')}</button>${a.suspended ? ` <button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'kill'})">${t('popup.btn.kill')}</button> <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'continue'})">${t('popup.btn.resume')}</button>` : ''}</div>
+            <div class="alert-actions"><button class="btn btn-secondary btn-sm" onclick="startScan('${escapeJs(a.top_dir || '/')}')">${t('popup.btn.scan_folder')}</button>${a.exe ? ` <button class="btn btn-secondary btn-sm" onclick="trustProgram('${escapeJs(a.exe)}','${escapeJs(a.comm || '')}')">${t('popup.btn.its_me')}</button>` : ''}${a.suspended ? ` <button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'kill'})">${t('popup.btn.kill')}</button> <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'continue'})">${t('popup.btn.resume')}</button>` : ''}</div>
         </div>`;
     }).join('');
 }
@@ -1899,6 +1968,13 @@ function simulateBackend(data) {
                     { number: 3, to: '22/tcp', action: 'ALLOW IN', from: 'Anywhere', v6: true, comment: '' }] },
                 ssh: { installed: true, active: true, enabled: true, port: 22, allowed_by_firewall: true } } });
             break;
+        case 'get_trusted':
+            reply('trustedList', { programs: [{ exe: '/home/user/bin/backup.sh', comm: 'backup.sh', by: 'user', added: new Date().toISOString() }],
+                                   acknowledged: ['autostart:/home/user/.config/autostart/sync.desktop'] });
+            break;
+        case 'trust_program': case 'untrust_program': case 'acknowledge_persistence':
+            reply('operationResult', { status: 'success', message: data.action === 'trust_program' ? t('msg.program_trusted', { program: data.comm || data.exe }) : data.action === 'untrust_program' ? t('msg.program_untrusted') : t('msg.persistence_acknowledged') });
+            break;
         case 'get_settings':
             reply('settingsData', { available: true, system: { upload_monitor: true, upload_alert_gb: 5, upload_window_hours: 1, burst_monitor: true, burst_info_threshold: 50, burst_danger_threshold: 25, burst_window_sec: 15, usb_auto_scan: true, usb_auto_scan_max_gib: 128, update_hour: 7, update_minute: 0, weekly_scan: false, weekly_scan_day: 6, weekly_scan_hour: 12 },
                                     user: { language: lang, view_mode: viewMode, popups: { info: true, upload: true, scan: true, update: true, security: true } } });
@@ -1995,6 +2071,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderLegal();
     if (params.get('legal') === '1') { legalAccepted = false; openLegal(); }
     if (params.get('learn') === '1') showAwareness();
+    if (params.get('lesson')) setTimeout(() => openLesson(params.get('lesson')), 300);   // dev : ouvre une leçon
     if (location.hash && $(`tab-${location.hash.slice(1)}`)) { setViewMode('advanced', false); switchTab(location.hash.slice(1)); }
     sendToBackend({ action: 'check_status' });
     sendToBackend({ action: 'get_db_info' });

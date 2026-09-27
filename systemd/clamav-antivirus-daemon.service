@@ -1,5 +1,5 @@
 [Unit]
-Description=ClamAV Antivirus - service système (scans complets et mises à jour sans mot de passe)
+Description=ClamAV Antivirus GUI - service système (scans complets et mises à jour sans mot de passe)
 Documentation=https://github.com/dukiwi/clamav-antivirus
 After=network.target
 Wants=clamav-antivirus-update.timer

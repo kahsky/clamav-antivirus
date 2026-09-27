@@ -5,10 +5,10 @@
   <vendor>Dukiwi SA</vendor>
   <vendor_url>https://dukiwi.com</vendor_url>
   <action id="com.dukiwi.clamav-antivirus.unlock">
-    <description>Déverrouiller les réglages de sécurité de ClamAV Antivirus</description>
-    <description xml:lang="en">Unlock ClamAV Antivirus security settings</description>
-    <description xml:lang="de">Sicherheitseinstellungen von ClamAV Antivirus entsperren</description>
-    <description xml:lang="it">Sbloccare le impostazioni di sicurezza di ClamAV Antivirus</description>
+    <description>Déverrouiller les réglages de sécurité de ClamAV Antivirus GUI</description>
+    <description xml:lang="en">Unlock ClamAV Antivirus GUI security settings</description>
+    <description xml:lang="de">Sicherheitseinstellungen von ClamAV Antivirus GUI entsperren</description>
+    <description xml:lang="it">Sbloccare le impostazioni di sicurezza di ClamAV Antivirus GUI</description>
     <message>L'authentification d'un administrateur est requise pour modifier le pare-feu, SSH ou les réglages protégés.</message>
     <message xml:lang="en">Administrator authentication is required to change the firewall, SSH or protected settings.</message>
     <message xml:lang="de">Zum Ändern von Firewall, SSH oder geschützten Einstellungen ist eine Administrator-Authentifizierung erforderlich.</message>

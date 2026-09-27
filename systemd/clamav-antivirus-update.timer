@@ -1,5 +1,5 @@
 [Unit]
-Description=ClamAV Antivirus - mises à jour tous les jours à 07:00 et 5 minutes après le démarrage
+Description=ClamAV Antivirus GUI - mises à jour tous les jours à 07:00 et 5 minutes après le démarrage
 
 [Timer]
 # Tous les jours à 07:00

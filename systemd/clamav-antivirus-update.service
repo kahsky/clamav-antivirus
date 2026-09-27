@@ -1,5 +1,5 @@
 [Unit]
-Description=ClamAV Antivirus - recherche de mises à jour des signatures
+Description=ClamAV Antivirus GUI - recherche de mises à jour des signatures
 After=network-online.target clamav-antivirus-daemon.service
 Wants=network-online.target
 

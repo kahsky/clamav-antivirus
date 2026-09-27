@@ -1,0 +1,11 @@
+# Jamais de clé privée dans le dépôt GitHub (la clé de signature vit dans /home/kahsky/GITHUB/repo/keys/gnupg)
+keys/gnupg/
+**/private-keys-v1.d/
+**/openpgp-revocs.d/
+*.key
+*.sec
+*.secring
+# Artefacts de build
+build/
+__pycache__/*.pyc
+!__pycache__/clamav-antivirus.cpython-312.pyc

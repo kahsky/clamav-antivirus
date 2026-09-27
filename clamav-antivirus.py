@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ClamAV Antivirus - ClamAV GUI for Linux Mint
+ClamAV Antivirus GUI - ClamAV GUI for Linux Mint
 A modern HTML/CSS/JS interface for ClamAV with system tray integration.
 
 Les opérations privilégiées (scan complet du système, mise à jour des signatures)
@@ -730,16 +730,20 @@ class Popup(Gtk.Window):
         col.pack_start(self.progress_bar, False, False, 2)
 
         if buttons:
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            row.set_margin_top(6)
-            for label, style, callback in buttons:
+            rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            rows.set_margin_top(6)
+            row = None
+            for i, (label, style, callback) in enumerate(buttons):
+                if i % 3 == 0:                      # 3 boutons par ligne au maximum
+                    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                    rows.pack_start(row, False, False, 0)
                 btn = Gtk.Button(label=label)
                 btn.get_style_context().add_class("popup-btn")
                 if style:
                     btn.get_style_context().add_class(style)
                 btn.connect("clicked", self._on_button, callback)
                 row.pack_start(btn, False, False, 0)
-            col.pack_start(row, False, False, 0)
+            col.pack_start(rows, False, False, 0)
 
     # ── Interaction ──────────────────────────────────────────────────────
     def _on_click(self, _widget, event):
@@ -908,7 +912,7 @@ class TrayIcon:
             AppIndicator3.IndicatorCategory.APPLICATION_STATUS
         )
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
-        self.indicator.set_title("ClamAV Antivirus")
+        self.indicator.set_title("ClamAV Antivirus GUI")
 
         menu = Gtk.Menu()
         self.item_show = Gtk.MenuItem(label="")
@@ -1005,7 +1009,7 @@ class ClamAVAntivirusApp:
         self.lang = pick_language(load_state().get("language"))
         load_i18n()
 
-        self.window = Gtk.Window(title="ClamAV Antivirus")
+        self.window = Gtk.Window(title="ClamAV Antivirus GUI")
         self.window.set_default_size(1040, 720)
         self.window.set_position(Gtk.WindowPosition.CENTER)
         self.window.set_icon_from_file(os.path.join(ICONS_DIR, "logo.svg"))
@@ -1045,10 +1049,18 @@ class ClamAVAntivirusApp:
         lessons = (load_awareness().get(self.lang) or load_awareness().get("en") or [])
         if not lessons:
             return False
+        read = set(state.get("read_lessons") or [])
+        unread = [l for l in lessons if l.get("id") not in read]
+        if not unread and not force:
+            return False                      # toutes les leçons sont lues : plus de popup
+        pool = unread or lessons
         idx = int(state.get("tip_index", -1)) + 1
         if idx >= len(lessons):
             idx = 0
-        lesson = lessons[idx]
+        # prochaine leçon (non lue) à partir de la position courante, en rotation
+        rotation = lessons[idx:] + lessons[:idx]
+        lesson = next((l for l in rotation if l in pool), pool[0])
+        idx = next((i for i, l in enumerate(lessons) if l.get("id") == lesson.get("id")), 0)
         save_state({"tip_index": idx, "tip_date": datetime.now().strftime("%Y-%m-%d")})
         self.popup("tip", self.T("popup.tip.title", title=lesson.get("title", "")), lesson.get("summary", ""),
                    timeout=40, meta=self.T("popup.tip.meta"),
@@ -1145,7 +1157,8 @@ class ClamAVAntivirusApp:
                            meta=alert.get("exe") or None, buttons=buttons, on_activate=lambda: self.show_tab("system"))
             else:
                 self.popup("warning", T("popup.connection.title"), body, timeout=16, meta=alert.get("exe") or None,
-                           buttons=[(T("popup.btn.details"), None, lambda: self.show_tab("system"))],
+                           buttons=[(T("popup.btn.its_me"), "primary", lambda e=alert.get("exe"), c=alert.get("comm"): self.trust_program(e, c)),
+                                    (T("popup.btn.details"), None, lambda: self.show_tab("system"))],
                            on_activate=lambda: self.show_tab("system"))
             return
         if kind == "persistence":
@@ -1192,6 +1205,8 @@ class ClamAVAntivirusApp:
         meta_parts = []
         if alert.get("exe"):
             meta_parts.append(alert["exe"])
+        if alert.get("exe_replaced"):
+            meta_parts.append(T("system.exe_replaced"))
         if alert.get("user"):
             meta_parts.append(T("popup.alert.user", user=alert["user"]))
         reasons = alert.get("reasons") or []
@@ -1201,14 +1216,16 @@ class ClamAVAntivirusApp:
             if reason_text:
                 body += f"\n{reason_text}"
             pid = alert.get("pid")
+            its_me = (T("popup.btn.its_me"), None, lambda e=alert.get("exe"), c=comm: self.trust_program(e, c))
             if alert.get("suspended"):
                 body += "\n" + T("popup.alert.suspended")
                 buttons = [(T("popup.btn.kill"), "danger", lambda p=pid: self.process_action(p, "kill")),
                            (T("popup.btn.quarantine_exe"), "danger", lambda p=pid: self.process_action(p, "quarantine")),
-                           (T("popup.btn.resume"), None, lambda p=pid: self.process_action(p, "continue"))]
+                           (T("popup.btn.resume"), None, lambda p=pid: self.process_action(p, "continue")),
+                           its_me]
             else:
                 buttons = [(T("popup.btn.scan_folder"), "danger", lambda d=top_dir: self.request_scan(d)),
-                           (T("popup.btn.details"), None, lambda: self.show_tab("system"))]
+                           (T("popup.btn.details"), None, lambda: self.show_tab("system")), its_me]
             self.popup("danger", T("popup.alert.danger_title"), body, buttons=buttons,
                        meta=" · ".join(meta_parts) or None,
                        on_activate=lambda: self.show_tab("system"))
@@ -1216,6 +1233,7 @@ class ClamAVAntivirusApp:
             body = T("popup.alert.body", program=comm, count=count, seconds=alert.get("window", 15), dir=top_dir)
             self.popup("info", T("popup.alert.info_title"), body, timeout=14,
                        meta=" · ".join(meta_parts) or None,
+                       buttons=[(T("popup.btn.its_me"), None, lambda e=alert.get("exe"), c=comm: self.trust_program(e, c))] if alert.get("exe") else None,
                        on_activate=lambda: self.show_tab("system"))
 
     def request_scan(self, path):
@@ -1295,6 +1313,10 @@ class ClamAVAntivirusApp:
                 self.last_daemon_status["overall"] = ev.get("overall")
             self.tray.update_status()
             self.send_to_js("overall", ev.get("overall") or {})
+        elif et == "trusted":
+            self.send_to_js("trustedList", {"programs": ev.get("programs") or [], "acknowledged": ev.get("acknowledged") or [],
+                                            "available": True})
+            self.act_get_alerts({})
         elif et in ("vulns", "checklist", "integrity", "persistence", "app_update", "integrity_running", "suspended"):
             self.send_to_js("securityData", {"type": et, "data": ev.get(et) or ev.get("update") or {},
                                              "available": True})
@@ -1698,6 +1720,72 @@ class ClamAVAntivirusApp:
         save_state({"disclaimer_accepted": DISCLAIMER_VERSION, "disclaimer_date": now_iso()})
         self.send_status()
 
+    # ── « C'est moi » : programmes / entrées approuvés ─────────────────
+    def trust_program(self, exe, comm=""):
+        exe = (exe or "").replace(" (deleted)", "").strip()
+        if not exe:
+            return
+        name = comm or os.path.basename(exe)
+
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.program_trusted", program=name)})
+                self.act_get_alerts({})
+                self.act_get_trusted({})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+            self.send_status()
+            return False
+        self.run_admin("trust_program", {"exe": exe, "comm": name}, done)
+
+    def act_trust_program(self, data):
+        self.trust_program(data.get("exe"), data.get("comm") or "")
+
+    def act_untrust_program(self, data):
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.program_untrusted")})
+                self.act_get_trusted({})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("untrust_program", {"exe": data.get("exe") or ""}, done)
+
+    def act_get_trusted(self, _data):
+        resp = DaemonClient.request("trusted_programs")
+        self.send_to_js("trustedList", {"programs": resp.get("programs", []) if resp.get("ok") else [],
+                                        "acknowledged": resp.get("acknowledged", []) if resp.get("ok") else [],
+                                        "available": bool(resp.get("ok"))})
+
+    def act_acknowledge_persistence(self, data):
+        remove = bool(data.get("remove"))
+
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success",
+                                                    "message": self.T("msg.program_untrusted" if remove else "msg.persistence_acknowledged")})
+                self.act_get_security_data({"type": "persistence"})
+                self.act_get_alerts({})
+                self.act_get_trusted({})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("acknowledge_persistence", {"key": data.get("key") or "", "remove": remove}, done)
+
+    # ── Bonnes pratiques : leçons lues ──────────────────────────────────
+    def act_lesson_read(self, data):
+        lid = str(data.get("id") or "")
+        read = [x for x in (load_state().get("read_lessons") or []) if x != lid]
+        if lid:
+            read.append(lid)
+        save_state({"read_lessons": read})
+        self.send_status()
+
+    def act_lesson_unread(self, data):
+        lid = str(data.get("id") or "")
+        save_state({"read_lessons": [x for x in (load_state().get("read_lessons") or []) if x != lid]})
+        self.send_status()
+
     def act_show_tip(self, _data):
         self.show_daily_tip(force=True)
 
@@ -1947,6 +2035,7 @@ class ClamAVAntivirusApp:
             "disclaimer_accepted": int(state.get("disclaimer_accepted") or 0) >= DISCLAIMER_VERSION,
             "upload_gb": (ds or {}).get("upload_gb", 0),
             "overall": (ds or {}).get("overall"),
+            "read_lessons": load_state().get("read_lessons") or [],
             "unlocked": (ds or {}).get("unlocked", False),
             "family_mode": (ds or {}).get("family_mode", False),
             "admin_groups": (ds or {}).get("admin_groups", []),

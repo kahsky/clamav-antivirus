@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ClamAV Antivirus</title>
+    <title>ClamAV Antivirus GUI</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="mode-simple">
@@ -25,7 +25,7 @@
                 <path d="M32 12.5 15.5 19.2v12.6c0 11.2 6.9 21.3 16.5 25.2 9.6-3.9 16.5-14 16.5-25.2V19.2z" fill="url(#svi)"/>
                 <path d="M23.2 34.4l6.4 6.4L41.4 28.6" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
             </svg>
-                <span class="logo-text">ClamAV<br><small>Antivirus</small></span>
+                <span class="logo-text">ClamAV<br><small>Antivirus GUI</small></span>
             </div>
             <div class="simple-top-right">
                 <label class="lang-plain"><select id="langSelectSimple" onchange="changeLanguage(this.value)" aria-label="Language">
@@ -105,7 +105,7 @@
                 <path d="M32 12.5 15.5 19.2v12.6c0 11.2 6.9 21.3 16.5 25.2 9.6-3.9 16.5-14 16.5-25.2V19.2z" fill="url(#sbi)"/>
                 <path d="M23.2 34.4l6.4 6.4L41.4 28.6" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
             </svg>
-            <span class="logo-text">ClamAV<br><small>Antivirus</small></span>
+            <span class="logo-text">ClamAV<br><small>Antivirus GUI</small></span>
         </div>
 
         <nav class="sidebar-nav">
@@ -212,7 +212,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.8.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.8.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -967,6 +967,12 @@
                     <label class="setting-row"><span data-i18n="settings.schedule.weekly_hour">Heure</span><input type="number" id="setWeeklyHour" class="input-field input-sm" min="0" max="23"></label>
                     <p class="text-muted" data-i18n="settings.schedule.note">Les mises à jour sont aussi recherchées 5 minutes après chaque démarrage.</p>
                 </div>
+
+                <div class="card settings-card settings-card-wide">
+                    <h4 data-i18n="settings.trusted">Programmes de confiance</h4>
+                    <p class="text-muted" data-i18n="settings.trusted.intro">Programmes et entrées de démarrage que vous avez approuvés depuis une alerte : ils ne déclenchent plus de message. Retirez-en un pour être à nouveau averti.</p>
+                    <div id="trustedList" class="persistence-list"></div>
+                </div>
             </div>
 
             <div class="settings-footer">
@@ -1075,7 +1081,7 @@
                 <button class="btn-icon" onclick="closeCredits()">✕</button>
             </div>
             <div class="modal-tabs">
-                <button class="modal-tab active" onclick="switchCreditsTab('app', this)">ClamAV Antivirus</button>
+                <button class="modal-tab active" onclick="switchCreditsTab('app', this)">ClamAV Antivirus GUI</button>
                 <button class="modal-tab" onclick="switchCreditsTab('clamav', this)">ClamAV</button>
                 <button class="modal-tab" onclick="switchCreditsTab('freshclam', this)">Freshclam</button>
                 <button class="modal-tab" onclick="switchCreditsTab('licence', this)" data-i18n="credits.tab.licence">Licence</button>
@@ -1097,7 +1103,7 @@
                 <path d="M23.2 34.4l6.4 6.4L41.4 28.6" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
             </svg>
                         <div>
-                            <h3>ClamAV Antivirus</h3>
+                            <h3>ClamAV Antivirus GUI</h3>
                             <span class="credits-version">Version 1.8.0</span>
                         </div>
                     </div>
@@ -1146,7 +1152,7 @@
                     <div class="credits-features">
                         <div class="credits-feature">
                             <strong data-i18n="credits.freshclam.auto">Mise à jour automatique</strong>
-                            <span data-i18n="credits.freshclam.auto_text">Le service clamav-freshclam tourne en arrière-plan ; ClamAV Antivirus force en plus une recherche tous les jours à 07:00 et 5 minutes après chaque démarrage.</span>
+                            <span data-i18n="credits.freshclam.auto_text">Le service clamav-freshclam tourne en arrière-plan ; ClamAV Antivirus GUI force en plus une recherche tous les jours à 07:00 et 5 minutes après chaque démarrage.</span>
                         </div>
                         <div class="credits-feature">
                             <strong data-i18n="credits.freshclam.db">Bases de données</strong>
@@ -1162,7 +1168,7 @@
                 <div class="credits-panel" id="credits-licence">
                     <h3 data-i18n="credits.tab.licence">Licence</h3>
                     <p data-i18n="credits.licence.p1">ClamAV est distribué sous licence GPL v2 (GNU General Public License version 2). ClamAV est un projet de Cisco Talos Intelligence Group.</p>
-                    <p data-i18n="credits.licence.p2">ClamAV Antivirus (cette interface graphique) est un logiciel libre distribué sous licence GPL v3 (GNU General Public License version 3), développé par Dukiwi SA. L'interface utilise les composants suivants :</p>
+                    <p data-i18n="credits.licence.p2">ClamAV Antivirus GUI (cette interface graphique) est un logiciel libre distribué sous licence GPL v3 (GNU General Public License version 3), développé par Dukiwi SA. L'interface utilise les composants suivants :</p>
                     <div class="credits-features">
                         <div class="credits-feature">
                             <strong>Python 3 + GTK3</strong>

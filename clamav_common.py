@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ClamAV Antivirus — module partagé entre le GUI et le daemon système.
+ClamAV Antivirus GUI — module partagé entre le GUI et le daemon système.
 Chemins, exclusions de scan, protocole socket (JSON par ligne) et utilitaires.
 (c) 2026 Dukiwi SA - Estavayer-le-Lac
 """
@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.

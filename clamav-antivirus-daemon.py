@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ClamAV Antivirus — service système (root).
+ClamAV Antivirus GUI — service système (root).
 
 Tourne en permanence via systemd et écoute sur un socket Unix. Il permet à un
 utilisateur sans droits administrateur de demander :
@@ -335,6 +335,14 @@ TRUSTED_EXE_PREFIXES = ("/usr/", "/bin/", "/sbin/", "/lib", "/opt/", "/snap/", "
 UNTRUSTED_EXE_PREFIXES = ("/tmp/", "/var/tmp/", "/dev/shm/", "/run/user/", "/home/", "/root/", "/media/", "/mnt/")
 
 
+def normalize_exe(exe):
+    """Chemin de l'exécutable sans le suffixe « (deleted) » (binaire remplacé par une mise à jour pendant l'exécution)."""
+    exe = (exe or "").strip()
+    if exe.endswith(" (deleted)"):
+        exe = exe[:-len(" (deleted)")]
+    return exe
+
+
 class ActivityMonitor(threading.Thread):
     """Détecte les processus qui modifient beaucoup de fichiers en peu de temps."""
 
@@ -476,9 +484,12 @@ class ActivityMonitor(threading.Thread):
         return info
 
     def exe_trusted(self, exe):
-        """Exécutable connu du système (paquet dpkg / emplacement système) ?"""
-        if not exe or exe.endswith(" (deleted)"):
+        """Exécutable connu du système (paquet dpkg / emplacement système) ou approuvé par l'utilisateur (« C'est moi ») ?"""
+        exe = normalize_exe(exe)
+        if not exe:
             return False
+        if exe in self.daemon_ref.user_trusted():
+            return True
         if exe.startswith(UNTRUSTED_EXE_PREFIXES):
             return False
         if not exe.startswith(TRUSTED_EXE_PREFIXES):
@@ -513,8 +524,11 @@ class ActivityMonitor(threading.Thread):
         if info["comm"] in ("clamscan", "clamd", "clamdscan", "freshclam", "find") and \
                 info["exe"].startswith("/usr/"):
             return
+        exe_path = normalize_exe(info["exe"])
+        if exe_path and exe_path in self.daemon_ref.user_trusted():
+            self.reported[pid] = now          # programme approuvé : plus aucune alerte
+            return
         trusted = self.exe_trusted(info["exe"])
-        exe_path = info["exe"].replace(" (deleted)", "")
         infected_exe = self.clamd_check([exe_path]) if exe_path and os.path.exists(exe_path) else []
         sample = sorted(track["paths"])[:200]
         infected_files = self.clamd_check(sample[:12])
@@ -548,7 +562,7 @@ class ActivityMonitor(threading.Thread):
             "kind": "burst",
             "time": now_iso(), "severity": severity, "reasons": reasons,
             "pid": pid, "comm": info["comm"], "exe": info["exe"], "cmdline": info["cmdline"],
-            "user": info["user"], "trusted": trusted,
+            "user": info["user"], "trusted": trusted, "exe_replaced": info["exe"].endswith(" (deleted)"),
             "count": track["count"], "home_count": track["home"],
             "window": self.daemon_ref.settings.get("burst_window_sec"),
             "sample": sample[:8], "top_dir": top_dir,
@@ -1527,6 +1541,7 @@ class ConnectionMonitor(threading.Thread):
             p["exe"] = info["exe"]
             p["user"] = info["user"]
             p["trusted"] = monitor.exe_trusted(info["exe"]) if info["exe"] else None
+            p["exe_replaced"] = info["exe"].endswith(" (deleted)")
             for r in p["remotes"].values():
                 r["ports"] = sorted(r["ports"])[:6]
                 g = self.geo.get(r["ip"], {})
@@ -1548,11 +1563,18 @@ class ConnectionMonitor(threading.Thread):
             g = self.geo.get(c["ip"], {})
             alert = {"kind": "connection", "severity": "danger" if flagged else "warn", "time": now_iso(),
                      "pid": c["pid"], "comm": c["comm"], "exe": p["exe"], "user": p.get("user", ""),
-                     "trusted": bool(p["trusted"]), "ip": c["ip"], "port": c["port"], "flagged": flagged,
+                     "trusted": bool(p["trusted"]), "exe_replaced": bool(p.get("exe_replaced")), "ip": c["ip"], "port": c["port"], "flagged": flagged,
                      "country": g.get("country", ""), "org": g.get("org", ""),
                      "reasons": ["ip_blocklisted"] if flagged else ["untrusted_connection"],
                      "count": 0, "top_dir": os.path.dirname(p["exe"]) if p["exe"] else "", "sample": [], "cmdline": ""}
             self.daemon_ref.publish_alert(alert)
+
+    def mark_trusted(self, exe):
+        """Marque immédiatement comme approuvé un programme de la liste courante."""
+        with self.lock:
+            for p in (self.current.get("processes") or []):
+                if normalize_exe(p.get("exe")) == exe:
+                    p["trusted"] = True
 
     def snapshot(self):
         with self.lock:
@@ -1766,6 +1788,7 @@ class Daemon:
         self.usb = UsbWatcher(self)
         self.unlocked = {}          # uid -> expiry (session administrateur)
         self.suspended = {}         # pid -> info (processus suspendus par la réponse automatique)
+        self._trusted_set = {t.get("exe") for t in (self.state.get("trusted_programs") or []) if t.get("exe")}
         self.last_daily = 0
         self.last_integrity = 0
         self.integrity_running = False
@@ -2292,7 +2315,7 @@ class Daemon:
             # Persistance & extensions
             prev = self.state.get("persistence") or {}
             prev_keys = {it["key"] for it in prev.get("items", [])} | {e["key"] for e in prev.get("extensions", [])}
-            pers = collect_persistence()
+            pers = self.apply_acknowledged(collect_persistence())
             self.state.update(persistence=pers)
             if prev_keys:
                 for it in pers["items"]:
@@ -2384,6 +2407,28 @@ class Daemon:
         return {k: v for k, v in (vulns or {}).items() if k != "cache"}
 
     # ── Couleur globale (icône du tray, vue simple) ──────────────────────
+    def user_trusted(self):
+        """Exécutables approuvés par l'utilisateur (« C'est moi ») : plus jamais d'alerte pour eux."""
+        return self._trusted_set
+
+    def apply_acknowledged(self, pers):
+        """Applique les entrées de persistance approuvées par l'utilisateur et recalcule les compteurs."""
+        if not pers:
+            return pers
+        ack = set(self.state.get("acknowledged_persistence") or [])
+        items, exts = pers.get("items") or [], pers.get("extensions") or []
+        for it in items:
+            base = it.get("trusted_base", it.get("trusted"))   # confiance dpkg d'origine, conservée pour pouvoir retirer l'approbation
+            it["trusted_base"] = base
+            it["approved"] = it.get("key") in ack
+            it["trusted"] = bool(base) or it["approved"]
+        for e in exts:
+            e["approved"] = e.get("key") in ack
+        pers["counts"] = {"items": len(items), "untrusted": sum(1 for it in items if not it.get("trusted")),
+                          "extensions": len(exts),
+                          "ext_outside_store": sum(1 for e in exts if not e.get("from_store") and not e.get("approved"))}
+        return pers
+
     def compute_overall(self):
         reasons = []
         color = "green"
@@ -2474,7 +2519,7 @@ class Daemon:
         if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools",
                    "install_phased"):
             return True
-        if cmd == "set_settings":
+        if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence"):
             return bool(self.settings.get("family_mode"))
         return False
 
@@ -2542,7 +2587,7 @@ class Daemon:
         sys_status = state.get("system_status") or {}
         return {
             "ok": True, "version": VERSION, "job": job, "queue": queue,
-            "state": {k: v for k, v in state.items() if k not in ("system_status", "alerts", "vulns", "checklist", "integrity", "persistence", "app_update")},
+            "state": {k: v for k, v in state.items() if k not in ("system_status", "alerts", "vulns", "checklist", "integrity", "persistence", "app_update", "trusted_programs", "acknowledged_persistence")},
             "resumable": resumable,
             "first_scan_pending": os.path.exists(FIRST_SCAN_FLAG),
             "db_last_update": db.isoformat(timespec="seconds") if db else None,
@@ -2693,7 +2738,7 @@ class Daemon:
 
         if cmd == "persistence":
             if req.get("refresh"):
-                pers = collect_persistence()
+                pers = self.apply_acknowledged(collect_persistence())
                 self.state.update(persistence=pers)
                 return {"ok": True, "persistence": pers}
             return {"ok": True, "persistence": self.state.get("persistence")}
@@ -2837,6 +2882,73 @@ class Daemon:
 
         if cmd == "alerts":
             return {"ok": True, "alerts": self.state.get("alerts", [])}
+
+        if cmd == "trusted_programs":
+            return {"ok": True, "programs": self.state.get("trusted_programs") or [],
+                    "acknowledged": self.state.get("acknowledged_persistence") or []}
+
+        if cmd == "trust_program":
+            # « C'est moi » : le programme ne déclenche plus d'alerte (rafale, connexion), même s'il est inconnu de dpkg
+            exe = normalize_exe(req.get("exe"))
+            if not exe or not os.path.isabs(exe):
+                return {"ok": False, "error": "invalid_path"}
+            try:
+                who = pwd.getpwuid(uid).pw_name
+            except KeyError:
+                who = str(uid)
+            programs = [p for p in (self.state.get("trusted_programs") or []) if p.get("exe") != exe]
+            programs.insert(0, {"exe": exe, "comm": str(req.get("comm") or os.path.basename(exe))[:64],
+                                "added": now_iso(), "by": who})
+            programs = programs[:200]
+            self.state.update(trusted_programs=programs)
+            self._trusted_set = {p["exe"] for p in programs}
+            alerts = [a for a in (self.state.get("alerts") or [])
+                      if not (a.get("kind") in ("burst", "connection") and normalize_exe(a.get("exe")) == exe)]
+            self.state.update(alerts=alerts)
+            for spid, info in list(self.suspended.items()):
+                if normalize_exe(info.get("exe")) == exe:
+                    try:
+                        os.kill(spid, signal.SIGCONT)
+                    except OSError:
+                        pass
+                    self.suspended.pop(spid, None)
+            self.connections.mark_trusted(exe)
+            self.write_log(f"✔ trusted program: {exe} (by {who})")
+            self.broadcast({"event": "trusted", "programs": programs, "acknowledged": self.state.get("acknowledged_persistence") or []})
+            self.broadcast({"event": "suspended", "suspended": list(self.suspended.values())})
+            self.refresh_overall()
+            return {"ok": True, "programs": programs}
+
+        if cmd == "untrust_program":
+            exe = normalize_exe(req.get("exe"))
+            programs = [p for p in (self.state.get("trusted_programs") or []) if p.get("exe") != exe]
+            self.state.update(trusted_programs=programs)
+            self._trusted_set = {p["exe"] for p in programs}
+            self.monitor.dpkg_cache.pop(exe, None)
+            self.write_log(f"✘ untrusted program: {exe}")
+            self.broadcast({"event": "trusted", "programs": programs, "acknowledged": self.state.get("acknowledged_persistence") or []})
+            return {"ok": True, "programs": programs}
+
+        if cmd == "acknowledge_persistence":
+            key = str(req.get("key") or "")[:500]
+            if not key:
+                return {"ok": False, "error": "invalid_key"}
+            ack = [k for k in (self.state.get("acknowledged_persistence") or []) if k != key]
+            if not req.get("remove"):
+                ack.insert(0, key)
+            ack = ack[:500]
+            self.state.update(acknowledged_persistence=ack)
+            pers = self.apply_acknowledged(self.state.get("persistence") or {})
+            self.state.update(persistence=pers)
+            if not req.get("remove"):
+                alerts = [a for a in (self.state.get("alerts") or [])
+                          if not (a.get("kind") == "persistence" and key in ((a.get("item") or {}).get("key"), (a.get("extension") or {}).get("key")))]
+                self.state.update(alerts=alerts)
+            self.write_log(f"{'✘ un' if req.get('remove') else '✔ '}acknowledged persistence: {key}")
+            self.broadcast({"event": "persistence", "persistence": pers})
+            self.broadcast({"event": "trusted", "programs": self.state.get("trusted_programs") or [], "acknowledged": ack})
+            self.refresh_overall()
+            return {"ok": True, "acknowledged": ack}
 
         if cmd == "clear_alerts":
             self.state.update(alerts=[])
@@ -3016,7 +3128,7 @@ class Daemon:
                 self.daily_tasks()
         threading.Thread(target=warmup, daemon=True).start()
 
-        log(f"ClamAV Antivirus daemon v{VERSION} à l'écoute sur {DAEMON_SOCKET}"
+        log(f"ClamAV Antivirus GUI daemon v{VERSION} à l'écoute sur {DAEMON_SOCKET}"
             + (" (mode test)" if TEST_MODE else ""))
         while not self.shutdown.is_set():
             try:
