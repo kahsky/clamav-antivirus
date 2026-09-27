@@ -19,6 +19,7 @@ let settingsData = null;
 let overall = null;
 let secData = { vulns: null, checklist: null, integrity: null, persistence: null, connections: null, app_update: null };
 let vulnFilter = 'unfixed';
+let legalAccepted = true;
 
 const RING_CIRC = 2 * Math.PI * 52;   // circonférence de l'anneau (r = 52)
 
@@ -87,6 +88,9 @@ function setLanguage(code) {
     if (secData.persistence) renderPersistence();
     if (secData.connections) renderConnections();
     renderAppUpdate();
+    if ($('tab-awareness') && $('tab-awareness').classList.contains('active')) renderAwareness('awarenessList');
+    if ($('simpleAwareness') && !$('simpleAwareness').hidden) renderAwareness('awarenessListSimple');
+    renderLegal();
     const btnUpdate = $('btnUpdate');
     if (btnUpdate) btnUpdate.textContent = isUpdating ? t('update.btn_running') : t('update.btn');
     const btnInstall = $('btnInstall');
@@ -185,6 +189,95 @@ function switchTab(tabId) {
         ['checklist', 'vulns', 'integrity', 'app_update'].forEach(k => loadSecurityData(k));
     }
     if (tabId === 'system') { loadSecurityData('connections'); loadSecurityData('persistence'); }
+    if (tabId === 'awareness') renderAwareness('awarenessList');
+}
+
+
+// ─── Bonnes pratiques (sensibilisation) ─────────────────────────────────────
+
+function lessons() {
+    const all = window.AWARENESS || {};
+    return all[lang] || all.en || all.fr || [];
+}
+
+function renderAwareness(containerId, openId) {
+    const el = $(containerId);
+    if (!el) return;
+    el.innerHTML = lessons().map((l, i) => `
+        <details class="lesson" id="${containerId}-${escapeHtml(l.id)}" ${openId === l.id ? 'open' : ''}>
+            <summary>
+                <span class="lesson-num">${i + 1}</span>
+                <span class="lesson-head"><span class="lesson-title">${escapeHtml(l.title)}</span><span class="lesson-summary">${escapeHtml(l.summary)}</span></span>
+                <span class="lesson-more">${t('popup.btn.read_more')}</span>
+            </summary>
+            <div class="lesson-body">
+                ${(l.details || []).map(p => `<p>${escapeHtml(p)}</p>`).join('')}
+                ${(l.tips || []).length ? `<h5>${t('awareness.tips')}</h5><ul>${l.tips.map(x => `<li>${escapeHtml(x)}</li>`).join('')}</ul>` : ''}
+            </div>
+        </details>`).join('');
+}
+
+function showAwareness() {
+    $('simpleAwareness').hidden = false;
+    document.body.classList.add('awareness-open');
+    renderAwareness('awarenessListSimple');
+}
+
+function hideAwareness() {
+    $('simpleAwareness').hidden = true;
+    document.body.classList.remove('awareness-open');
+}
+
+/** Appelé par le popup « Lire plus » (Python). */
+function openLesson(id) {
+    if (viewMode === 'simple') {
+        showAwareness();
+        renderAwareness('awarenessListSimple', id);
+        const el = $(`awarenessListSimple-${id}`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+        switchTab('awareness');
+        renderAwareness('awarenessList', id);
+        const el = $(`awarenessList-${id}`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
+
+// ─── Avertissement juridique ────────────────────────────────────────────────
+
+function legalHtml() {
+    const paras = [];
+    for (let i = 1; i <= 12; i++) {
+        const k = `legal.p${i}`;
+        const txt = t(k);
+        if (txt !== k) paras.push(`<p>${escapeHtml(txt)}</p>`);
+    }
+    return paras.join('');
+}
+
+function renderLegal() {
+    const html = legalHtml();
+    if ($('legalText')) $('legalText').innerHTML = html;
+    if ($('legalTextCredits')) $('legalTextCredits').innerHTML = html;
+}
+
+function openLegal() {
+    renderLegal();
+    $('legalClose').hidden = !legalAccepted;
+    $('legalAccept').hidden = legalAccepted;
+    $('legalModal').classList.add('open');
+}
+
+function closeLegal() {
+    if (!legalAccepted) return;
+    $('legalModal').classList.remove('open');
+}
+
+function acceptLegal() {
+    legalAccepted = true;
+    sendToBackend({ action: 'accept_disclaimer' });
+    $('legalModal').classList.remove('open');
 }
 
 
@@ -637,6 +730,7 @@ function onSettingsData(data) {
     $('setPopupScan').checked = p.scan !== false;
     $('setPopupUpdate').checked = p.update !== false;
     $('setPopupSecurity').checked = p.security !== false;
+    if ($('setPopupTip')) $('setPopupTip').checked = p.tip !== false;
     $('setUploadMonitor').checked = sys.upload_monitor !== false;
     $('setUploadGb').value = sys.upload_alert_gb ?? 5;
     $('setUploadHours').value = sys.upload_window_hours ?? 1;
@@ -698,7 +792,8 @@ function saveSettings() {
         language: $('setLanguage').value,
         view_mode: $('setViewMode').value,
         popups: { info: $('setPopupInfo').checked, upload: $('setPopupUpload').checked, scan: $('setPopupScan').checked,
-                  update: $('setPopupUpdate').checked, security: $('setPopupSecurity').checked },
+                  update: $('setPopupUpdate').checked, security: $('setPopupSecurity').checked,
+                  tip: $('setPopupTip') ? $('setPopupTip').checked : true },
     };
     sendToBackend({ action: 'set_settings', system, user });
 }
@@ -713,6 +808,8 @@ function updateDashboardStatus(data) {
     if (data.security) securityStatus = data.security;
     if (data.overall) overall = data.overall;
     if (data.app_update && !secData.app_update) secData.app_update = data.app_update;
+    if (data.disclaimer_accepted === false && legalAccepted) { legalAccepted = false; openLegal(); }
+    else if (data.disclaimer_accepted === true) legalAccepted = true;
     renderAdmin();
     renderSecurityBadge();
     updateStatusUI(data.color, data.message);
@@ -952,7 +1049,9 @@ function renderSystemStatus() {
         ['sysOs', 'sysKernel', 'sysUpgradable', 'sysSecurity', 'sysCves', 'sysReboot'].forEach(id => { $(id).textContent = '—'; });
         $('cveList').innerHTML = `<p class="text-muted">${t('system.cve_none')}</p>`;
         $('cveCount').textContent = '';
-        $('cardPackages').hidden = true;
+        $('packageList').innerHTML = '';
+        $('packageCounts').textContent = '';
+        $('btnInstallPhased').hidden = true;
         return;
     }
     $('systemChecked').textContent = st.checked_at
@@ -985,14 +1084,24 @@ function renderSystemStatus() {
     }
 
     const pkgs = (st.packages || []);
-    $('cardPackages').hidden = !pkgs.length;
-    if (pkgs.length) {
-        $('packageList').innerHTML = pkgs.slice(0, 60).map(p => `
-            <div class="package-item ${p.security ? 'security' : ''}">
+    const cat = (p) => p.category || (p.security ? 'security' : 'recommended');
+    const nSec = pkgs.filter(p => cat(p) === 'security').length, nRec = pkgs.filter(p => cat(p) === 'recommended').length, nPh = pkgs.filter(p => cat(p) === 'phased').length;
+    $('packageCounts').textContent = pkgs.length ? t('system.packages.counts', { security: nSec, recommended: nRec, phased: nPh }) : '';
+    $('btnInstallPhased').hidden = !nPh;
+    if (!pkgs.length) {
+        $('packageList').innerHTML = `<div class="check-item check-ok"><span class="check-icon">✓</span><div class="check-text"><span class="check-title">${t('system.packages.all_ok')}</span><span class="check-detail">${t('system.packages.all_ok_hint')}</span></div></div>`;
+    } else {
+        const badge = { security: ['scope-danger', t('system.pkg.security')], recommended: ['scope-system', t('system.pkg.recommended')], phased: ['scope-phased', t('system.pkg.phased')] };
+        $('packageList').innerHTML = pkgs.slice(0, 80).map(p => {
+            const c = cat(p); const [cls, label] = badge[c] || badge.recommended;
+            return `
+            <div class="package-item ${c}">
+                <span class="scope-badge ${cls}">${label}${c === 'phased' && p.phase != null ? ` ${escapeHtml(String(p.phase))}%` : ''}</span>
                 <span class="package-name">${escapeHtml(p.name)}</span>
                 <span class="package-versions">${escapeHtml(p.installed || '?')} → ${escapeHtml(p.candidate || '?')}</span>
-                ${p.security ? `<span class="scope-badge scope-danger">${t('system.pkg_security')}</span>` : `<span class="scope-badge scope-user">${escapeHtml(p.archive || '')}</span>`}
-            </div>`).join('') + (pkgs.length > 60 ? `<p class="text-muted">+${pkgs.length - 60}</p>` : '');
+                <span class="scope-badge scope-user">${escapeHtml(p.archive || '')}</span>
+            </div>`;
+        }).join('') + (pkgs.length > 80 ? `<p class="text-muted">+${pkgs.length - 80}</p>` : '');
     }
 }
 
@@ -1742,6 +1851,7 @@ function showToast(message, type = 'info') {
 // ─── Dev/Simulation Mode ────────────────────────────────────────────────────
 // Quand on ouvre le HTML directement dans un navigateur (sans le backend Python)
 
+const DEV_OK = new URLSearchParams(location.search).get('ok') === '1';   // ?ok=1 : simulation « tout est en ordre »
 function simulateBackend(data) {
     const reply = (event, payload, delay = 150) => setTimeout(() => onBackendMessage({ event, data: payload }), delay);
     switch (data.action) {
@@ -1753,9 +1863,10 @@ function simulateBackend(data) {
                 never_scanned: false, resumable: null,
                 history: [{ date: new Date(Date.now() - 86400e3).toISOString(), path: '/', files: 1234567, infected: 0, duration: 5400, status: 'clean', source: 'daemon', auto: true },
                           { date: new Date(Date.now() - 3 * 86400e3).toISOString(), path: '/home', files: 236886, infected: 1, duration: 6756, status: 'infected', source: 'local' }],
-                daemon: { available: true, version: '1.5.0', first_scan_pending: false, queue: [], monitor_active: true, usb_active: true },
+                daemon: { available: true, version: '1.8.0', first_scan_pending: false, queue: [], monitor_active: true, usb_active: true },
                 schedule: { next_update: new Date(new Date().setHours(31, 0, 0, 0)).toISOString(), timer_active: true },
-                system_status: { ok: true, upgradable: 3, security: 2, cve_count: 5, reboot_required: false, checked_at: new Date().toISOString() },
+                system_status: DEV_OK ? { ok: true, upgradable: 0, security: 0, cve_count: 0, reboot_required: false, checked_at: new Date().toISOString() }
+                                      : { ok: true, upgradable: 3, security: 2, cve_count: 5, reboot_required: false, checked_at: new Date().toISOString() },
                 security: { ufw: { installed: true, active: true, enabled: true, default_incoming: 'deny', default_outgoing: 'allow', rules: [{ number: 1, to: '22/tcp', action: 'ALLOW IN', from: 'Anywhere', v6: false }] }, ssh: { installed: true, active: false, enabled: false, port: 22, allowed_by_firewall: true } },
                 view_mode: (new URLSearchParams(location.search).get('view')) || 'advanced', upload_gb: 0.42,
             });
@@ -1776,7 +1887,7 @@ function simulateBackend(data) {
             reply('systemStatus', { available: true, refreshing: false, status: {
                 checked_at: new Date().toISOString(), ok: true, os: 'Linux Mint 22.3', kernel: '6.8.0-139-generic', reboot_required: true, reboot_pkgs: ['linux-image-6.8.0-140-generic'],
                 lists_updated: new Date(Date.now() - 7200e3).toISOString(), upgradable: 3, security: 2, cve_count: 2,
-                packages: [{ name: 'openssl', installed: '3.0.13-0ubuntu3.13', candidate: '3.0.13-0ubuntu3.15', security: true, archive: 'noble-security' }, { name: 'libgd3', installed: '2.3.3-9ubuntu5', candidate: '2.3.3-13', security: false, archive: 'noble' }],
+                packages: [{ name: 'openssl', installed: '3.0.13-0ubuntu3.13', candidate: '3.0.13-0ubuntu3.15', security: true, category: 'security', archive: 'noble-security' }, { name: 'libgd3', installed: '2.3.3-9ubuntu5', candidate: '2.3.3-13', security: false, category: 'recommended', archive: 'noble' }, { name: 'gnome-shell', installed: '46.0-0ubuntu1', candidate: '46.0-0ubuntu2', security: false, category: 'phased', phase: 20, archive: 'noble-updates' }], phased: 1,
                 cves: [{ id: 'CVE-2026-63072', package: 'openssl', installed: '3.0.13-0ubuntu3.13', candidate: '3.0.13-0ubuntu3.15', title: 'Heap Buffer Overflow in CMS Key Unwrapping', url: 'https://ubuntu.com/security/CVE-2026-63072' },
                        { id: 'CVE-2026-54874', package: 'openssl', installed: '3.0.13-0ubuntu3.13', candidate: '3.0.13-0ubuntu3.15', title: 'Excessive Memory Use Buffering DTLS Records', url: 'https://ubuntu.com/security/CVE-2026-54874' }] } });
             break;
@@ -1881,6 +1992,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const nav = (params.get('lang') || navigator.language || 'en').slice(0, 2).toLowerCase();
     setLanguage(window.I18N && window.I18N[nav] ? nav : 'en');
     renderScanHero();
+    renderLegal();
+    if (params.get('legal') === '1') { legalAccepted = false; openLegal(); }
+    if (params.get('learn') === '1') showAwareness();
     if (location.hash && $(`tab-${location.hash.slice(1)}`)) { setViewMode('advanced', false); switchTab(location.hash.slice(1)); }
     sendToBackend({ action: 'check_status' });
     sendToBackend({ action: 'get_db_info' });

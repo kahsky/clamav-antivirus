@@ -930,21 +930,37 @@ def collect_system_status(previous=None):
     packages = []
     for pkg in cache:
         try:
-            if not pkg.is_upgradable:
+            if not pkg.installed:
                 continue
-            cand = pkg.candidate
-            origins = cand.origins if cand else []
-            security = any((o.archive or "").endswith("-security") or (o.label or "") == "Debian-Security"
-                           for o in origins)
-            packages.append({
-                "name": pkg.name, "installed": pkg.installed.version if pkg.installed else "",
-                "candidate": cand.version if cand else "", "security": security,
-                "archive": origins[0].archive if origins else "", "cves": {},
-            })
+            if pkg.is_upgradable:
+                cand = pkg.candidate
+                origins = cand.origins if cand else []
+                security = any((o.archive or "").endswith("-security") or (o.label or "") == "Debian-Security"
+                               for o in origins)
+                packages.append({
+                    "name": pkg.name, "installed": pkg.installed.version if pkg.installed else "",
+                    "candidate": cand.version if cand else "", "security": security,
+                    "category": "security" if security else "recommended",
+                    "archive": origins[0].archive if origins else "", "cves": {},
+                })
+                continue
+            # Mise à jour "décalée" (phased) : une version plus récente existe mais apt la retient
+            for ver in pkg.versions:
+                if ver > pkg.installed and ver != pkg.candidate and ver.record.get("Phased-Update-Percentage") is not None:
+                    origins = ver.origins
+                    packages.append({
+                        "name": pkg.name, "installed": pkg.installed.version, "candidate": ver.version,
+                        "security": any((o.archive or "").endswith("-security") for o in origins),
+                        "category": "phased", "phase": ver.record.get("Phased-Update-Percentage"),
+                        "archive": origins[0].archive if origins else "", "cves": {},
+                    })
+                    break
         except Exception:  # noqa: BLE001
             continue
-    status["upgradable"] = len(packages)
-    status["security"] = sum(1 for p in packages if p["security"])
+    status["upgradable"] = sum(1 for p in packages if p["category"] != "phased")
+    status["security"] = sum(1 for p in packages if p["security"] and p["category"] != "phased")
+    status["recommended"] = sum(1 for p in packages if p["category"] == "recommended")
+    status["phased"] = sum(1 for p in packages if p["category"] == "phased")
 
     # CVE : changelog des paquets de sécurité (et du noyau), limité pour rester raisonnable
     prev_pkgs = {p["name"]: p for p in ((previous or {}).get("packages") or [])}
@@ -970,7 +986,7 @@ def collect_system_status(previous=None):
             cves.append({"id": cve, "package": p["name"], "candidate": p["candidate"],
                          "installed": p["installed"], "title": title,
                          "url": f"https://ubuntu.com/security/{cve}"})
-    status["packages"] = sorted(packages, key=lambda p: (not p["security"], p["name"]))
+    status["packages"] = sorted(packages, key=lambda p: ({"security": 0, "recommended": 1, "phased": 2}[p["category"]], p["name"]))
     status["cves"] = cves
     status["cve_count"] = len(cves)
     return status
@@ -2455,7 +2471,8 @@ class Daemon:
             return not req.get("enabled")
         if cmd == "ssh_set":
             return bool(req.get("enabled"))
-        if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools"):
+        if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools",
+                   "install_phased"):
             return True
         if cmd == "set_settings":
             return bool(self.settings.get("family_mode"))
@@ -2553,7 +2570,7 @@ class Daemon:
             "connections_active": self.connections.active,
             "alerts": (state.get("alerts") or [])[:10],
             "system_status": {k: sys_status.get(k) for k in
-                              ("checked_at", "ok", "upgradable", "security", "cve_count",
+                              ("checked_at", "ok", "upgradable", "security", "recommended", "phased", "cve_count",
                                "reboot_required", "os", "kernel", "lists_updated")} if sys_status else None,
         }
 
@@ -2697,6 +2714,20 @@ class Daemon:
                            "/bin/sh", "-c", "apt-get install -y rkhunter chkrootkit debsums"], timeout=30)
             return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else "command_failed",
                     "detail": ((r.stderr or "") + (r.stdout or "")).strip()[-200:]}
+
+        if cmd == "install_phased":
+            sysst = self.state.get("system_status") or {}
+            names = sorted({p["name"] for p in sysst.get("packages", []) if p.get("category") == "phased"})
+            if not names:
+                return {"ok": False, "error": "nothing_phased"}
+            if TEST_MODE:
+                return {"ok": True, "detail": "test_mode", "packages": names}
+            r = run_quiet(["systemd-run", "--unit", f"clamav-antivirus-phased-{int(time.time())}", "--collect", "--quiet",
+                           "-p", "Environment=DEBIAN_FRONTEND=noninteractive",
+                           "/bin/sh", "-c", "apt-get install -y -o APT::Get::Always-Include-Phased-Updates=true " + " ".join(names)], timeout=30)
+            self.write_log(f"install phased: {names} → {r.returncode}")
+            return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else "command_failed",
+                    "detail": ((r.stderr or "") + (r.stdout or "")).strip()[-200:], "packages": names}
 
         if cmd == "process_action":
             try:

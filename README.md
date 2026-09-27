@@ -59,6 +59,21 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 - **Mode famille et verrouillage admin** — désactiver le pare-feu, ouvrir un port, activer SSH,
   installer une mise à jour ou changer les réglages (mode famille) exige l'authentification d'un
   administrateur via polkit (`pkexec`), valable 15 minutes.
+- **Bonnes pratiques (security awareness)** — page visible dès la vue simple (« Apprendre à me
+  protéger ») avec 18 leçons pour utilisateurs non initiés : ne pas cliquer sans lire, phishing,
+  fraude au président, e-mail inhabituel, `salaires.xlsx.exe`, clés USB piégées, virus / ver /
+  cheval de Troie / cryptolocker, qu'est-ce qu'une faille, importance des mises à jour, mots de
+  passe, sauvegardes, faux support, ingénierie sociale, Wi-Fi public, mot de passe admin, réaction
+  à une attaque, extensions. Un **conseil du jour** apparaît en popup au démarrage (bouton
+  « Lire plus » ouvre la leçon ; désactivable dans Paramètres). Contenu dans `ui/awareness.js`.
+- **Paquets classés** (État du système) — chaque mise à jour en attente est étiquetée
+  **Sécurité** (correctif de faille), **Recommandé** (application / bibliothèque) ou **Décalé**
+  (phased update Ubuntu, avec le pourcentage de déploiement). Si rien n'est en attente, la carte
+  affiche « Tout est à jour » ; sinon un bouton **Installer les paquets décalés** force leur
+  installation (`APT::Get::Always-Include-Phased-Updates=true`, authentification admin).
+- **Avertissement juridique** — affiché au premier lancement (à accepter) et disponible à tout
+  moment via Crédits → Avertissement : logiciel fourni « en l'état », première barrière seulement,
+  exclusion de responsabilité de Dukiwi SA (voir plus bas).
 - **Icône tray** — vert : tout est en ordre ; jaune : mises à jour non critiques, redémarrage,
   SSH actif, mise à jour de l'app ; bleu : signatures anciennes ou failles ouvertes sans correctif ;
   rouge : pare-feu inactif, mises à jour de sécurité, danger détecté, intégrité compromise.
@@ -68,11 +83,25 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 - **Scan rapide** — `/home`, `/etc`, `/var`, `/opt`, `/usr`, `/tmp` ou un dossier choisi
   via le sélecteur natif.
 - **Quarantaine** — fichiers infectés isolés (quarantaine système et quarantaine utilisateur).
-- **Bouclier tray** — Icône dans la barre des tâches avec 3 états :
-  - 🟢 **Vert** : Protégé, bases à jour
-  - 🔵 **Bleu** : Protégé, mise à jour recommandée
-  - 🔴 **Rouge** : Non protégé, MàJ > 2 jours
 - **Interface HTML/CSS** — Facilement modifiable (fichiers dans `ui/`)
+
+## Avertissement et limitation de responsabilité
+
+ClamAV Antivirus est fourni par **Dukiwi SA « EN L'ÉTAT » (as is)**, sans aucune garantie,
+expresse ou implicite. Il constitue tout au plus une **première barrière** : aucun antivirus,
+pare-feu ou outil de détection ne peut identifier toutes les menaces, et un voyant vert ne
+garantit en rien qu'un ordinateur est sain. Seul un comportement prudent et informé de
+l'utilisateur (security awareness) limite réellement les risques.
+
+**Dans toute la mesure permise par le droit applicable, Dukiwi SA ne pourra être tenue
+responsable** d'aucun dommage direct ou indirect (perte, chiffrement ou divulgation de données,
+infection non détectée, piratage, hameçonnage, fraude, interruption d'activité, faux positif,
+action déclenchée par le logiciel telle qu'un arrêt de processus, une mise en quarantaine ou une
+règle de pare-feu…) découlant de l'utilisation, de la mauvaise utilisation ou de l'impossibilité
+d'utiliser le logiciel. L'utilisateur est seul responsable de ses sauvegardes, de ses réglages et
+de ses actes. Le texte complet (12 articles, FR/EN/DE/IT) est affiché dans l'application au
+premier lancement et sous Crédits → Avertissement ; en l'utilisant, vous l'acceptez. Ce texte
+n'est pas un avis juridique.
 
 ## Installation via le dépôt APT (recommandé)
 
@@ -86,15 +115,12 @@ sudo apt update && sudo apt install clamav-antivirus
 ```
 
 Les mises à jour arrivent ensuite par le Gestionnaire de mises à jour de Mint. L'application
-vérifie aussi elle-même, chaque jour, le manifeste signé du dépôt
-(`manifest.json` + `manifest.json.sig`, clé Ed25519 `C9EC B8C7 A3BA 05AA 9446 D33D 4301 B5B9 784F 6C1F`
-conservée hors ligne) : version, SHA-256 du paquet et de chaque fichier installé. Une mise à jour
-non signée ou altérée est refusée, même si le serveur web était compromis ; l'installation
-d'une mise à jour vérifiée demande une authentification administrateur (popup ou onglet Sécurité).
+signale aussi elle-même les nouvelles versions (popup ou onglet Sécurité) ; leur installation
+demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.7.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.7.0_all.deb)
+[Télécharger clamav-antivirus_1.8.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.8.0_all.deb)
 
 ---
 
@@ -125,12 +151,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.7.0_all.deb`
+Résultat : `clamav-antivirus_1.8.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.7.0_all.deb
+sudo dpkg -i clamav-antivirus_1.8.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
@@ -168,6 +194,7 @@ localement avec les droits de l'utilisateur.
 |------------------------------------------|-------------------------------------------------------------------|
 | `/lib/udev/rules.d/80-clamav-antivirus-usb.rules` | Désactive le montage automatique udisks des périphériques USB **uniquement** quand le socket du service existe |
 | `ui/i18n.js`                             | Traductions FR/EN/DE/IT (JSON) partagées par la page et Python    |
+| `ui/awareness.js`                        | Leçons de sensibilisation FR/EN/DE/IT (popup « conseil du jour » et page Bonnes pratiques) |
 
 Réglages système (page Paramètres, fichier `/var/lib/clamav-antivirus/settings.json`,
 valeurs par défaut dans `DEFAULT_SETTINGS` de `clamav_common.py`) : seuil et fenêtre d'envoi
@@ -239,11 +266,14 @@ clamav-antivirus/
 │   ├── index.html                   # Interface HTML
 │   ├── style.css                    # Thème CSS (variables modifiables)
 │   ├── app.js                       # Logique JS frontend
-│   └── i18n.js                      # Traductions FR/EN/DE/IT
+│   ├── i18n.js                      # Traductions FR/EN/DE/IT
+│   └── awareness.js                 # Leçons de sensibilisation FR/EN/DE/IT
 ├── icons/
-│   ├── shield-green.svg             # Tray: protégé
-│   ├── shield-blue.svg              # Tray: MàJ dispo
-│   └── shield-red.svg               # Tray: non protégé
+│   ├── logo.svg                     # Logo de l'application (fenêtre, menu, .desktop)
+│   ├── shield-green.svg             # Tray : tout est en ordre
+│   ├── shield-yellow.svg            # Tray : MàJ non critiques, redémarrage, SSH actif
+│   ├── shield-blue.svg              # Tray : signatures anciennes, failles sans correctif
+│   └── shield-red.svg               # Tray : pare-feu inactif, MàJ de sécurité, danger
 ├── clamav-antivirus.desktop         # Entrée menu applications
 ├── clamav-antivirus-autostart.desktop
 ├── build-deb.sh                     # Script de build .deb

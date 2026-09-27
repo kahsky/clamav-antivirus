@@ -8,7 +8,7 @@
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.7.0"
+VERSION="1.8.0"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -45,6 +45,7 @@ cp "${SCRIPT_DIR}/ui/index.html"                    "${PKG_DIR}/opt/${APP_NAME}/
 cp "${SCRIPT_DIR}/ui/style.css"                     "${PKG_DIR}/opt/${APP_NAME}/ui/"
 cp "${SCRIPT_DIR}/ui/app.js"                        "${PKG_DIR}/opt/${APP_NAME}/ui/"
 cp "${SCRIPT_DIR}/ui/i18n.js"                       "${PKG_DIR}/opt/${APP_NAME}/ui/"
+cp "${SCRIPT_DIR}/ui/awareness.js"                  "${PKG_DIR}/opt/${APP_NAME}/ui/"
 cp "${SCRIPT_DIR}/udev/"*.rules                     "${PKG_DIR}/lib/udev/rules.d/"
 cp "${SCRIPT_DIR}/clamav-antivirus-unlock"          "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/keys/dukiwi-clamav.gpg"           "${PKG_DIR}/opt/${APP_NAME}/keys/"

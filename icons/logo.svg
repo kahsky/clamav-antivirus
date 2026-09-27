@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 72" width="64" height="72">
+  <defs>
+    <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="0.55" stop-color="#16a34a"/>
+      <stop offset="1" stop-color="#065f46"/>
+    </linearGradient>
+    <linearGradient id="lh" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.45"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="li" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1220" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#0b1220" stop-opacity="0.05"/>
+    </linearGradient>
+  </defs>
+  <path d="M32 2 6 12.5v18.4c0 17.2 10.9 32.2 26 37.1 15.1-4.9 26-19.9 26-37.1V12.5z" fill="#0b1220" opacity="0.5"/>
+  <path d="M32 4 8.5 13.6v17.3c0 15.8 10 29.7 23.5 34.3C45.5 60.6 55.5 46.7 55.5 30.9V13.6z" fill="url(#lg)"/>
+  <path d="M32 4 8.5 13.6v17.3c0 5.2 1.1 10.2 3 14.7C22.3 39.5 32 24 32 4z" fill="url(#lh)"/>
+  <path d="M32 12.5 15.5 19.2v12.6c0 11.2 6.9 21.3 16.5 25.2 9.6-3.9 16.5-14 16.5-25.2V19.2z" fill="url(#li)"/>
+  <path d="M23.2 34.4l6.4 6.4L41.4 28.6" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

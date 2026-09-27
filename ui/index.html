@@ -13,20 +13,27 @@
     <div class="simple-view" id="simpleView" data-state="ok">
         <div class="simple-top">
             <div class="simple-brand">
-                <svg viewBox="0 0 40 46" fill="none" class="logo-shield">
-                    <path d="M20 2L4 10v12c0 11.1 6.8 21.4 16 24 9.2-2.6 16-12.9 16-24V10L20 2z" fill="url(#shieldGradSimple)" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
-                    <path d="M16 23l4 4 8-8" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-                    <defs><linearGradient id="shieldGradSimple" x1="4" y1="2" x2="36" y2="38"><stop offset="0%" stop-color="#22c55e"/><stop offset="100%" stop-color="#059669"/></linearGradient></defs>
-                </svg>
+<svg class="logo-shield" viewBox="0 0 64 72" fill="none">
+                <defs>
+                    <linearGradient id="svg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="0.55" stop-color="#16a34a"/><stop offset="1" stop-color="#065f46"/></linearGradient>
+                    <linearGradient id="svh" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.45"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+                    <linearGradient id="svi" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0b1220" stop-opacity="0.35"/><stop offset="1" stop-color="#0b1220" stop-opacity="0.05"/></linearGradient>
+                </defs>
+                <path d="M32 2 6 12.5v18.4c0 17.2 10.9 32.2 26 37.1 15.1-4.9 26-19.9 26-37.1V12.5z" fill="#0b1220" opacity="0.5"/>
+                <path d="M32 4 8.5 13.6v17.3c0 15.8 10 29.7 23.5 34.3C45.5 60.6 55.5 46.7 55.5 30.9V13.6z" fill="url(#svg)"/>
+                <path d="M32 4 8.5 13.6v17.3c0 5.2 1.1 10.2 3 14.7C22.3 39.5 32 24 32 4z" fill="url(#svh)"/>
+                <path d="M32 12.5 15.5 19.2v12.6c0 11.2 6.9 21.3 16.5 25.2 9.6-3.9 16.5-14 16.5-25.2V19.2z" fill="url(#svi)"/>
+                <path d="M23.2 34.4l6.4 6.4L41.4 28.6" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </svg>
                 <span class="logo-text">ClamAV<br><small>Antivirus</small></span>
             </div>
             <div class="simple-top-right">
-                <select id="langSelectSimple" class="lang-select" onchange="changeLanguage(this.value)" aria-label="Language">
+                <label class="lang-plain"><select id="langSelectSimple" onchange="changeLanguage(this.value)" aria-label="Language">
                     <option value="fr">Français</option>
                     <option value="en">English</option>
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
-                </select>
+                </select></label>
                 <button class="btn btn-secondary btn-sm" onclick="setViewMode('advanced')" data-i18n="simple.advanced">Mode avancé</button>
             </div>
         </div>
@@ -57,11 +64,27 @@
         </div>
 
         <div class="simple-actions">
-            <button class="btn btn-full-scan btn-lg" id="simpleScanBtn" onclick="startFullSystemScan()">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/></svg>
-                <span data-i18n="simple.scan_now">Analyser mon ordinateur</span>
-            </button>
+            <div class="simple-buttons">
+                <button class="btn btn-full-scan btn-lg" id="simpleScanBtn" onclick="startFullSystemScan()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/></svg>
+                    <span data-i18n="simple.scan_now">Analyser mon ordinateur</span>
+                </button>
+                <button class="btn btn-secondary btn-lg" onclick="showAwareness()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                    <span data-i18n="simple.learn">Apprendre à me protéger</span>
+                </button>
+            </div>
             <span class="text-muted" id="simpleLastScan"></span>
+        </div>
+
+        <!-- Page Bonnes pratiques (mode simple) -->
+        <div class="simple-awareness" id="simpleAwareness" hidden>
+            <div class="simple-awareness-head">
+                <button class="btn btn-secondary btn-sm" onclick="hideAwareness()">← <span data-i18n="awareness.back">Retour</span></button>
+                <h2 data-i18n="awareness.title">Bonnes pratiques de sécurité</h2>
+                <span class="text-muted" data-i18n="awareness.subtitle">Les bons réflexes valent mieux que n'importe quel antivirus</span>
+            </div>
+            <div class="awareness-list" id="awarenessListSimple"></div>
         </div>
     </div>
 
@@ -70,16 +93,17 @@
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <aside class="sidebar">
         <div class="sidebar-logo">
-            <svg class="logo-shield" viewBox="0 0 40 46" fill="none">
-                <path d="M20 2L4 10v12c0 11.1 6.8 21.4 16 24 9.2-2.6 16-12.9 16-24V10L20 2z"
-                      fill="url(#shieldGrad)" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
-                <path d="M16 23l4 4 8-8" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+<svg class="logo-shield" viewBox="0 0 64 72" fill="none">
                 <defs>
-                    <linearGradient id="shieldGrad" x1="4" y1="2" x2="36" y2="38">
-                        <stop offset="0%" stop-color="#22c55e"/>
-                        <stop offset="100%" stop-color="#059669"/>
-                    </linearGradient>
+                    <linearGradient id="sbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="0.55" stop-color="#16a34a"/><stop offset="1" stop-color="#065f46"/></linearGradient>
+                    <linearGradient id="sbh" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.45"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+                    <linearGradient id="sbi" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0b1220" stop-opacity="0.35"/><stop offset="1" stop-color="#0b1220" stop-opacity="0.05"/></linearGradient>
                 </defs>
+                <path d="M32 2 6 12.5v18.4c0 17.2 10.9 32.2 26 37.1 15.1-4.9 26-19.9 26-37.1V12.5z" fill="#0b1220" opacity="0.5"/>
+                <path d="M32 4 8.5 13.6v17.3c0 15.8 10 29.7 23.5 34.3C45.5 60.6 55.5 46.7 55.5 30.9V13.6z" fill="url(#sbg)"/>
+                <path d="M32 4 8.5 13.6v17.3c0 5.2 1.1 10.2 3 14.7C22.3 39.5 32 24 32 4z" fill="url(#sbh)"/>
+                <path d="M32 12.5 15.5 19.2v12.6c0 11.2 6.9 21.3 16.5 25.2 9.6-3.9 16.5-14 16.5-25.2V19.2z" fill="url(#sbi)"/>
+                <path d="M23.2 34.4l6.4 6.4L41.4 28.6" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
             </svg>
             <span class="logo-text">ClamAV<br><small>Antivirus</small></span>
         </div>
@@ -121,6 +145,10 @@
                 </svg>
                 <span data-i18n="nav.security">Sécurité</span>
                 <span class="nav-badge nav-badge-amber" id="securityBadge" style="display:none">0</span>
+            </button>
+            <button class="nav-btn" data-tab="awareness" onclick="switchTab('awareness')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                <span data-i18n="nav.awareness">Bonnes pratiques</span>
             </button>
             <button class="nav-btn" data-tab="firewall" onclick="switchTab('firewall')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -178,13 +206,13 @@
             </div>
             <button class="btn btn-secondary btn-sm mode-btn" onclick="setViewMode('simple')" data-i18n="simple.simple_mode">Mode simple</button>
             <div class="lang-row">
-                <select id="langSelect" class="lang-select" onchange="changeLanguage(this.value)" aria-label="Language">
+                <label class="lang-plain"><select id="langSelect" onchange="changeLanguage(this.value)" aria-label="Language">
                     <option value="fr">Français</option>
                     <option value="en">English</option>
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
-                </select>
-                <small class="version">v1.7.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a></small>
+                </select></label>
+                <small class="version">v1.8.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -666,10 +694,15 @@
                 </div>
             </div>
 
-            <div class="card card-packages" id="cardPackages" hidden>
+            <div class="card card-packages" id="cardPackages">
                 <div class="card-title-row">
                     <h4 data-i18n="system.packages_title">Paquets à mettre à jour</h4>
+                    <div class="log-actions-right">
+                        <span class="text-muted" id="packageCounts"></span>
+                        <button class="btn btn-secondary btn-sm" id="btnInstallPhased" onclick="sendToBackend({action:'install_phased'})" hidden data-i18n="system.packages.install_phased">Installer les paquets décalés</button>
+                    </div>
                 </div>
+                <p class="text-muted alerts-intro" data-i18n="system.packages.intro">Sécurité : correctifs de failles, à installer sans attendre. Recommandé : nouvelles versions d'applications et de bibliothèques. Décalé (phasing) : mise à jour publiée progressivement par Ubuntu, retenue pour l'instant sur cet ordinateur ; vous pouvez forcer son installation.</p>
                 <div id="packageList" class="package-list"></div>
             </div>
 
@@ -788,6 +821,19 @@
             </div>
         </section>
 
+        <!-- ── BONNES PRATIQUES ────────────────────────────────────── -->
+        <section class="tab-panel" id="tab-awareness">
+            <div class="page-header">
+                <h1 data-i18n="awareness.title">Bonnes pratiques de sécurité</h1>
+                <p class="subtitle" data-i18n="awareness.subtitle">Les bons réflexes valent mieux que n'importe quel antivirus</p>
+            </div>
+            <div class="awareness-toolbar">
+                <span class="text-muted" data-i18n="awareness.intro">Un conseil est proposé chaque jour au démarrage. Cliquez sur « Lire plus » pour les explications et les réflexes à adopter.</span>
+                <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'show_tip'})" data-i18n="awareness.show_tip">Afficher un conseil</button>
+            </div>
+            <div class="awareness-list" id="awarenessList"></div>
+        </section>
+
         <!-- ── PARE-FEU & SSH ──────────────────────────────────────── -->
         <section class="tab-panel" id="tab-firewall">
             <div class="page-header">
@@ -872,6 +918,7 @@
                     <label class="setting-row toggle"><span data-i18n="settings.popup.scan">Analyse terminée sans menace</span><input type="checkbox" id="setPopupScan"></label>
                     <label class="setting-row toggle"><span data-i18n="settings.popup.update">Signatures à jour</span><input type="checkbox" id="setPopupUpdate"></label>
                     <label class="setting-row toggle"><span data-i18n="settings.popup.security">Mises à jour de sécurité en attente</span><input type="checkbox" id="setPopupSecurity"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.popup.tip">Conseil de sécurité quotidien au démarrage</span><input type="checkbox" id="setPopupTip"></label>
                     <p class="text-muted" data-i18n="settings.popup.note">Les dangers potentiels et les menaces détectées sont toujours affichés.</p>
                 </div>
 
@@ -1032,18 +1079,26 @@
                 <button class="modal-tab" onclick="switchCreditsTab('clamav', this)">ClamAV</button>
                 <button class="modal-tab" onclick="switchCreditsTab('freshclam', this)">Freshclam</button>
                 <button class="modal-tab" onclick="switchCreditsTab('licence', this)" data-i18n="credits.tab.licence">Licence</button>
+                <button class="modal-tab" onclick="switchCreditsTab('legal', this)" data-i18n="legal.link">Avertissement</button>
             </div>
             <div class="modal-body">
                 <div class="credits-panel active" id="credits-app">
                     <div class="credits-app-header">
-                        <svg class="credits-shield" viewBox="0 0 40 46" fill="none">
-                            <path d="M20 2L4 10v12c0 11.1 6.8 21.4 16 24 9.2-2.6 16-12.9 16-24V10L20 2z" fill="url(#credShield)" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
-                            <path d="M16 23l4 4 8-8" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-                            <defs><linearGradient id="credShield" x1="4" y1="2" x2="36" y2="38"><stop offset="0%" stop-color="#22c55e"/><stop offset="100%" stop-color="#059669"/></linearGradient></defs>
-                        </svg>
+<svg class="credits-shield" viewBox="0 0 64 72" fill="none">
+                <defs>
+                    <linearGradient id="crg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="0.55" stop-color="#16a34a"/><stop offset="1" stop-color="#065f46"/></linearGradient>
+                    <linearGradient id="crh" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.45"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+                    <linearGradient id="cri" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0b1220" stop-opacity="0.35"/><stop offset="1" stop-color="#0b1220" stop-opacity="0.05"/></linearGradient>
+                </defs>
+                <path d="M32 2 6 12.5v18.4c0 17.2 10.9 32.2 26 37.1 15.1-4.9 26-19.9 26-37.1V12.5z" fill="#0b1220" opacity="0.5"/>
+                <path d="M32 4 8.5 13.6v17.3c0 15.8 10 29.7 23.5 34.3C45.5 60.6 55.5 46.7 55.5 30.9V13.6z" fill="url(#crg)"/>
+                <path d="M32 4 8.5 13.6v17.3c0 5.2 1.1 10.2 3 14.7C22.3 39.5 32 24 32 4z" fill="url(#crh)"/>
+                <path d="M32 12.5 15.5 19.2v12.6c0 11.2 6.9 21.3 16.5 25.2 9.6-3.9 16.5-14 16.5-25.2V19.2z" fill="url(#cri)"/>
+                <path d="M23.2 34.4l6.4 6.4L41.4 28.6" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </svg>
                         <div>
                             <h3>ClamAV Antivirus</h3>
-                            <span class="credits-version">Version 1.7.0</span>
+                            <span class="credits-version">Version 1.8.0</span>
                         </div>
                     </div>
                     <p data-i18n="credits.app.p1">Interface graphique moderne pour ClamAV sur Linux. Conçue pour simplifier la gestion de votre antivirus : mise à jour des signatures, scans de répertoires, quarantaine automatique et surveillance système via un bouclier dans la barre des tâches.</p>
@@ -1124,11 +1179,36 @@
                     </div>
                     <p class="credits-copyright">© 2026 Dukiwi SA — Estavayer-le-Lac, Suisse. <span data-i18n="credits.licence.distributed">Distribué sous licence</span> <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank">GNU GPL v3</a>.</p>
                 </div>
+
+                <div class="credits-panel" id="credits-legal">
+                    <h3 data-i18n="legal.title">Avertissement et limitation de responsabilité</h3>
+                    <div class="legal-text" id="legalTextCredits"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- AVERTISSEMENT JURIDIQUE (premier lancement)                        -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="modal-overlay legal-overlay" id="legalModal">
+        <div class="modal legal-modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h2 data-i18n="legal.title">Avertissement et limitation de responsabilité</h2>
+                <button class="btn-icon" id="legalClose" onclick="closeLegal()" hidden>✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="legal-text" id="legalText"></div>
+            </div>
+            <div class="legal-footer">
+                <span class="text-muted" data-i18n="legal.footer">Ce texte est aussi disponible dans Crédits → Avertissement.</span>
+                <button class="btn btn-primary" id="legalAccept" onclick="acceptLegal()" data-i18n="legal.accept">J'ai lu et j'accepte</button>
             </div>
         </div>
     </div>
 
     <script src="i18n.js"></script>
+    <script src="awareness.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

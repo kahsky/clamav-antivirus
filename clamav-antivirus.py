@@ -44,8 +44,9 @@ from clamav_common import (  # noqa: E402
 # Réglages propres à l'utilisateur (le reste est géré par le daemon)
 USER_DEFAULTS = {
     "view_mode": "simple",
-    "popups": {"info": True, "upload": True, "scan": True, "update": True, "security": True},
+    "popups": {"info": True, "upload": True, "scan": True, "update": True, "security": True, "tip": True},
 }
+DISCLAIMER_VERSION = 1
 SECURITY_COMMANDS = ("firewall_set", "firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "ssh_set")
 UNLOCK_HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clamav-antivirus-unlock")
 OVERALL_ICON = {"green": "shield-green", "yellow": "shield-yellow", "blue": "shield-blue", "red": "shield-red"}
@@ -101,6 +102,22 @@ def save_state(data):
     state.update(data)
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
+
+
+_AWARENESS = None
+
+
+def load_awareness():
+    """Leçons de sensibilisation (ui/awareness.js : window.AWARENESS = {...};)."""
+    global _AWARENESS
+    if _AWARENESS is None:
+        try:
+            with open(os.path.join(UI_DIR, "awareness.js"), encoding="utf-8") as f:
+                raw = f.read()
+            _AWARENESS = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
+        except Exception:  # noqa: BLE001
+            _AWARENESS = {}
+    return _AWARENESS
 
 
 def user_settings():
@@ -603,6 +620,7 @@ POPUP_CSS = b"""
 }
 .popup-card.info    { border-color: rgba(59,130,246,0.55); }
 .popup-card.success { border-color: rgba(34,197,94,0.55); }
+.popup-card.tip     { border-color: rgba(34,197,94,0.45); }
 .popup-card.danger  { border-color: rgba(239,68,68,0.75); background-color: #1a1116; }
 .popup-card.warning { border-color: rgba(245,158,11,0.6); }
 .popup-card.usb     { border-color: rgba(59,130,246,0.55); }
@@ -620,7 +638,7 @@ POPUP_CSS = b"""
 
 POPUP_ICONS = {
     "info": "shield-blue", "success": "shield-green", "danger": "shield-red",
-    "warning": "shield-blue", "usb": "shield-blue",
+    "warning": "shield-blue", "usb": "shield-blue", "tip": "logo",
 }
 
 
@@ -990,7 +1008,7 @@ class ClamAVAntivirusApp:
         self.window = Gtk.Window(title="ClamAV Antivirus")
         self.window.set_default_size(1040, 720)
         self.window.set_position(Gtk.WindowPosition.CENTER)
-        self.window.set_icon_from_file(os.path.join(ICONS_DIR, "shield-green.svg"))
+        self.window.set_icon_from_file(os.path.join(ICONS_DIR, "logo.svg"))
         self.window.connect("delete-event", self.on_close)
 
         ucm = WebKit2.UserContentManager()
@@ -1014,6 +1032,33 @@ class ClamAVAntivirusApp:
             self.window.hide()
         else:
             self.window.present()
+        GLib.timeout_add_seconds(25, self.show_daily_tip)
+
+    # ── Conseil de sécurité du jour (sensibilisation) ───────────────────
+    def show_daily_tip(self, force=False):
+        state = load_state()
+        if not force:
+            if not self.popups_enabled("tip"):
+                return False
+            if state.get("tip_date") == datetime.now().strftime("%Y-%m-%d"):
+                return False
+        lessons = (load_awareness().get(self.lang) or load_awareness().get("en") or [])
+        if not lessons:
+            return False
+        idx = int(state.get("tip_index", -1)) + 1
+        if idx >= len(lessons):
+            idx = 0
+        lesson = lessons[idx]
+        save_state({"tip_index": idx, "tip_date": datetime.now().strftime("%Y-%m-%d")})
+        self.popup("tip", self.T("popup.tip.title", title=lesson.get("title", "")), lesson.get("summary", ""),
+                   timeout=40, meta=self.T("popup.tip.meta"),
+                   buttons=[(self.T("popup.btn.read_more"), "primary", lambda lid=lesson.get("id"): self.open_lesson(lid))],
+                   on_activate=lambda lid=lesson.get("id"): self.open_lesson(lid))
+        return False
+
+    def open_lesson(self, lesson_id):
+        self.window.present()
+        self.run_js(f'if(typeof openLesson==="function")openLesson({json.dumps(lesson_id)});')
 
     # ── Traduction ──────────────────────────────────────────────────────
     def T(self, key, **params):
@@ -1191,6 +1236,7 @@ class ClamAVAntivirusApp:
             if sys_status:
                 self.last_security_count = sys_status.get("security")
             self.send_status()
+            self.tray.update_status()   # couleur du tray dès la connexion (état global du service)
         elif et == "disconnected":
             self.last_daemon_status = None
             if self.scan_source == "daemon":
@@ -1433,7 +1479,8 @@ class ClamAVAntivirusApp:
                "restore_dest": "msg.restore_dest", "admin_required": "msg.admin_required",
                "auth_cancelled": "msg.auth_cancelled", "root_required": "msg.daemon_root_required",
                "command_failed": "msg.security_failed", "not_ready": "msg.update_not_ready",
-               "sha256_mismatch": "msg.update_bad_hash", "not_suspended": "msg.process_gone"}.get(err)
+               "sha256_mismatch": "msg.update_bad_hash", "not_suspended": "msg.process_gone",
+               "nothing_phased": "msg.nothing_phased"}.get(err)
         if key:
             return self.T(key, path=resp.get("path", ""))
         return err or self.T("msg.daemon_unavailable")
@@ -1646,6 +1693,23 @@ class ClamAVAntivirusApp:
     def act_clear_alerts(self, _data):
         DaemonClient.request("clear_alerts")
         self.act_get_alerts({})
+
+    def act_accept_disclaimer(self, _data):
+        save_state({"disclaimer_accepted": DISCLAIMER_VERSION, "disclaimer_date": now_iso()})
+        self.send_status()
+
+    def act_show_tip(self, _data):
+        self.show_daily_tip(force=True)
+
+    def act_install_phased(self, _data):
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "security",
+                                                    "message": self.T("msg.phased_installing", n=len(resp.get("packages", [])))})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("install_phased", {}, done)
 
     def act_set_view_mode(self, data):
         mode = data.get("mode")
@@ -1880,6 +1944,7 @@ class ClamAVAntivirusApp:
             "settings": (ds or {}).get("settings"),
             "user_settings": user_settings(),
             "view_mode": user_settings()["view_mode"],
+            "disclaimer_accepted": int(state.get("disclaimer_accepted") or 0) >= DISCLAIMER_VERSION,
             "upload_gb": (ds or {}).get("upload_gb", 0),
             "overall": (ds or {}).get("overall"),
             "unlocked": (ds or {}).get("unlocked", False),
