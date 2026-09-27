@@ -7,12 +7,13 @@ Chemins, exclusions de scan, protocole socket (JSON par ligne) et utilitaires.
 
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -26,6 +27,7 @@ SYSTEM_PROGRESS_FILE   = os.path.join(SYSTEM_STATE_DIR, "scan_progress.json")
 SYSTEM_FILELIST_CACHE  = os.path.join(SYSTEM_STATE_DIR, "scan_filelist.txt")
 FIRST_SCAN_FLAG        = os.path.join(SYSTEM_STATE_DIR, "first-scan-pending")
 SYSTEM_LOG_FILE        = os.path.join(SYSTEM_LOG_DIR, "scan.log")
+SYSTEM_SETTINGS_FILE   = os.path.join(SYSTEM_STATE_DIR, "settings.json")
 
 CLAMAV_DB_DIR = "/var/lib/clamav"
 
@@ -60,6 +62,65 @@ BURST_IGNORE_PARTS = (
 )
 
 LANGUAGES = ("fr", "en", "de", "it")
+
+# ─── Réglages système (modifiables depuis la page Paramètres, appliqués par le daemon) ──
+DEFAULT_SETTINGS = {
+    # Envoi Internet : popup quand le volume envoyé dépasse le seuil dans la fenêtre donnée
+    "upload_monitor": True,
+    "upload_alert_gb": 5.0,
+    "upload_window_hours": 1,
+    # Rafales d'écritures (fanotify)
+    "burst_monitor": True,
+    "burst_info_threshold": BURST_INFO_THRESHOLD,
+    "burst_danger_threshold": BURST_DANGER_THRESHOLD,
+    "burst_window_sec": BURST_WINDOW_SEC,
+    # Supports USB
+    "usb_auto_scan": True,
+    "usb_auto_scan_max_gib": 128,
+    # Recherche de mises à jour des signatures (timer systemd)
+    "update_hour": 7,
+    "update_minute": 0,
+    # Scan complet automatique hebdomadaire (0 = lundi … 6 = dimanche)
+    "weekly_scan": False,
+    "weekly_scan_day": 6,
+    "weekly_scan_hour": 12,
+}
+
+SETTINGS_LIMITS = {
+    "upload_alert_gb": (0.1, 10000.0), "upload_window_hours": (1, 168),
+    "burst_info_threshold": (5, 100000), "burst_danger_threshold": (5, 100000), "burst_window_sec": (5, 600),
+    "usb_auto_scan_max_gib": (1, 100000),
+    "update_hour": (0, 23), "update_minute": (0, 59),
+    "weekly_scan_day": (0, 6), "weekly_scan_hour": (0, 23),
+}
+
+
+def sanitize_settings(current, incoming):
+    """Fusionne des réglages entrants (dict) dans `current` en respectant types et limites.
+    Retourne (settings, erreurs)."""
+    result = dict(DEFAULT_SETTINGS)
+    result.update(current or {})
+    errors = []
+    for key, value in (incoming or {}).items():
+        if key not in DEFAULT_SETTINGS:
+            errors.append(f"unknown:{key}")
+            continue
+        default = DEFAULT_SETTINGS[key]
+        try:
+            if isinstance(default, bool):
+                value = value if isinstance(value, bool) else str(value).lower() in ("1", "true", "yes", "on")
+            elif isinstance(default, int):
+                value = int(float(value))
+            elif isinstance(default, float):
+                value = float(value)
+        except (TypeError, ValueError):
+            errors.append(f"invalid:{key}")
+            continue
+        if key in SETTINGS_LIMITS:
+            lo, hi = SETTINGS_LIMITS[key]
+            value = max(lo, min(hi, value))
+        result[key] = value
+    return result, errors
 
 # ─── Chemins que le daemon accepte de scanner pour n'importe quel utilisateur ──
 # (en plus du répertoire personnel de l'utilisateur qui fait la demande)
@@ -185,6 +246,57 @@ def systemd_is_active(unit):
         return r.stdout.strip() == "active"
     except Exception:
         return False
+
+
+# ─── Pare-feu UFW : analyse des sorties de commande ──────────────────────────
+
+def parse_ufw_verbose(text):
+    """Analyse `ufw status verbose` : statut et politiques par défaut."""
+    info = {"active": False, "default_incoming": "", "default_outgoing": "", "default_routed": "", "logging": ""}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line.lower().startswith("status:"):
+            info["active"] = "active" in line.lower() and "inactive" not in line.lower()
+        elif line.lower().startswith("default:"):
+            for part in line.split(":", 1)[1].split(","):
+                part = part.strip()
+                if "(incoming)" in part:
+                    info["default_incoming"] = part.split()[0]
+                elif "(outgoing)" in part:
+                    info["default_outgoing"] = part.split()[0]
+                elif "(routed)" in part:
+                    info["default_routed"] = part.split()[0]
+        elif line.lower().startswith("logging:"):
+            info["logging"] = line.split(":", 1)[1].strip()
+    return info
+
+
+def parse_ufw_numbered(text):
+    """Analyse `ufw status numbered` : liste de règles [{number, to, action, from, v6, raw}]."""
+    rules = []
+    for line in (text or "").splitlines():
+        line = line.rstrip()
+        if not line.startswith("["):
+            continue
+        try:
+            number = int(line[1:line.index("]")].strip())
+        except ValueError:
+            continue
+        rest = line[line.index("]") + 1:].strip()
+        v6 = "(v6)" in rest
+        rest = rest.replace("(v6)", "").strip()
+        # Colonnes séparées par 2 espaces ou plus : To | Action | From
+        cols = [c.strip() for c in re.split(r"\s{2,}", rest) if c.strip()]
+        to = cols[0] if cols else rest
+        action = cols[1] if len(cols) > 1 else ""
+        src = " ".join(cols[2:]) if len(cols) > 2 else ""
+        comment = ""
+        if "#" in src:
+            src, comment = src.split("#", 1)
+            src, comment = src.strip(), comment.strip()
+        rules.append({"number": number, "to": to, "action": action, "from": src, "v6": v6,
+                      "comment": comment, "raw": line.strip()})
+    return rules
 
 
 # ─── Internationalisation ────────────────────────────────────────────────────

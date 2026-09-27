@@ -13,6 +13,9 @@ let logScope = 'system';
 let lang = 'fr';
 let systemStatus = null;
 let alerts = [];
+let viewMode = 'simple';
+let securityStatus = null;
+let settingsData = null;
 
 const RING_CIRC = 2 * Math.PI * 52;   // circonférence de l'anneau (r = 52)
 
@@ -65,14 +68,15 @@ function setLanguage(code) {
     document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
     document.querySelectorAll('[data-i18n-placeholder]').forEach(el => { el.placeholder = t(el.dataset.i18nPlaceholder); });
     document.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
-    const sel = $('langSelect');
-    if (sel && sel.value !== code) sel.value = code;
+    ['langSelect', 'langSelectSimple', 'setLanguage'].forEach(id => { const sel = $(id); if (sel && sel.value !== code) sel.value = code; });
     // Re-rendre les zones dynamiques avec la nouvelle langue
     if (lastStatus) updateDashboardStatus(lastStatus);
     renderScanHero();
     if (scan.result) renderScanResults(scan.result);
     renderSystemStatus();
     renderAlerts();
+    renderSecurity();
+    renderSimpleView();
     const btnUpdate = $('btnUpdate');
     if (btnUpdate) btnUpdate.textContent = isUpdating ? t('update.btn_running') : t('update.btn');
     const btnInstall = $('btnInstall');
@@ -119,6 +123,8 @@ function onBackendMessage(msg) {
         case 'systemStatus':    onSystemStatus(data); break;
         case 'alertEvent':      onAlertEvent(data); break;
         case 'alertsList':      alerts = data.alerts || []; renderAlerts(data.available !== false); break;
+        case 'securityStatus':  onSecurityStatus(data); break;
+        case 'settingsData':    onSettingsData(data); break;
         case 'error':           showToast(data.message, 'error'); break;
     }
 }
@@ -159,7 +165,294 @@ function switchTab(tabId) {
     } else if (tabId === 'system') {
         sendToBackend({ action: 'get_system_status', refresh: false });
         sendToBackend({ action: 'get_alerts' });
+    } else if (tabId === 'firewall') {
+        sendToBackend({ action: 'get_security', refresh: true });
+    } else if (tabId === 'settings') {
+        loadSettings();
     }
+}
+
+
+// ─── Vue simple / avancée ───────────────────────────────────────────────────
+
+function setViewMode(mode, persist = true) {
+    viewMode = mode === 'advanced' ? 'advanced' : 'simple';
+    document.body.classList.toggle('mode-simple', viewMode === 'simple');
+    if (viewMode === 'simple') renderSimpleView();
+    if (persist) sendToBackend({ action: 'set_view_mode', mode: viewMode });
+}
+
+function simpleOverall() {
+    const d = (lastStatus && lastStatus.daemon) || {};
+    const sec = securityStatus || (lastStatus && lastStatus.security) || null;
+    const sys = systemStatus || (lastStatus && lastStatus.system_status) || null;
+    const rows = [];
+    let worst = 'ok';
+    const bump = (st) => { if (st === 'danger') worst = 'danger'; else if (st === 'warn' && worst !== 'danger') worst = 'warn'; };
+
+    // Antivirus / signatures
+    const color = lastStatus ? lastStatus.color : 'green';
+    const avState = !lastStatus ? 'neutral' : color === 'green' ? 'ok' : color === 'blue' ? 'warn' : 'danger';
+    bump(avState);
+    rows.push({ state: avState, label: t('simple.row.antivirus'),
+        value: !lastStatus ? t('sidebar.loading') : (lastStatus.installed === false ? t('status.not_installed') : (color === 'green' ? t('simple.av.ok', { rel: formatRelative(lastStatus.last_update) }) : lastStatus.message)),
+        action: color === 'green' ? null : { label: t('dash.action.update'), fn: 'triggerUpdate()' } });
+
+    // Surveillance (service)
+    const svc = d.available ? 'ok' : 'warn';
+    bump(svc);
+    rows.push({ state: svc, label: t('simple.row.service'),
+        value: d.available ? (d.monitor_active ? t('simple.service.ok') : t('simple.service.partial')) : t('simple.service.off') });
+
+    // Pare-feu
+    let fwState = 'neutral', fwValue = t('simple.unknown'), fwAction = null;
+    if (sec && sec.ufw) {
+        if (!sec.ufw.installed) { fwState = 'warn'; fwValue = t('firewall.not_installed'); }
+        else if (sec.ufw.active) { fwState = 'ok'; fwValue = t('simple.fw.ok'); }
+        else { fwState = 'warn'; fwValue = t('simple.fw.off'); fwAction = { label: t('simple.enable'), fn: 'firewallToggle(true)' }; }
+    }
+    bump(fwState === 'neutral' ? 'ok' : fwState);
+    rows.push({ state: fwState, label: t('simple.row.firewall'), value: fwValue, action: fwAction });
+
+    // SSH
+    let sshState = 'ok', sshValue = t('simple.ssh.off');
+    if (sec && sec.ssh) {
+        if (sec.ssh.active) { sshState = 'warn'; sshValue = t('simple.ssh.on', { port: sec.ssh.port }); }
+        else if (!sec.ssh.installed) { sshValue = t('simple.ssh.not_installed'); }
+    }
+    bump(sshState);
+    rows.push({ state: sshState, label: t('simple.row.ssh'), value: sshValue,
+        action: sshState === 'warn' ? { label: t('simple.disable'), fn: 'sshToggle(false)' } : null });
+
+    // Mises à jour système
+    const sysState = systemState(sys);
+    const sysRowState = sysState === 'security' ? 'danger' : (sysState === 'reboot' || sysState === 'updates') ? 'warn' : sysState === 'ok' ? 'ok' : 'neutral';
+    bump(sysRowState === 'neutral' ? 'ok' : sysRowState);
+    const sysLabels = { unknown: t('dash.system.unknown'), ok: t('dash.system.uptodate'), updates: t('dash.system.updates', { n: sys ? sys.upgradable : 0 }), security: t('dash.system.security', { n: sys ? sys.security : 0, cves: sys ? (sys.cve_count || 0) : 0 }), reboot: t('dash.system.reboot') };
+    rows.push({ state: sysRowState, label: t('simple.row.system'), value: sysLabels[sysState],
+        action: (sysState === 'security' || sysState === 'updates') ? { label: t('simple.update_system'), fn: "sendToBackend({action:'open_update_manager'})" } : null });
+
+    // Menaces / quarantaine
+    const danger = alerts.find(a => a.severity === 'danger');
+    const lastScan = lastStatus && lastStatus.last_scan;
+    let thrState = 'ok', thrValue = t('simple.threats.none');
+    if (danger) { thrState = 'danger'; thrValue = t('simple.threats.danger', { program: danger.comm || '?' }); }
+    else if (lastScan && lastScan.infected > 0) { thrState = 'warn'; thrValue = t('simple.threats.quarantined', { n: lastScan.infected }); }
+    bump(thrState);
+    rows.push({ state: thrState, label: t('simple.row.threats'), value: thrValue,
+        action: thrState !== 'ok' ? { label: t('popup.btn.details'), fn: danger ? "setViewMode('advanced'); switchTab('system')" : "setViewMode('advanced'); switchTab('quarantine')" } : null });
+
+    return { worst, rows };
+}
+
+function renderSimpleView() {
+    const view = $('simpleView');
+    if (!view) return;
+    const { worst, rows } = simpleOverall();
+    view.dataset.state = worst;
+    $('simpleTitle').textContent = t(`simple.title.${worst}`);
+    $('simpleSub').textContent = t(`simple.sub.${worst}`);
+    $('simpleRows').innerHTML = rows.map(r => `
+        <li class="simple-row" data-state="${r.state}">
+            <span class="simple-row-icon">${r.state === 'ok' ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="5,12 10,17 19,7"/></svg>' : r.state === 'neutral' ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="14"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>'}</span>
+            <span class="simple-row-text"><span class="simple-row-label">${escapeHtml(r.label)}</span><span class="simple-row-value" title="${escapeHtml(r.value)}">${escapeHtml(r.value)}</span></span>
+            ${r.action ? `<button class="btn ${r.state === 'danger' ? 'btn-danger' : 'btn-secondary'} btn-sm" onclick="${r.action.fn}">${escapeHtml(r.action.label)}</button>` : ''}
+        </li>`).join('');
+    const ls = lastStatus && lastStatus.last_scan;
+    $('simpleLastScan').textContent = ls ? t('simple.last_scan', { rel: formatRelative(ls.date) }) : t('simple.never_scanned');
+    $('simpleScanBtn').disabled = scan.running;
+    syncSimpleScan();
+}
+
+function syncSimpleScan() {
+    const box = $('simpleScan');
+    if (!box) return;
+    box.hidden = !scan.running;
+    if (!scan.running) return;
+    const pct = scanPercent();
+    $('simpleScanTitle').textContent = scan.phase === 'counting' ? t('dash.live.counting') : t('topbar.scanning', { path: scanTargetLabel() });
+    $('simpleScanCount').textContent = scan.phase === 'scanning' ? `${Math.floor(pct)} % · ${$('statEta').textContent}` : t('history.files', { n: formatNumber(scan.found) });
+    $('simpleScanFill').style.width = `${pct}%`;
+}
+
+
+// ─── Pare-feu & SSH ─────────────────────────────────────────────────────────
+
+function onSecurityStatus(data) {
+    if (data.available === false) { securityStatus = null; renderSecurity(false); return; }
+    securityStatus = data.security || null;
+    renderSecurity(true);
+    renderSimpleView();
+}
+
+function sshPortValue() {
+    return securityStatus && securityStatus.ssh ? securityStatus.ssh.port : 22;
+}
+
+function renderSecurity(available = true) {
+    const sec = securityStatus;
+    const card = $('cardFirewall');
+    if (!card) return;
+    const ufw = sec ? sec.ufw : null;
+    const ssh = sec ? sec.ssh : null;
+
+    const fwBadge = $('fwBadge');
+    if (!available || !ufw) {
+        card.dataset.state = 'unknown';
+        fwBadge.textContent = t('simple.unknown'); fwBadge.className = 'badge';
+        $('fwSummary').textContent = available ? t('firewall.unknown') : t('system.unavailable');
+    } else if (!ufw.installed) {
+        card.dataset.state = 'off';
+        fwBadge.textContent = t('firewall.not_installed'); fwBadge.className = 'badge badge-amber';
+        $('fwSummary').textContent = t('firewall.not_installed_hint');
+    } else {
+        card.dataset.state = ufw.active ? 'on' : 'off';
+        fwBadge.textContent = ufw.active ? t('common.active') : t('common.inactive');
+        fwBadge.className = 'badge ' + (ufw.active ? 'badge-green' : 'badge-red');
+        $('fwSummary').textContent = ufw.active
+            ? t('firewall.summary_on', { incoming: t(`firewall.policy.${ufw.default_incoming || 'deny'}`), outgoing: t(`firewall.policy.${ufw.default_outgoing || 'allow'}`), n: (ufw.rules || []).length })
+            : t('firewall.summary_off');
+        if (ufw.error === 'root_required') $('fwSummary').textContent += ` — ${t('firewall.root_required')}`;
+        if (ufw.default_incoming) $('fwDefaultIn').value = ufw.default_incoming;
+        if (ufw.default_outgoing) $('fwDefaultOut').value = ufw.default_outgoing;
+    }
+    $('btnFwEnable').hidden = !!(ufw && ufw.active);
+    $('btnFwDisable').hidden = !(ufw && ufw.active);
+    $('fwAllowSshLabel').hidden = !!(ufw && ufw.active) || !(ssh && ssh.installed);
+    $('firewallBadge').style.display = (ufw && ufw.installed && !ufw.active) || (ssh && ssh.active && !(ufw && ufw.active)) ? '' : 'none';
+
+    const cardSsh = $('cardSsh');
+    const sshBadge = $('sshBadge');
+    if (!ssh) {
+        cardSsh.dataset.state = 'unknown'; sshBadge.textContent = t('simple.unknown'); sshBadge.className = 'badge';
+        $('sshSummary').textContent = '';
+    } else if (!ssh.installed) {
+        cardSsh.dataset.state = 'off'; sshBadge.textContent = t('firewall.ssh.not_installed'); sshBadge.className = 'badge badge-green';
+        $('sshSummary').textContent = t('firewall.ssh.not_installed_hint');
+    } else {
+        cardSsh.dataset.state = ssh.active ? 'on' : 'off';
+        sshBadge.textContent = ssh.active ? t('common.active') : t('common.inactive');
+        sshBadge.className = 'badge ' + (ssh.active ? 'badge-amber' : 'badge-green');
+        $('sshSummary').textContent = ssh.active
+            ? t('firewall.ssh.summary_on', { port: ssh.port, fw: ssh.allowed_by_firewall ? t('firewall.ssh.allowed') : t('firewall.ssh.blocked') })
+            : t('firewall.ssh.summary_off');
+    }
+    $('btnSshEnable').hidden = !ssh || !ssh.installed || ssh.active;
+    $('btnSshDisable').hidden = !ssh || !ssh.active;
+    $('btnSshAllow').hidden = !ssh || !ssh.active || ssh.allowed_by_firewall || !(ufw && ufw.active);
+
+    const rules = (ufw && ufw.rules) || [];
+    const list = $('ruleList');
+    if (!ufw || !ufw.installed) list.innerHTML = '';
+    else if (ufw.error === 'root_required') list.innerHTML = `<p class="text-muted">${t('firewall.root_required')}</p>`;
+    else if (!rules.length) list.innerHTML = `<p class="text-muted">${t('firewall.rules.none')}</p>`;
+    else list.innerHTML = rules.map(r => {
+        const act = (r.action || '').split(' ')[0].toLowerCase();
+        return `<div class="rule-item">
+            <span class="rule-to">${escapeHtml(r.to)}${r.v6 ? ' <span class="scope-badge scope-user">v6</span>' : ''}</span>
+            <span class="rule-action ${act}">${escapeHtml(r.action)}</span>
+            <span class="rule-from">${escapeHtml(r.from)}</span>
+            ${r.comment ? `<span class="rule-comment">${escapeHtml(r.comment)}</span>` : ''}
+            <button class="btn btn-danger btn-sm" onclick="firewallDeleteRule(${r.number})">${t('quarantine.delete')}</button>
+        </div>`;
+    }).join('');
+}
+
+function firewallToggle(enabled) {
+    if (!enabled && !confirm(t('firewall.confirm_disable'))) return;
+    sendToBackend({ action: 'security_action', cmd: 'firewall_set', enabled, allow_ssh: !!($('fwAllowSsh') && $('fwAllowSsh').checked) });
+}
+
+function firewallDefaults() {
+    sendToBackend({ action: 'security_action', cmd: 'firewall_defaults', incoming: $('fwDefaultIn').value, outgoing: $('fwDefaultOut').value });
+}
+
+function firewallAddRule(port, proto, action, comment) {
+    if (!port) { showToast(t('firewall.rules.need_port'), 'error'); return; }
+    sendToBackend({ action: 'security_action', cmd: 'firewall_rule_add', port, proto, action, comment: comment || '' });
+}
+
+function firewallAddRuleFromForm() {
+    firewallAddRule($('ruleAddPort').value.trim(), $('ruleAddProto').value, $('ruleAddAction').value, $('ruleAddComment').value.trim());
+    $('ruleAddPort').value = ''; $('ruleAddComment').value = '';
+}
+
+function firewallDeleteRule(number) {
+    if (confirm(t('firewall.rules.confirm_delete', { n: number }))) {
+        sendToBackend({ action: 'security_action', cmd: 'firewall_rule_delete', number });
+    }
+}
+
+function sshToggle(enabled) {
+    if (enabled && !confirm(t('firewall.ssh.confirm_enable'))) return;
+    sendToBackend({ action: 'security_action', cmd: 'ssh_set', enabled });
+}
+
+
+// ─── Paramètres ─────────────────────────────────────────────────────────────
+
+function loadSettings() {
+    sendToBackend({ action: 'get_settings' });
+}
+
+function onSettingsData(data) {
+    settingsData = data;
+    const sys = data.system || {};
+    const user = data.user || {};
+    $('setLanguage').value = user.language || lang;
+    $('setViewMode').value = user.view_mode || viewMode;
+    const p = user.popups || {};
+    $('setPopupInfo').checked = p.info !== false;
+    $('setPopupUpload').checked = p.upload !== false;
+    $('setPopupScan').checked = p.scan !== false;
+    $('setPopupUpdate').checked = p.update !== false;
+    $('setPopupSecurity').checked = p.security !== false;
+    $('setUploadMonitor').checked = sys.upload_monitor !== false;
+    $('setUploadGb').value = sys.upload_alert_gb ?? 5;
+    $('setUploadHours').value = sys.upload_window_hours ?? 1;
+    $('setBurstMonitor').checked = sys.burst_monitor !== false;
+    $('setBurstInfo').value = sys.burst_info_threshold ?? 50;
+    $('setBurstDanger').value = sys.burst_danger_threshold ?? 25;
+    $('setBurstWindow').value = sys.burst_window_sec ?? 15;
+    $('setUsbAuto').checked = sys.usb_auto_scan !== false;
+    $('setUsbMax').value = sys.usb_auto_scan_max_gib ?? 128;
+    $('setUpdateTime').value = `${String(sys.update_hour ?? 7).padStart(2, '0')}:${String(sys.update_minute ?? 0).padStart(2, '0')}`;
+    $('setWeekly').checked = !!sys.weekly_scan;
+    $('setWeeklyDay').value = String(sys.weekly_scan_day ?? 6);
+    $('setWeeklyHour').value = sys.weekly_scan_hour ?? 12;
+    const gb = lastStatus && lastStatus.upload_gb;
+    $('setUploadCurrent').textContent = gb != null ? t('settings.upload.current', { gb: Number(gb).toFixed(2), hours: sys.upload_window_hours ?? 1 }) : '';
+    $('settingsNote').textContent = data.available === false ? t('settings.daemon_off') : '';
+    document.querySelectorAll('#tab-settings input, #tab-settings select').forEach(el => {
+        if (el.id.startsWith('setPopup') || el.id === 'setLanguage' || el.id === 'setViewMode') return;
+        el.disabled = data.available === false;
+    });
+}
+
+function saveSettings() {
+    const [h, m] = ($('setUpdateTime').value || '07:00').split(':').map(x => parseInt(x, 10));
+    const system = {
+        upload_monitor: $('setUploadMonitor').checked,
+        upload_alert_gb: parseFloat($('setUploadGb').value) || 5,
+        upload_window_hours: parseInt($('setUploadHours').value, 10) || 1,
+        burst_monitor: $('setBurstMonitor').checked,
+        burst_info_threshold: parseInt($('setBurstInfo').value, 10) || 50,
+        burst_danger_threshold: parseInt($('setBurstDanger').value, 10) || 25,
+        burst_window_sec: parseInt($('setBurstWindow').value, 10) || 15,
+        usb_auto_scan: $('setUsbAuto').checked,
+        usb_auto_scan_max_gib: parseInt($('setUsbMax').value, 10) || 128,
+        update_hour: isNaN(h) ? 7 : h, update_minute: isNaN(m) ? 0 : m,
+        weekly_scan: $('setWeekly').checked,
+        weekly_scan_day: parseInt($('setWeeklyDay').value, 10),
+        weekly_scan_hour: parseInt($('setWeeklyHour').value, 10) || 0,
+    };
+    const user = {
+        language: $('setLanguage').value,
+        view_mode: $('setViewMode').value,
+        popups: { info: $('setPopupInfo').checked, upload: $('setPopupUpload').checked, scan: $('setPopupScan').checked,
+                  update: $('setPopupUpdate').checked, security: $('setPopupSecurity').checked },
+    };
+    sendToBackend({ action: 'set_settings', system, user });
 }
 
 
@@ -168,6 +461,8 @@ function switchTab(tabId) {
 function updateDashboardStatus(data) {
     lastStatus = data;
     if (data.lang && data.lang !== lang) setLanguage(data.lang);
+    if (data.view_mode && data.view_mode !== viewMode) setViewMode(data.view_mode, false);
+    if (data.security) securityStatus = data.security;
     updateStatusUI(data.color, data.message);
     toggleInstallTab(!data.fully_installed);
 
@@ -212,6 +507,21 @@ function updateDashboardStatus(data) {
         $('protLastScanSub').textContent = '';
     }
 
+    // Pare-feu / SSH (résumé)
+    const sec = securityStatus;
+    const netIcon = $('protNetIcon');
+    if (sec && sec.ufw) {
+        const fwOk = sec.ufw.active;
+        const sshOn = sec.ssh && sec.ssh.active;
+        $('protNetwork').textContent = `${fwOk ? t('simple.fw.ok') : (sec.ufw.installed ? t('simple.fw.off') : t('firewall.not_installed'))} · ${sshOn ? t('simple.ssh.on', { port: sec.ssh.port }) : t('simple.ssh.off')}`;
+        $('protNetworkSub').textContent = fwOk && sec.ufw.default_incoming ? t('firewall.summary_on', { incoming: t(`firewall.policy.${sec.ufw.default_incoming}`), outgoing: t(`firewall.policy.${sec.ufw.default_outgoing || 'allow'}`), n: (sec.ufw.rules || []).length }) : '';
+        netIcon.className = 'protection-icon ' + (fwOk && !sshOn ? 'accent-green' : fwOk ? 'accent-amber' : 'accent-red');
+    } else {
+        $('protNetwork').textContent = t('simple.unknown');
+        $('protNetworkSub').textContent = '';
+        netIcon.className = 'protection-icon accent-blue';
+    }
+
     $('fullScanHint').textContent = d.available ? t('dash.action.full_scan_hint_on') : t('dash.action.full_scan_hint_off');
     $('targetsHint').textContent = d.available ? t('scan.targets.hint_on') : t('scan.targets.hint_off');
     updateSourceBadge();
@@ -239,6 +549,8 @@ function updateDashboardStatus(data) {
     }
 
     renderHistory(data.history || []);
+    renderSecurity(true);
+    renderSimpleView();
 }
 
 function scanPathLabel(path, usb) {
@@ -446,6 +758,20 @@ function renderAlerts(available = true) {
         return;
     }
     el.innerHTML = alerts.map(a => {
+        if (a.kind === 'upload') {
+            const procs = (a.processes || []).map(p => `${escapeHtml(p.name)} (${p.connections})`).join(', ');
+            return `
+        <div class="alert-item alert-info">
+            <div class="alert-head">
+                <span class="badge badge-blue">${t('system.alert.upload')}</span>
+                <span class="alert-program">${t('popup.upload.title')}</span>
+                <span class="alert-meta">${formatDateTime(a.time)}</span>
+            </div>
+            <div class="alert-body">${t('popup.upload.body', { gb: a.gb, hours: a.window_hours, threshold: a.threshold_gb })}</div>
+            ${procs ? `<div class="alert-exe">${t('popup.upload.processes', { list: procs })}</div>` : ''}
+            <div class="alert-actions"><button class="btn btn-secondary btn-sm" onclick="switchTab('settings')">${t('popup.btn.settings')}</button></div>
+        </div>`;
+        }
         const reasons = (a.reasons || []).map(r => t(`alert.reason.${r}`)).join(', ');
         const infected = [...(a.infected_exe || []), ...(a.infected_files || [])];
         return `
@@ -469,9 +795,9 @@ function renderAlerts(available = true) {
 // ─── Scan : démarrage / annulation ──────────────────────────────────────────
 
 function startFullSystemScan() {
-    if (scan.running) { showToast(t('toast.scan_running'), 'info'); switchTab('scan'); return; }
+    if (scan.running) { showToast(t('toast.scan_running'), 'info'); if (viewMode === 'advanced') switchTab('scan'); return; }
     toggleInitialScanPrompt(false);
-    switchTab('scan');
+    if (viewMode === 'advanced') switchTab('scan');
     prepareScanUI('/');
     const d = (lastStatus && lastStatus.daemon) || {};
     if (!d.available) setHeroNote(t('scan.note.service_off'));
@@ -702,6 +1028,9 @@ function renderScanHero() {
     updateSourceBadge();
     syncTopbar();
     syncDashboardLive();
+    syncSimpleScan();
+    const sb = $('simpleScanBtn');
+    if (sb) sb.disabled = scan.running;
 }
 
 function updateTimeStats() {
@@ -744,7 +1073,7 @@ function setHeroNote(text) {
 
 function startTicker() {
     stopTicker();
-    scan.ticker = setInterval(() => { if (scan.running) { updateTimeStats(); syncTopbar(); } }, 1000);
+    scan.ticker = setInterval(() => { if (scan.running) { updateTimeStats(); syncTopbar(); syncSimpleScan(); } }, 1000);
 }
 
 function stopTicker() {
@@ -1029,6 +1358,11 @@ function handleOperationResult(data) {
         sendToBackend({ action: 'get_db_info' });
         return;
     }
+    if (op === 'settings' || op === 'security') {
+        showToast(message, status === 'success' ? 'success' : 'error');
+        if (op === 'security') sendToBackend({ action: 'get_security', refresh: true });
+        return;
+    }
     if (op === 'install' || isInstalling) {
         isInstalling = false;
         const btn = $('btnInstall');
@@ -1145,6 +1479,8 @@ function simulateBackend(data) {
                 daemon: { available: true, version: '1.5.0', first_scan_pending: false, queue: [], monitor_active: true, usb_active: true },
                 schedule: { next_update: new Date(new Date().setHours(31, 0, 0, 0)).toISOString(), timer_active: true },
                 system_status: { ok: true, upgradable: 3, security: 2, cve_count: 5, reboot_required: false, checked_at: new Date().toISOString() },
+                security: { ufw: { installed: true, active: true, enabled: true, default_incoming: 'deny', default_outgoing: 'allow', rules: [{ number: 1, to: '22/tcp', action: 'ALLOW IN', from: 'Anywhere', v6: false }] }, ssh: { installed: true, active: false, enabled: false, port: 22, allowed_by_firewall: true } },
+                view_mode: (new URLSearchParams(location.search).get('view')) || 'advanced', upload_gb: 0.42,
             });
             break;
         case 'get_db_info':
@@ -1166,6 +1502,23 @@ function simulateBackend(data) {
                 packages: [{ name: 'openssl', installed: '3.0.13-0ubuntu3.13', candidate: '3.0.13-0ubuntu3.15', security: true, archive: 'noble-security' }, { name: 'libgd3', installed: '2.3.3-9ubuntu5', candidate: '2.3.3-13', security: false, archive: 'noble' }],
                 cves: [{ id: 'CVE-2026-63072', package: 'openssl', installed: '3.0.13-0ubuntu3.13', candidate: '3.0.13-0ubuntu3.15', title: 'Heap Buffer Overflow in CMS Key Unwrapping', url: 'https://ubuntu.com/security/CVE-2026-63072' },
                        { id: 'CVE-2026-54874', package: 'openssl', installed: '3.0.13-0ubuntu3.13', candidate: '3.0.13-0ubuntu3.15', title: 'Excessive Memory Use Buffering DTLS Records', url: 'https://ubuntu.com/security/CVE-2026-54874' }] } });
+            break;
+        case 'get_security':
+            reply('securityStatus', { available: true, security: { checked_at: new Date().toISOString(),
+                ufw: { installed: true, active: true, enabled: true, default_incoming: 'deny', default_outgoing: 'allow', error: '', rules: [
+                    { number: 1, to: '22/tcp', action: 'ALLOW IN', from: 'Anywhere', v6: false, comment: 'SSH' },
+                    { number: 2, to: '80,443/tcp', action: 'ALLOW IN', from: '192.168.1.0/24', v6: false, comment: '' },
+                    { number: 3, to: '22/tcp', action: 'ALLOW IN', from: 'Anywhere', v6: true, comment: '' }] },
+                ssh: { installed: true, active: true, enabled: true, port: 22, allowed_by_firewall: true } } });
+            break;
+        case 'get_settings':
+            reply('settingsData', { available: true, system: { upload_monitor: true, upload_alert_gb: 5, upload_window_hours: 1, burst_monitor: true, burst_info_threshold: 50, burst_danger_threshold: 25, burst_window_sec: 15, usb_auto_scan: true, usb_auto_scan_max_gib: 128, update_hour: 7, update_minute: 0, weekly_scan: false, weekly_scan_day: 6, weekly_scan_hour: 12 },
+                                    user: { language: lang, view_mode: viewMode, popups: { info: true, upload: true, scan: true, update: true, security: true } } });
+            break;
+        case 'set_view_mode':
+        case 'set_settings':
+        case 'security_action':
+            reply('operationResult', { status: 'success', message: 'OK', op: data.action === 'security_action' ? 'security' : 'settings' });
             break;
         case 'get_alerts':
             reply('alertsList', { available: true, alerts: [{ time: new Date().toISOString(), severity: 'danger', reasons: ['untrusted_home_burst'], pid: 4242, comm: 'cryptolocker', exe: '/home/user/Downloads/cryptolocker', cmdline: './cryptolocker', user: 'user', trusted: false, count: 120, home_count: 120, window: 15, sample: ['/home/user/Documents/a.docx.locked', '/home/user/Documents/b.xlsx.locked'], top_dir: '/home/user/Documents', infected_exe: [], infected_files: [] },
@@ -1236,7 +1589,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const nav = (params.get('lang') || navigator.language || 'en').slice(0, 2).toLowerCase();
     setLanguage(window.I18N && window.I18N[nav] ? nav : 'en');
     renderScanHero();
-    if (location.hash && $(`tab-${location.hash.slice(1)}`)) switchTab(location.hash.slice(1));
+    if (location.hash && $(`tab-${location.hash.slice(1)}`)) { setViewMode('advanced', false); switchTab(location.hash.slice(1)); }
     sendToBackend({ action: 'check_status' });
     sendToBackend({ action: 'get_db_info' });
     sendToBackend({ action: 'get_quarantine' });

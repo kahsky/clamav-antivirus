@@ -53,11 +53,11 @@ from clamav_common import (  # noqa: E402
     VERSION, SYSTEM_STATE_DIR, SYSTEM_LOG_DIR, DAEMON_SOCKET,
     SYSTEM_STATE_FILE, SYSTEM_QUARANTINE_DIR, SYSTEM_PROGRESS_FILE,
     SYSTEM_FILELIST_CACHE, FIRST_SCAN_FLAG, SYSTEM_LOG_FILE, USB_MOUNT_ROOT,
-    DAEMON_ALLOWED_ROOTS, USB_AUTO_SCAN_MAX_BYTES,
-    BURST_WINDOW_SEC, BURST_INFO_THRESHOLD, BURST_DANGER_THRESHOLD,
+    SYSTEM_SETTINGS_FILE, DEFAULT_SETTINGS, DAEMON_ALLOWED_ROOTS,
     BURST_PID_COOLDOWN_SEC, BURST_GLOBAL_COOLDOWN, BURST_IGNORE_PREFIXES, BURST_IGNORE_PARTS,
     LineSocket, peer_credentials, daemon_connect, daemon_request, find_command,
     is_noise_line, classify_line, db_last_update, db_files_info, t,
+    sanitize_settings, parse_ufw_verbose, parse_ufw_numbered, systemd_is_active,
 )
 
 LOG_MAX_BYTES = 5 * 1024 * 1024
@@ -127,6 +127,39 @@ class State:
             json.dump(self.data, f, indent=2, ensure_ascii=False)
         os.chmod(tmp, 0o644)
         os.replace(tmp, SYSTEM_STATE_FILE)
+
+
+class Settings:
+    """Réglages système (page Paramètres), persistés dans settings.json."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        try:
+            with open(SYSTEM_SETTINGS_FILE) as f:
+                stored = json.load(f)
+        except Exception:
+            stored = {}
+        self.data, _ = sanitize_settings({}, stored)
+
+    def get(self, key):
+        with self.lock:
+            return self.data.get(key, DEFAULT_SETTINGS.get(key))
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.data)
+
+    def update(self, incoming):
+        with self.lock:
+            merged, errors = sanitize_settings(self.data, incoming)
+            changed = {k: v for k, v in merged.items() if self.data.get(k) != v}
+            self.data = merged
+            tmp = SYSTEM_SETTINGS_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.data, f, indent=2)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, SYSTEM_SETTINGS_FILE)
+        return changed, errors
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -304,15 +337,16 @@ class ActivityMonitor(threading.Thread):
         return any(part in path for part in BURST_IGNORE_PARTS)
 
     def record(self, pid, path):
-        if self.ignored(path):
+        if self.ignored(path) or not self.daemon_ref.settings.get("burst_monitor"):
             return
         now = time.time()
+        window = self.daemon_ref.settings.get("burst_window_sec")
         track = self.tracks.get(pid)
-        if track is None or now - track["first"] > BURST_WINDOW_SEC:
+        if track is None or now - track["first"] > window:
             track = {"first": now, "paths": set(), "home": 0, "count": 0}
             self.tracks[pid] = track
             if len(self.tracks) > 2000:      # limiter la mémoire : purger les vieux suivis
-                cutoff = now - BURST_WINDOW_SEC
+                cutoff = now - window
                 self.tracks = {p: tr for p, tr in self.tracks.items() if tr["first"] >= cutoff}
         if path in track["paths"]:
             return
@@ -321,7 +355,9 @@ class ActivityMonitor(threading.Thread):
         track["count"] += 1
         if path.startswith("/home/") or path.startswith("/root/"):
             track["home"] += 1
-        if track["count"] in (BURST_DANGER_THRESHOLD, BURST_INFO_THRESHOLD, 150, 500, 2000):
+        info_th = self.daemon_ref.settings.get("burst_info_threshold")
+        danger_th = self.daemon_ref.settings.get("burst_danger_threshold")
+        if track["count"] in (danger_th, info_th, 150, 500, 2000):
             self.evaluate(pid, track, now)
 
     # ── Évaluation ───────────────────────────────────────────────────────
@@ -404,13 +440,13 @@ class ActivityMonitor(threading.Thread):
         if infected_files:
             severity = "danger"
             reasons.append("files_infected")
-        if not trusted and track["home"] >= BURST_DANGER_THRESHOLD:
+        if not trusted and track["home"] >= self.daemon_ref.settings.get("burst_danger_threshold"):
             severity = "danger"
             reasons.append("untrusted_home_burst")
         if not trusted and exe_path.startswith(("/tmp/", "/var/tmp/", "/dev/shm/")):
             severity = "danger"
             reasons.append("exe_in_temp")
-        if severity == "info" and track["count"] < BURST_INFO_THRESHOLD:
+        if severity == "info" and track["count"] < self.daemon_ref.settings.get("burst_info_threshold"):
             return
         if severity == "info" and now - self.last_report < BURST_GLOBAL_COOLDOWN:
             return
@@ -423,14 +459,162 @@ class ActivityMonitor(threading.Thread):
             dirs[d] = dirs.get(d, 0) + 1
         top_dir = max(dirs, key=dirs.get) if dirs else "/"
         alert = {
+            "kind": "burst",
             "time": now_iso(), "severity": severity, "reasons": reasons,
             "pid": pid, "comm": info["comm"], "exe": info["exe"], "cmdline": info["cmdline"],
             "user": info["user"], "trusted": trusted,
-            "count": track["count"], "home_count": track["home"], "window": BURST_WINDOW_SEC,
+            "count": track["count"], "home_count": track["home"],
+            "window": self.daemon_ref.settings.get("burst_window_sec"),
             "sample": sample[:8], "top_dir": top_dir,
             "infected_exe": infected_exe, "infected_files": infected_files,
         }
         self.daemon_ref.publish_alert(alert)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Surveillance du volume envoyé vers Internet (/proc/net/dev)
+# ═══════════════════════════════════════════════════════════════════════════
+
+IGNORED_IFACE_PREFIXES = ("lo", "docker", "veth", "br-", "virbr", "vboxnet", "lxc", "lxdbr", "cni")
+
+
+def read_tx_bytes():
+    """Octets transmis, cumulés sur les interfaces physiques/VPN (hors loopback et ponts locaux)."""
+    total = 0
+    per_iface = {}
+    try:
+        with open("/proc/net/dev") as f:
+            for line in f.readlines()[2:]:
+                name, _, rest = line.partition(":")
+                name = name.strip()
+                if name.startswith(IGNORED_IFACE_PREFIXES):
+                    continue
+                fields = rest.split()
+                if len(fields) >= 9:
+                    tx = int(fields[8])
+                    per_iface[name] = tx
+                    total += tx
+    except (OSError, ValueError):
+        pass
+    return total, per_iface
+
+
+def outbound_processes(limit=8):
+    """Processus ayant des connexions sortantes établies (via ss)."""
+    procs = {}
+    r = run_quiet(["ss", "-Htnp", "state", "established"], timeout=10)
+    for line in (r.stdout or "").splitlines():
+        for m in re.finditer(r'\("([^"]+)",pid=(\d+)', line):
+            name, pid = m.group(1), int(m.group(2))
+            entry = procs.setdefault((name, pid), {"name": name, "pid": pid, "connections": 0})
+            entry["connections"] += 1
+    return sorted(procs.values(), key=lambda p: -p["connections"])[:limit]
+
+
+class NetworkMonitor(threading.Thread):
+    """Alerte quand le volume envoyé dépasse le seuil configuré dans la fenêtre configurée."""
+
+    INTERVAL = 15
+
+    def __init__(self, daemon):
+        super().__init__(daemon=True, name="network-monitor")
+        self.daemon_ref = daemon
+        self.samples = deque()      # (timestamp, tx_total)
+        self.last_alert = 0
+        self.active = False
+        self.current_gb = 0.0
+
+    def run(self):
+        self.active = True
+        while not self.daemon_ref.shutdown.is_set():
+            try:
+                self.tick()
+            except Exception as e:  # noqa: BLE001
+                log(f"Réseau : {e}")
+            self.daemon_ref.shutdown.wait(self.INTERVAL)
+        self.active = False
+
+    def tick(self):
+        settings = self.daemon_ref.settings
+        now = time.time()
+        total, per_iface = read_tx_bytes()
+        window = float(settings.get("upload_window_hours")) * 3600
+        self.samples.append((now, total))
+        while len(self.samples) > 1 and now - self.samples[0][0] > window:
+            self.samples.popleft()
+        oldest_t, oldest_tx = self.samples[0]
+        sent = max(0, total - oldest_tx)       # un compteur qui repart (reboot) donne 0
+        self.current_gb = sent / 1e9
+        if not settings.get("upload_monitor"):
+            return
+        threshold = float(settings.get("upload_alert_gb")) * 1e9
+        if sent >= threshold and now - self.last_alert > window:
+            self.last_alert = now
+            alert = {
+                "kind": "upload", "severity": "info", "time": now_iso(),
+                "bytes": sent, "gb": round(sent / 1e9, 2), "window_hours": settings.get("upload_window_hours"),
+                "threshold_gb": settings.get("upload_alert_gb"),
+                "since": datetime.fromtimestamp(oldest_t).isoformat(timespec="seconds"),
+                "processes": outbound_processes(), "ifaces": per_iface,
+                "comm": "", "pid": 0, "count": 0, "top_dir": "", "reasons": [], "sample": [],
+            }
+            self.daemon_ref.publish_alert(alert)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Sécurité réseau : pare-feu UFW et service SSH
+# ═══════════════════════════════════════════════════════════════════════════
+
+def ssh_port():
+    try:
+        with open("/etc/ssh/sshd_config") as f:
+            for line in f:
+                line = line.strip()
+                if line.lower().startswith("port ") and not line.startswith("#"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return 22
+
+
+def collect_security_status():
+    """État du pare-feu UFW et du service SSH."""
+    ufw = {"installed": shutil.which("ufw") is not None, "active": False, "enabled": False,
+           "default_incoming": "", "default_outgoing": "", "rules": [], "error": ""}
+    if ufw["installed"]:
+        try:
+            with open("/etc/ufw/ufw.conf") as f:
+                ufw["enabled"] = any(line.strip() == "ENABLED=yes" for line in f)
+        except OSError:
+            pass
+        ufw["active"] = ufw["enabled"] and systemd_is_active("ufw")
+        if os.geteuid() == 0:
+            r = run_quiet(["ufw", "status", "verbose"], timeout=20)
+            if r.returncode == 0:
+                ufw.update(parse_ufw_verbose(r.stdout))
+                r2 = run_quiet(["ufw", "status", "numbered"], timeout=20)
+                ufw["rules"] = parse_ufw_numbered(r2.stdout) if r2.returncode == 0 else []
+            else:
+                ufw["error"] = (r.stderr or r.stdout or "").strip()[:200]
+        else:
+            ufw["error"] = "root_required"
+    ssh_installed = shutil.which("sshd") is not None or os.path.exists("/usr/sbin/sshd")
+    ssh = {"installed": ssh_installed, "active": False, "enabled": False, "port": ssh_port(),
+           "allowed_by_firewall": False}
+    if ssh_installed:
+        ssh["active"] = systemd_is_active("ssh") or systemd_is_active("sshd")
+        r = run_quiet(["systemctl", "is-enabled", "ssh"], timeout=10)
+        ssh["enabled"] = (r.stdout or "").strip() == "enabled"
+    port = str(ssh["port"])
+    ssh["allowed_by_firewall"] = any(
+        rule["action"].startswith("ALLOW") and (rule["to"].startswith(port) or "OpenSSH" in rule["to"])
+        for rule in ufw["rules"])
+    return {"ufw": ufw, "ssh": ssh, "checked_at": now_iso()}
+
+
+VALID_PROTO = ("tcp", "udp", "any")
+VALID_ACTION = ("allow", "deny", "reject", "limit")
+VALID_POLICY = ("allow", "deny", "reject")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -474,9 +658,11 @@ class UsbWatcher(threading.Thread):
                 log(f"USB : {e}")
         self.active = False
 
-    @staticmethod
-    def describe(device):
+    def describe(self, device):
         """Informations utiles sur une partition/un disque USB portant un système de fichiers."""
+        settings = self.daemon_ref.settings
+        max_bytes = int(settings.get("usb_auto_scan_max_gib")) * 1024 ** 3
+        auto = bool(settings.get("usb_auto_scan"))
         bus = device.get("ID_BUS")
         parent = device.find_parent("block", "disk") if device.get("DEVTYPE") == "partition" else None
         if bus != "usb" and (parent is None or parent.get("ID_BUS") != "usb"):
@@ -502,7 +688,7 @@ class UsbWatcher(threading.Thread):
             "model": (device.get("ID_MODEL") or src.get("ID_MODEL") or "").replace("_", " ").strip(),
             "serial": device.get("ID_SERIAL_SHORT") or src.get("ID_SERIAL_SHORT") or "",
             "removable": removable,
-            "kind": "key" if size <= USB_AUTO_SCAN_MAX_BYTES else "hdd",
+            "kind": "key" if (auto and size <= max_bytes) else "hdd",
         }
 
     def handle(self, device):
@@ -719,8 +905,14 @@ class Daemon:
         self.shutdown = threading.Event()
         self.server = None
         self.last_first_scan_attempt = 0
+        self.settings = Settings()
         self.monitor = ActivityMonitor(self)
+        self.network = NetworkMonitor(self)
         self.usb = UsbWatcher(self)
+        self.security = None
+        self.security_lock = threading.Lock()
+        self.last_security = 0
+        self.last_weekly_check = 0
         self.system_status_lock = threading.Lock()
         self.system_status_running = False
         self.last_system_status = 0
@@ -750,9 +942,14 @@ class Daemon:
 
     def publish_alert(self, alert):
         self.state.prepend("alerts", alert, ALERTS_MAX)
-        self.write_log(f"⚠ {alert['severity']}: {alert['comm']} (pid {alert['pid']}, {alert['exe']}) "
-                       f"modified {alert['count']} files in {alert['window']} s — {alert['top_dir']}")
-        log(f"Alerte {alert['severity']} : {alert['comm']} pid {alert['pid']} {alert['count']} fichiers")
+        if alert.get("kind") == "upload":
+            self.write_log(f"⚠ upload: {alert.get('gb')} GB sent in {alert.get('window_hours')} h "
+                           f"(threshold {alert.get('threshold_gb')} GB)")
+            log(f"Alerte envoi Internet : {alert.get('gb')} Go en {alert.get('window_hours')} h")
+        else:
+            self.write_log(f"⚠ {alert['severity']}: {alert['comm']} (pid {alert['pid']}, {alert.get('exe')}) "
+                           f"modified {alert['count']} files in {alert['window']} s — {alert['top_dir']}")
+            log(f"Alerte {alert['severity']} : {alert['comm']} pid {alert['pid']} {alert['count']} fichiers")
         self.broadcast({"event": "alert", "alert": alert})
 
     # ── Journal ──────────────────────────────────────────────────────────
@@ -1139,6 +1336,69 @@ class Daemon:
             with self.system_status_lock:
                 self.system_status_running = False
 
+    # ── Sécurité réseau (UFW / SSH) ──────────────────────────────────────
+    def refresh_security(self, force=False, broadcast=True):
+        with self.security_lock:
+            if not force and self.security and time.time() - self.last_security < 60:
+                return self.security
+            self.security = collect_security_status()
+            self.last_security = time.time()
+            result = self.security
+        if broadcast:
+            self.broadcast({"event": "security_status", "security": result})
+        return result
+
+    def ufw(self, *args):
+        r = run_quiet(["ufw", "--force"] + list(args), timeout=60)
+        text = ((r.stdout or "") + (r.stderr or "")).strip()
+        self.write_log(f"ufw {' '.join(args)} → {r.returncode}")
+        return r.returncode == 0, text[:300]
+
+    # ── Application des réglages ─────────────────────────────────────────
+    def apply_settings(self, changed):
+        applied = []
+        if "update_hour" in changed or "update_minute" in changed:
+            hour, minute = int(self.settings.get("update_hour")), int(self.settings.get("update_minute"))
+            if not TEST_MODE:
+                dropin_dir = "/etc/systemd/system/clamav-antivirus-update.timer.d"
+                try:
+                    os.makedirs(dropin_dir, exist_ok=True)
+                    with open(os.path.join(dropin_dir, "override.conf"), "w") as f:
+                        f.write("[Timer]\nOnCalendar=\n"
+                                f"OnCalendar=*-*-* {hour:02d}:{minute:02d}:00\nOnBootSec=5min\n")
+                    run_quiet(["systemctl", "daemon-reload"], timeout=60)
+                    run_quiet(["systemctl", "restart", "clamav-antivirus-update.timer"], timeout=60)
+                    applied.append("update_time")
+                except OSError as e:
+                    log(f"Réglage heure de MàJ : {e}")
+            else:
+                applied.append("update_time")
+        if "upload_window_hours" in changed:
+            self.network.samples.clear()
+            applied.append("upload_window")
+        return applied
+
+    def check_weekly_scan(self):
+        if not self.settings.get("weekly_scan"):
+            return
+        now = datetime.now()
+        if now.weekday() != int(self.settings.get("weekly_scan_day")) or now.hour != int(self.settings.get("weekly_scan_hour")):
+            return
+        last = self.state.get("last_weekly_scan")
+        if last:
+            try:
+                if (now - datetime.fromisoformat(last)).days < 6:
+                    return
+            except ValueError:
+                pass
+        with self.queue_lock:
+            busy = self.current is not None or bool(self.queue)
+        if busy:
+            return
+        self.state.update(last_weekly_scan=now.isoformat(timespec="seconds"))
+        log("Scan complet hebdomadaire planifié")
+        self.enqueue(Job("scan", path="/", auto=True, requested_by="system"))
+
     # ── Première installation / reprise automatique ──────────────────────
     def check_first_scan(self):
         """Programme le scan complet initial (et une MàJ avant si les bases manquent)."""
@@ -1171,9 +1431,12 @@ class Daemon:
         while not self.shutdown.is_set():
             try:
                 self.check_first_scan()
+                self.check_weekly_scan()
                 if not first_status_done:
                     first_status_done = True
                     threading.Thread(target=self.refresh_system_status, daemon=True).start()
+                if time.time() - self.last_security > 300:
+                    self.refresh_security(force=True)
             except Exception as e:  # noqa: BLE001
                 log(f"Maintenance : {e}")
             self.shutdown.wait(60)
@@ -1199,8 +1462,12 @@ class Daemon:
             "db_last_update": db.isoformat(timespec="seconds") if db else None,
             "db_files": db_files_info(),
             "monitor_active": self.monitor.active,
+            "network_active": self.network.active,
+            "upload_gb": round(self.network.current_gb, 2),
             "usb_active": self.usb.active,
             "usb_pending": self.usb.pending_list(),
+            "settings": self.settings.snapshot(),
+            "security": self.security or self.refresh_security(broadcast=False),
             "alerts": (state.get("alerts") or [])[:10],
             "system_status": {k: sys_status.get(k) for k in
                               ("checked_at", "ok", "upgradable", "security", "cve_count",
@@ -1320,6 +1587,30 @@ class Daemon:
                 return {"ok": True, "refreshing": started, "status": self.state.get("system_status")}
             return {"ok": True, "status": self.state.get("system_status")}
 
+        if cmd == "get_settings":
+            return {"ok": True, "settings": self.settings.snapshot()}
+
+        if cmd == "set_settings":
+            changed, errors = self.settings.update(req.get("settings") or {})
+            applied = self.apply_settings(changed)
+            if changed:
+                self.write_log(f"settings: {', '.join(f'{k}={v}' for k, v in changed.items())}")
+                self.broadcast({"event": "settings", "settings": self.settings.snapshot()})
+            return {"ok": True, "settings": self.settings.snapshot(), "changed": changed,
+                    "applied": applied, "errors": errors}
+
+        if cmd == "security_status":
+            return {"ok": True, "security": self.refresh_security(force=bool(req.get("refresh")), broadcast=False)}
+
+        if cmd in ("firewall_set", "firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "ssh_set"):
+            if os.geteuid() != 0:
+                return {"ok": False, "error": "root_required"}
+            if uid not in (0,) and uid < 1000:
+                return {"ok": False, "error": "forbidden"}
+            ok, text = self.security_command(cmd, req)
+            self.refresh_security(force=True)
+            return {"ok": ok, "error": "" if ok else "command_failed", "detail": text}
+
         if cmd == "alerts":
             return {"ok": True, "alerts": self.state.get("alerts", [])}
 
@@ -1390,6 +1681,50 @@ class Daemon:
 
         return {"ok": False, "error": "unknown_command", "cmd": cmd}
 
+    def security_command(self, cmd, req):
+        """Actions pare-feu / SSH demandées depuis la page Pare-feu."""
+        if cmd == "firewall_set":
+            if req.get("enabled"):
+                if req.get("allow_ssh"):
+                    self.ufw("allow", f"{ssh_port()}/tcp", "comment", "SSH")
+                return self.ufw("enable")
+            return self.ufw("disable")
+        if cmd == "firewall_defaults":
+            results = []
+            for direction in ("incoming", "outgoing"):
+                policy = str(req.get(direction, "")).lower()
+                if policy in VALID_POLICY:
+                    results.append(self.ufw("default", policy, direction))
+            if not results:
+                return False, "invalid_policy"
+            return all(ok for ok, _ in results), " | ".join(text for _, text in results)
+        if cmd == "firewall_rule_add":
+            action = str(req.get("action", "allow")).lower()
+            proto = str(req.get("proto", "tcp")).lower()
+            port = str(req.get("port", "")).strip()
+            if action not in VALID_ACTION or proto not in VALID_PROTO or not re.fullmatch(r"\d{1,5}(:\d{1,5})?(,\d{1,5})*", port):
+                return False, "invalid_rule"
+            target = port if proto == "any" else f"{port}/{proto}"
+            args = [action, target]
+            comment = re.sub(r"[^\w .-]", "", str(req.get("comment", "")))[:40]
+            if comment:
+                args += ["comment", comment]
+            return self.ufw(*args)
+        if cmd == "firewall_rule_delete":
+            try:
+                number = int(req.get("number"))
+            except (TypeError, ValueError):
+                return False, "invalid_rule"
+            return self.ufw("delete", str(number))
+        if cmd == "ssh_set":
+            if not (shutil.which("sshd") or os.path.exists("/usr/sbin/sshd")):
+                return False, "ssh_not_installed"
+            action = "enable" if req.get("enabled") else "disable"
+            r = run_quiet(["systemctl", action, "--now", "ssh"], timeout=60)
+            self.write_log(f"ssh: {action} → {r.returncode}")
+            return r.returncode == 0, ((r.stdout or "") + (r.stderr or "")).strip()[:300]
+        return False, "unknown"
+
     def handle_connection(self, sock):
         try:
             _pid, uid, _gid = peer_credentials(sock)
@@ -1444,7 +1779,9 @@ class Daemon:
         threading.Thread(target=self.worker, daemon=True, name="worker").start()
         threading.Thread(target=self.maintenance_loop, daemon=True, name="maintenance").start()
         self.monitor.start()
+        self.network.start()
         self.usb.start()
+        threading.Thread(target=self.refresh_security, kwargs={"force": True, "broadcast": False}, daemon=True).start()
 
         log(f"ClamAV Antivirus daemon v{VERSION} à l'écoute sur {DAEMON_SOCKET}"
             + (" (mode test)" if TEST_MODE else ""))

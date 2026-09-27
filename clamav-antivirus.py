@@ -36,10 +36,17 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from clamav_common import (  # noqa: E402
     VERSION, DAEMON_ALLOWED_ROOTS, UPDATE_TIMER_UNIT, DAEMON_UNIT, LANGUAGES,
-    daemon_connect, daemon_request, find_command, is_noise_line,
+    DEFAULT_SETTINGS, daemon_connect, daemon_request, find_command, is_noise_line,
     classify_line, db_last_update, db_files_info, systemd_next_elapse,
     systemd_is_active, load_i18n, pick_language, t as translate,
 )
+
+# Réglages propres à l'utilisateur (le reste est géré par le daemon)
+USER_DEFAULTS = {
+    "view_mode": "simple",
+    "popups": {"info": True, "upload": True, "scan": True, "update": True, "security": True},
+}
+SECURITY_COMMANDS = ("firewall_set", "firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "ssh_set")
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -92,6 +99,14 @@ def save_state(data):
     state.update(data)
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
+
+
+def user_settings():
+    state = load_state()
+    popups = dict(USER_DEFAULTS["popups"])
+    popups.update({k: bool(v) for k, v in (state.get("popups") or {}).items() if k in popups})
+    mode = state.get("view_mode") if state.get("view_mode") in ("simple", "advanced") else USER_DEFAULTS["view_mode"]
+    return {"view_mode": mode, "popups": popups, "language": state.get("language")}
 
 
 def add_history(entry):
@@ -1027,9 +1042,26 @@ class ClamAVAntivirusApp:
     def popup(self, kind, title, body, **kwargs):
         return self.popups.show(Popup(self.popups, kind, title, body, **kwargs))
 
+    def popups_enabled(self, kind):
+        return user_settings()["popups"].get(kind, True)
+
     def show_alert(self, alert):
         T = self.T
+        if alert.get("kind") == "upload":
+            if not self.popups_enabled("upload"):
+                return
+            procs = ", ".join(f"{p['name']} ({p['connections']})" for p in (alert.get("processes") or [])[:4])
+            self.popup("info", T("popup.upload.title"),
+                       T("popup.upload.body", gb=alert.get("gb", 0), hours=alert.get("window_hours", 1),
+                         threshold=alert.get("threshold_gb", 5)),
+                       timeout=20, meta=(T("popup.upload.processes", list=procs) if procs else None),
+                       buttons=[(T("popup.btn.details"), None, lambda: self.show_tab("system")),
+                                (T("popup.btn.settings"), None, lambda: self.show_tab("settings"))],
+                       on_activate=lambda: self.show_tab("system"))
+            return
         severity = alert.get("severity", "info")
+        if severity != "danger" and not self.popups_enabled("info"):
+            return
         comm = alert.get("comm") or "?"
         count = alert.get("count", 0)
         top_dir = alert.get("top_dir") or "/"
@@ -1117,6 +1149,15 @@ class ClamAVAntivirusApp:
             self.maybe_notify_security(status)
         elif et == "system_status_refreshing":
             self.send_to_js("systemStatus", {"status": None, "refreshing": True, "available": True})
+        elif et == "security_status":
+            if isinstance(self.last_daemon_status, dict):
+                self.last_daemon_status["security"] = ev.get("security")
+            self.send_to_js("securityStatus", {"security": ev.get("security"), "available": True})
+        elif et == "settings":
+            if isinstance(self.last_daemon_status, dict):
+                self.last_daemon_status["settings"] = ev.get("settings")
+            self.send_to_js("settingsData", {"system": ev.get("settings"), "user": user_settings(),
+                                             "available": True})
         return False
 
     def _daemon_job_started(self, job):
@@ -1153,7 +1194,7 @@ class ClamAVAntivirusApp:
             ok = status == "success"
             self.send_to_js("operationResult", {"status": "success" if ok else "error",
                                                 "message": message, "op": "update"})
-            if ok:
+            if ok and self.popups_enabled("update"):
                 self.popup("success", self.T("popup.update.title"), message, timeout=12,
                            on_activate=lambda: self.show_tab("update"))
         st = DaemonClient.request("status")
@@ -1165,6 +1206,8 @@ class ClamAVAntivirusApp:
     def notify_scan_result(self, status, message, summary):
         T = self.T
         path = (summary or {}).get("path") or ""
+        if status == "clean" and not self.popups_enabled("scan"):
+            return
         if status == "clean":
             self.popup("success", T("popup.scan.clean_title"), message, timeout=12,
                        meta=path, on_activate=lambda: self.show_tab("scan"))
@@ -1177,7 +1220,7 @@ class ClamAVAntivirusApp:
         count = status.get("security") or 0
         previous = self.last_security_count
         self.last_security_count = count
-        if count and count != previous:
+        if count and count != previous and self.popups_enabled("security"):
             self.popup("warning", self.T("popup.security.title"),
                        self.T("popup.security.body", count=count, cves=status.get("cve_count") or 0),
                        timeout=25,
@@ -1499,6 +1542,71 @@ class ClamAVAntivirusApp:
         DaemonClient.request("clear_alerts")
         self.act_get_alerts({})
 
+    def act_set_view_mode(self, data):
+        mode = data.get("mode")
+        if mode in ("simple", "advanced"):
+            save_state({"view_mode": mode})
+            self.send_status()
+
+    def act_get_settings(self, _data):
+        resp = DaemonClient.request("get_settings")
+        self.send_to_js("settingsData", {"system": resp.get("settings") if resp.get("ok") else dict(DEFAULT_SETTINGS),
+                                         "user": user_settings(), "available": bool(resp.get("ok"))})
+
+    def act_set_settings(self, data):
+        user = data.get("user") or {}
+        if "popups" in user and isinstance(user["popups"], dict):
+            popups = user_settings()["popups"]
+            popups.update({k: bool(v) for k, v in user["popups"].items() if k in popups})
+            save_state({"popups": popups})
+        if user.get("view_mode") in ("simple", "advanced"):
+            save_state({"view_mode": user["view_mode"]})
+        if user.get("language") in LANGUAGES and user["language"] != self.lang:
+            self.act_set_language({"lang": user["language"]})
+        system = data.get("system") or {}
+        errors = []
+        available = True
+        if system:
+            resp = DaemonClient.request("set_settings", settings=system)
+            if not resp.get("ok"):
+                available = False
+                errors.append(self.daemon_error(resp))
+            else:
+                errors += resp.get("errors", [])
+        self.act_get_settings({})
+        if errors:
+            self.send_to_js("operationResult", {"status": "error", "op": "settings",
+                                                "message": self.T("msg.settings_partial", errors=", ".join(errors))})
+        elif available:
+            self.send_to_js("operationResult", {"status": "success", "op": "settings", "message": self.T("msg.settings_saved")})
+        self.send_status()
+
+    def act_get_security(self, data):
+        resp = DaemonClient.request("security_status", refresh=bool(data.get("refresh")))
+        if resp.get("ok") and isinstance(self.last_daemon_status, dict):
+            self.last_daemon_status["security"] = resp.get("security")
+        self.send_to_js("securityStatus", {"security": resp.get("security") if resp.get("ok") else None,
+                                           "available": bool(resp.get("ok"))})
+
+    def act_security_action(self, data):
+        cmd = data.get("cmd")
+        if cmd not in SECURITY_COMMANDS:
+            return
+        params = {k: v for k, v in data.items() if k not in ("action", "cmd")}
+        resp = DaemonClient.request(cmd, **params)
+        if resp.get("ok"):
+            key = {"firewall_set": "msg.firewall_enabled" if params.get("enabled") else "msg.firewall_disabled",
+                   "ssh_set": "msg.ssh_enabled" if params.get("enabled") else "msg.ssh_disabled"}.get(cmd, "msg.security_applied")
+            self.send_to_js("operationResult", {"status": "success", "op": "security", "message": self.T(key)})
+        else:
+            err = resp.get("error", "")
+            key = {"root_required": "msg.daemon_root_required", "forbidden": "msg.forbidden",
+                   "command_failed": "msg.security_failed"}.get(err)
+            message = self.T(key, detail=resp.get("detail", "")) if key else self.daemon_error(resp)
+            self.send_to_js("operationResult", {"status": "error", "op": "security", "message": message})
+        self.act_get_security({"refresh": True})
+        self.send_status()
+
     def act_open_update_manager(self, _data):
         for cmd in (["mintupdate"], ["update-manager"], ["gnome-software", "--mode=updates"]):
             if shutil.which(cmd[0]):
@@ -1526,7 +1634,7 @@ class ClamAVAntivirusApp:
         if self.updating:
             self.updating = False
             self.send_to_js("operationResult", {"status": status, "message": message, "op": "update"})
-            if status == "success":
+            if status == "success" and self.popups_enabled("update"):
                 self.popup("success", self.T("popup.update.title"), message, timeout=12)
         else:
             self.send_to_js("operationResult", {"status": status, "message": message, "op": "install"})
@@ -1591,6 +1699,11 @@ class ClamAVAntivirusApp:
             },
             "alerts": (ds or {}).get("alerts", []),
             "system_status": (ds or {}).get("system_status"),
+            "security": (ds or {}).get("security"),
+            "settings": (ds or {}).get("settings"),
+            "user_settings": user_settings(),
+            "view_mode": user_settings()["view_mode"],
+            "upload_gb": (ds or {}).get("upload_gb", 0),
             "schedule": {
                 "next_update": next_update.isoformat(timespec="seconds") if next_update else None,
                 "timer_active": systemd_is_active(UPDATE_TIMER_UNIT),

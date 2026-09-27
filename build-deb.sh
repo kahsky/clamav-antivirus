@@ -8,7 +8,7 @@
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.5.0"
+VERSION="1.6.0"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -77,6 +77,8 @@ Description: ClamAV Antivirus - Interface graphique ClamAV
  - Analyse des clés USB avant leur mise à disposition (question pour les disques)
  - État du système : mises à jour de sécurité en attente et CVE associées
  - Popups glissants en bas à droite, interface en français, anglais, allemand, italien
+ - Vue simple rassurante et vue avancée, page Paramètres (seuils, USB, planification)
+ - Pare-feu UFW et SSH pilotés depuis l'application, surveillance du volume envoyé
  - Scan rapide de répertoires avec progression détaillée
  - Quarantaine automatique des fichiers infectés
  - Icône bouclier dans la barre des tâches

@@ -31,6 +31,19 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   signatures à jour, scan terminé sans menace, menaces, activité inhabituelle, USB.
 - **Quatre langues** — français, anglais, allemand, italien (détection de la locale,
   sélecteur dans la barre latérale).
+- **Vue simple / vue avancée** — la vue simple (par défaut) tient dans la fenêtre sans
+  défilement et rassure un non-initié : « Votre système est protégé », six voyants
+  (antivirus, surveillance, pare-feu, accès à distance, mises à jour, menaces) avec un
+  bouton de correction quand quelque chose cloche. La vue avancée expose tous les onglets.
+- **Paramètres** — seuil d'envoi Internet déclenchant un popup (5 Go par défaut, fenêtre
+  d'observation réglable), seuils de détection comportementale, USB, heure de la recherche
+  de mises à jour, scan complet hebdomadaire, popups à afficher, langue et vue. Les réglages
+  système sont appliqués par le service, sans mot de passe.
+- **Pare-feu et SSH** — état d'UFW (politiques, règles) et du service SSH, activation ou
+  désactivation, règles simples (port, protocole, action) et politiques par défaut, le tout
+  via le service. L'accès à distance est signalé s'il est actif.
+- **Envoi Internet** — le service mesure le volume envoyé (`/proc/net/dev`) et affiche un
+  popup au-delà du seuil, avec la liste des programmes connectés (`ss`).
 - **Scan moderne** — anneau de progression, étapes (inventaire → analyse), fichiers/s,
   temps restant estimé, menaces en direct, annulation et reprise, résumé de fin,
   historique des analyses.
@@ -45,7 +58,7 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.5.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.5.0_all.deb)
+[Télécharger clamav-antivirus_1.6.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.6.0_all.deb)
 
 ---
 
@@ -76,12 +89,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.5.0_all.deb`
+Résultat : `clamav-antivirus_1.6.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.5.0_all.deb
+sudo dpkg -i clamav-antivirus_1.6.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
@@ -120,9 +133,16 @@ localement avec les droits de l'utilisateur.
 | `/lib/udev/rules.d/80-clamav-antivirus-usb.rules` | Désactive le montage automatique udisks des périphériques USB **uniquement** quand le socket du service existe |
 | `ui/i18n.js`                             | Traductions FR/EN/DE/IT (JSON) partagées par la page et Python    |
 
-Seuils (dans `clamav_common.py`) : `USB_AUTO_SCAN_MAX_BYTES` (128 Gio), `BURST_WINDOW_SEC`
-(15 s), `BURST_INFO_THRESHOLD` (50 fichiers), `BURST_DANGER_THRESHOLD` (25 fichiers du home
-par un programme non fiable).
+Réglages système (page Paramètres, fichier `/var/lib/clamav-antivirus/settings.json`,
+valeurs par défaut dans `DEFAULT_SETTINGS` de `clamav_common.py`) : seuil et fenêtre d'envoi
+Internet (5 Go / 1 h), seuils de rafale (50 fichiers info, 25 fichiers du home pour un
+programme non fiable, fenêtre 15 s), scan USB automatique et taille limite (128 Gio), heure
+de la recherche de MàJ (07:00, appliquée via un drop-in systemd), scan hebdomadaire.
+
+Les commandes pare-feu/SSH du socket (`firewall_set`, `firewall_defaults`,
+`firewall_rule_add`, `firewall_rule_delete`, `ssh_set`) sont acceptées de tout utilisateur
+local réel (uid ≥ 1000) : c'est voulu (« sans root »), mais à connaître sur une machine
+multi-utilisateurs.
 
 Fichiers du service : état et quarantaine dans `/var/lib/clamav-antivirus/`, journal dans
 `/var/log/clamav-antivirus/scan.log`.
