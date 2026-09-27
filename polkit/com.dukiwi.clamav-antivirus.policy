@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Dukiwi SA</vendor>
+  <vendor_url>https://dukiwi.com</vendor_url>
+  <action id="com.dukiwi.clamav-antivirus.unlock">
+    <description>Déverrouiller les réglages de sécurité de ClamAV Antivirus</description>
+    <description xml:lang="en">Unlock ClamAV Antivirus security settings</description>
+    <description xml:lang="de">Sicherheitseinstellungen von ClamAV Antivirus entsperren</description>
+    <description xml:lang="it">Sbloccare le impostazioni di sicurezza di ClamAV Antivirus</description>
+    <message>L'authentification d'un administrateur est requise pour modifier le pare-feu, SSH ou les réglages protégés.</message>
+    <message xml:lang="en">Administrator authentication is required to change the firewall, SSH or protected settings.</message>
+    <message xml:lang="de">Zum Ändern von Firewall, SSH oder geschützten Einstellungen ist eine Administrator-Authentifizierung erforderlich.</message>
+    <message xml:lang="it">È richiesta l'autenticazione di un amministratore per modificare il firewall, SSH o le impostazioni protette.</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/opt/clamav-antivirus/clamav-antivirus-unlock</annotate>
+  </action>
+</policyconfig>

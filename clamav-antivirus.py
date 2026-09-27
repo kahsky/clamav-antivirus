@@ -47,6 +47,8 @@ USER_DEFAULTS = {
     "popups": {"info": True, "upload": True, "scan": True, "update": True, "security": True},
 }
 SECURITY_COMMANDS = ("firewall_set", "firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "ssh_set")
+UNLOCK_HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clamav-antivirus-unlock")
+OVERALL_ICON = {"green": "shield-green", "yellow": "shield-yellow", "blue": "shield-blue", "red": "shield-red"}
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -932,8 +934,12 @@ class TrayIcon:
 
     def update_status(self):
         color, message = get_protection_status(self.app.lang, self.app.last_daemon_status)
-        self.indicator.set_icon_full(os.path.join(ICONS_DIR, f"shield-{color}.svg"), message)
-        self.item_status.set_label(self.app.T("tray.status", message=message))
+        overall = self.app.overall_state()
+        icon_color = overall.get("color") if overall else color
+        reasons = [self.app.T(f"overall.reason.{r}") for r in (overall or {}).get("reasons", [])[:4]]
+        tooltip = message if not reasons else f"{message} — " + ", ".join(reasons)
+        self.indicator.set_icon_full(os.path.join(ICONS_DIR, f"{OVERALL_ICON.get(icon_color, 'shield-green')}.svg"), tooltip)
+        self.item_status.set_label(self.app.T("tray.status", message=tooltip if len(tooltip) < 90 else message))
         self.app.run_js(f'if(typeof updateTrayStatus==="function")updateTrayStatus({json.dumps(color)},{json.dumps(message)});')
         return True
 
@@ -1013,6 +1019,29 @@ class ClamAVAntivirusApp:
     def T(self, key, **params):
         return translate(self.lang, key, **params)
 
+    def overall_state(self):
+        ds = self.last_daemon_status if isinstance(self.last_daemon_status, dict) else None
+        return (ds or {}).get("overall")
+
+    # ── Session administrateur (pkexec → helper → daemon unlock) ────────
+    def run_admin(self, cmd, params, on_result):
+        """Envoie une commande ; si le daemon exige un administrateur, déverrouille via pkexec puis réessaie."""
+        def worker():
+            resp = daemon_request(cmd, timeout=600, **params)
+            if resp.get("error") == "admin_required":
+                GLib.idle_add(self.send_to_js, "operationResult", {"status": "info", "message": self.T("msg.admin_auth")})
+                try:
+                    r = subprocess.run(["pkexec", UNLOCK_HELPER], capture_output=True, text=True, timeout=300)
+                    unlocked = r.returncode == 0
+                except Exception:  # noqa: BLE001
+                    unlocked = False
+                if not unlocked:
+                    resp = {"ok": False, "error": "auth_cancelled"}
+                else:
+                    resp = daemon_request(cmd, timeout=600, **params)
+            GLib.idle_add(on_result, resp)
+        threading.Thread(target=worker, daemon=True).start()
+
     def msg(self, key, params=None):
         return self.T(key, **(params or {}))
 
@@ -1045,9 +1074,59 @@ class ClamAVAntivirusApp:
     def popups_enabled(self, kind):
         return user_settings()["popups"].get(kind, True)
 
+    def process_action(self, pid, action):
+        resp = DaemonClient.request("process_action", pid=pid, action=action)
+        if resp.get("ok"):
+            key = {"kill": "msg.process_killed", "continue": "msg.process_resumed", "quarantine": "msg.process_quarantined"}[action]
+            self.send_to_js("operationResult", {"status": "success", "message": self.T(key)})
+        else:
+            self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+        self.send_status()
+
     def show_alert(self, alert):
         T = self.T
-        if alert.get("kind") == "upload":
+        kind = alert.get("kind")
+        if kind == "connection":
+            if alert.get("severity") != "danger" and not self.popups_enabled("info"):
+                return
+            where = " · ".join(x for x in (alert.get("country"), alert.get("org")) if x)
+            body = T("popup.connection.body", program=alert.get("comm") or "?", ip=alert.get("ip"), port=alert.get("port"),
+                     where=where or "?")
+            if alert.get("flagged"):
+                buttons = [(T("popup.btn.kill"), "danger", lambda p=alert.get("pid"): self.process_action(p, "kill")),
+                           (T("popup.btn.resume"), None, lambda p=alert.get("pid"): self.process_action(p, "continue"))] \
+                    if alert.get("suspended") else [(T("popup.btn.details"), None, lambda: self.show_tab("system"))]
+                self.popup("danger", T("popup.connection.danger_title"), body + "\n" + T("alert.reason.ip_blocklisted"),
+                           meta=alert.get("exe") or None, buttons=buttons, on_activate=lambda: self.show_tab("system"))
+            else:
+                self.popup("warning", T("popup.connection.title"), body, timeout=16, meta=alert.get("exe") or None,
+                           buttons=[(T("popup.btn.details"), None, lambda: self.show_tab("system"))],
+                           on_activate=lambda: self.show_tab("system"))
+            return
+        if kind == "persistence":
+            if not self.popups_enabled("info"):
+                return
+            self.popup("warning" if alert.get("severity") == "warn" else "info", T("popup.persistence.title"),
+                       T("popup.persistence.body", name=alert.get("title", ""), detail=alert.get("detail", "")),
+                       timeout=16, on_activate=lambda: self.show_tab("system"),
+                       buttons=[(T("popup.btn.details"), None, lambda: self.show_tab("system"))])
+            return
+        if kind == "integrity":
+            self.popup("warning", T("popup.integrity.title"), T("popup.integrity.body", n=alert.get("title", "0"),
+                       tools=alert.get("detail", "")), on_activate=lambda: self.show_tab("security"),
+                       buttons=[(T("popup.btn.details"), None, lambda: self.show_tab("security"))])
+            return
+        if kind == "update":
+            if not self.popups_enabled("update"):
+                return
+            upd = alert.get("update") or {}
+            self.popup("info", T("popup.appupdate.title", version=upd.get("version", "")),
+                       T("popup.appupdate.body", version=upd.get("version", ""), current=VERSION),
+                       timeout=30, on_activate=lambda: self.show_tab("security"),
+                       buttons=[(T("popup.btn.install"), "primary", lambda: self.act_install_update({})),
+                                (T("popup.btn.details"), None, lambda: self.show_tab("security"))])
+            return
+        if kind == "upload":
             if not self.popups_enabled("upload"):
                 return
             procs = ", ".join(f"{p['name']} ({p['connections']})" for p in (alert.get("processes") or [])[:4])
@@ -1076,9 +1155,16 @@ class ClamAVAntivirusApp:
             body = T("popup.alert.danger_body", program=comm, count=count, dir=top_dir)
             if reason_text:
                 body += f"\n{reason_text}"
-            self.popup("danger", T("popup.alert.danger_title"), body,
-                       buttons=[(T("popup.btn.scan_folder"), "danger", lambda d=top_dir: self.request_scan(d)),
-                                (T("popup.btn.details"), None, lambda: self.show_tab("system"))],
+            pid = alert.get("pid")
+            if alert.get("suspended"):
+                body += "\n" + T("popup.alert.suspended")
+                buttons = [(T("popup.btn.kill"), "danger", lambda p=pid: self.process_action(p, "kill")),
+                           (T("popup.btn.quarantine_exe"), "danger", lambda p=pid: self.process_action(p, "quarantine")),
+                           (T("popup.btn.resume"), None, lambda p=pid: self.process_action(p, "continue"))]
+            else:
+                buttons = [(T("popup.btn.scan_folder"), "danger", lambda d=top_dir: self.request_scan(d)),
+                           (T("popup.btn.details"), None, lambda: self.show_tab("system"))]
+            self.popup("danger", T("popup.alert.danger_title"), body, buttons=buttons,
                        meta=" · ".join(meta_parts) or None,
                        on_activate=lambda: self.show_tab("system"))
         else:
@@ -1158,6 +1244,22 @@ class ClamAVAntivirusApp:
                 self.last_daemon_status["settings"] = ev.get("settings")
             self.send_to_js("settingsData", {"system": ev.get("settings"), "user": user_settings(),
                                              "available": True})
+        elif et == "overall":
+            if isinstance(self.last_daemon_status, dict):
+                self.last_daemon_status["overall"] = ev.get("overall")
+            self.tray.update_status()
+            self.send_to_js("overall", ev.get("overall") or {})
+        elif et in ("vulns", "checklist", "integrity", "persistence", "app_update", "integrity_running", "suspended"):
+            self.send_to_js("securityData", {"type": et, "data": ev.get(et) or ev.get("update") or {},
+                                             "available": True})
+            if et == "app_update" or et == "suspended":
+                self.send_status()
+        elif et in ("unlocked", "locked"):
+            if et == "unlocked" and ev.get("uid") != os.getuid():
+                return False
+            if isinstance(self.last_daemon_status, dict):
+                self.last_daemon_status["unlocked"] = et == "unlocked"
+            self.send_status()
         return False
 
     def _daemon_job_started(self, job):
@@ -1328,7 +1430,10 @@ class ClamAVAntivirusApp:
             return self.T("msg.busy_update") if busy.get("kind") == "update" else \
                 self.T("msg.busy_scan", path=busy.get("path"))
         key = {"forbidden": "msg.forbidden", "not_found": "msg.not_found", "idle": "msg.idle",
-               "restore_dest": "msg.restore_dest"}.get(err)
+               "restore_dest": "msg.restore_dest", "admin_required": "msg.admin_required",
+               "auth_cancelled": "msg.auth_cancelled", "root_required": "msg.daemon_root_required",
+               "command_failed": "msg.security_failed", "not_ready": "msg.update_not_ready",
+               "sha256_mismatch": "msg.update_bad_hash", "not_suspended": "msg.process_gone"}.get(err)
         if key:
             return self.T(key, path=resp.get("path", ""))
         return err or self.T("msg.daemon_unavailable")
@@ -1564,22 +1669,27 @@ class ClamAVAntivirusApp:
         if user.get("language") in LANGUAGES and user["language"] != self.lang:
             self.act_set_language({"lang": user["language"]})
         system = data.get("system") or {}
-        errors = []
-        available = True
-        if system:
-            resp = DaemonClient.request("set_settings", settings=system)
+        if not system:
+            self.act_get_settings({})
+            self.send_to_js("operationResult", {"status": "success", "op": "settings", "message": self.T("msg.settings_saved")})
+            self.send_status()
+            return
+
+        def done(resp):
+            errors = []
             if not resp.get("ok"):
-                available = False
                 errors.append(self.daemon_error(resp))
             else:
                 errors += resp.get("errors", [])
-        self.act_get_settings({})
-        if errors:
-            self.send_to_js("operationResult", {"status": "error", "op": "settings",
-                                                "message": self.T("msg.settings_partial", errors=", ".join(errors))})
-        elif available:
-            self.send_to_js("operationResult", {"status": "success", "op": "settings", "message": self.T("msg.settings_saved")})
-        self.send_status()
+            self.act_get_settings({})
+            if errors:
+                self.send_to_js("operationResult", {"status": "error", "op": "settings",
+                                                    "message": self.T("msg.settings_partial", errors=", ".join(errors))})
+            else:
+                self.send_to_js("operationResult", {"status": "success", "op": "settings", "message": self.T("msg.settings_saved")})
+            self.send_status()
+            return False
+        self.run_admin("set_settings", {"settings": system}, done)
 
     def act_get_security(self, data):
         resp = DaemonClient.request("security_status", refresh=bool(data.get("refresh")))
@@ -1593,19 +1703,86 @@ class ClamAVAntivirusApp:
         if cmd not in SECURITY_COMMANDS:
             return
         params = {k: v for k, v in data.items() if k not in ("action", "cmd")}
-        resp = DaemonClient.request(cmd, **params)
+        self.run_admin(cmd, params, lambda resp: self._security_result(cmd, params, resp))
+
+    def _security_result(self, cmd, params, resp):
         if resp.get("ok"):
             key = {"firewall_set": "msg.firewall_enabled" if params.get("enabled") else "msg.firewall_disabled",
                    "ssh_set": "msg.ssh_enabled" if params.get("enabled") else "msg.ssh_disabled"}.get(cmd, "msg.security_applied")
             self.send_to_js("operationResult", {"status": "success", "op": "security", "message": self.T(key)})
         else:
-            err = resp.get("error", "")
-            key = {"root_required": "msg.daemon_root_required", "forbidden": "msg.forbidden",
-                   "command_failed": "msg.security_failed"}.get(err)
-            message = self.T(key, detail=resp.get("detail", "")) if key else self.daemon_error(resp)
-            self.send_to_js("operationResult", {"status": "error", "op": "security", "message": message})
+            self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
         self.act_get_security({"refresh": True})
         self.send_status()
+        return False
+
+    def act_get_security_data(self, data):
+        """Données du centre de sécurité : vulns, checklist, intégrité, persistance, connexions, mise à jour."""
+        kind = data.get("type")
+        cmd = {"vulns": "vulns", "checklist": "checklist", "integrity": "integrity", "persistence": "persistence",
+               "connections": "connections", "app_update": "check_update"}.get(kind)
+        if not cmd:
+            return
+        params = {}
+        if data.get("refresh"):
+            params["refresh"] = True
+        if kind == "integrity" and data.get("run"):
+            params["run"] = True
+        if kind == "app_update" and not data.get("refresh"):
+            ds = self.last_daemon_status if isinstance(self.last_daemon_status, dict) else {}
+            self.send_to_js("securityData", {"type": "app_update", "data": ds.get("app_update") or {}, "available": ds != {}})
+            return
+
+        def worker():
+            resp = daemon_request(cmd, timeout=900, **params)
+            payload = resp.get(kind) or resp.get("update") or {}
+            GLib.idle_add(self.send_to_js, "securityData",
+                          {"type": kind, "data": payload, "available": bool(resp.get("ok")),
+                           "refreshing": bool(resp.get("refreshing") or resp.get("running"))})
+            if kind == "app_update":
+                GLib.idle_add(self.send_status)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def act_install_update(self, _data):
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "security", "message": self.T("msg.update_installing")})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("install_update", {}, done)
+
+    def act_install_tools(self, _data):
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "security", "message": self.T("msg.tools_installing")})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("install_tools", {}, done)
+
+    def act_process_action(self, data):
+        try:
+            self.process_action(int(data.get("pid")), data.get("action"))
+        except (TypeError, ValueError):
+            pass
+
+    def act_unlock(self, _data):
+        def worker():
+            try:
+                r = subprocess.run(["pkexec", UNLOCK_HELPER], capture_output=True, text=True, timeout=300)
+                ok = r.returncode == 0
+            except Exception:  # noqa: BLE001
+                ok = False
+            GLib.idle_add(self.send_to_js, "operationResult",
+                          {"status": "success" if ok else "error", "op": "security",
+                           "message": self.T("msg.unlocked") if ok else self.T("msg.auth_cancelled")})
+            GLib.idle_add(self.act_check_status, {})
+        threading.Thread(target=worker, daemon=True).start()
+
+    def act_lock(self, _data):
+        DaemonClient.request("lock")
+        self.act_check_status({})
 
     def act_open_update_manager(self, _data):
         for cmd in (["mintupdate"], ["update-manager"], ["gnome-software", "--mode=updates"]):
@@ -1704,6 +1881,16 @@ class ClamAVAntivirusApp:
             "user_settings": user_settings(),
             "view_mode": user_settings()["view_mode"],
             "upload_gb": (ds or {}).get("upload_gb", 0),
+            "overall": (ds or {}).get("overall"),
+            "unlocked": (ds or {}).get("unlocked", False),
+            "family_mode": (ds or {}).get("family_mode", False),
+            "admin_groups": (ds or {}).get("admin_groups", []),
+            "suspended": (ds or {}).get("suspended", []),
+            "app_update": (ds or {}).get("app_update"),
+            "vulns_summary": (ds or {}).get("vulns_summary"),
+            "checklist_summary": (ds or {}).get("checklist_summary"),
+            "integrity_summary": (ds or {}).get("integrity_summary"),
+            "persistence_summary": (ds or {}).get("persistence_summary"),
             "schedule": {
                 "next_update": next_update.isoformat(timespec="seconds") if next_update else None,
                 "timer_active": systemd_is_active(UPDATE_TIMER_UNIT),

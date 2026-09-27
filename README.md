@@ -44,6 +44,24 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   via le service. L'accès à distance est signalé s'il est actif.
 - **Envoi Internet** — le service mesure le volume envoyé (`/proc/net/dev`) et affiche un
   popup au-delà du seuil, avec la liste des programmes connectés (`ss`).
+- **Centre de sécurité** (onglet Sécurité) — score et checklist (pare-feu, SSH, chiffrement
+  LUKS, Secure Boot, AppArmor, mises à jour automatiques, comptes sans mot de passe, sudo
+  sans mot de passe, ports exposés, services exposés, `ld.so.preload`, antivirus…), inventaire
+  des **failles ouvertes** des paquets installés via OSV.dev (sans correctif / Ubuntu Pro /
+  correctif disponible, priorité Ubuntu et vecteur CVSS), mises à jour Flatpak/Snap, vérification
+  d'intégrité (rkhunter, chkrootkit, debsums, fichiers de l'application vs manifeste signé).
+- **Connexions sortantes** — programmes connectés à Internet avec pays/opérateur, alerte pour un
+  programme inconnu du système ou une adresse des listes Feodo Tracker / SSLBL.
+- **Persistance** — autostart, unités systemd, cron, `rc.local`, `ld.so.preload`, extensions
+  Chrome/Firefox (hors store signalées) ; alerte à chaque nouvelle entrée.
+- **Réponse automatique** — un programme jugé dangereux est suspendu (SIGSTOP) et le popup propose
+  Terminer / Mettre en quarantaine / Reprendre.
+- **Mode famille et verrouillage admin** — désactiver le pare-feu, ouvrir un port, activer SSH,
+  installer une mise à jour ou changer les réglages (mode famille) exige l'authentification d'un
+  administrateur via polkit (`pkexec`), valable 15 minutes.
+- **Icône tray** — vert : tout est en ordre ; jaune : mises à jour non critiques, redémarrage,
+  SSH actif, mise à jour de l'app ; bleu : signatures anciennes ou failles ouvertes sans correctif ;
+  rouge : pare-feu inactif, mises à jour de sécurité, danger détecté, intégrité compromise.
 - **Scan moderne** — anneau de progression, étapes (inventaire → analyse), fichiers/s,
   temps restant estimé, menaces en direct, annulation et reprise, résumé de fin,
   historique des analyses.
@@ -56,9 +74,27 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   - 🔴 **Rouge** : Non protégé, MàJ > 2 jours
 - **Interface HTML/CSS** — Facilement modifiable (fichiers dans `ui/`)
 
+## Installation via le dépôt APT (recommandé)
+
+Dépôt signé pour Ubuntu 24.04 « noble » et Linux Mint 22 :
+
+```bash
+sudo mkdir -p /usr/share/keyrings
+curl -fsSL https://www.dukiwi.com/repo/apt/dukiwi-clamav.gpg | sudo tee /usr/share/keyrings/dukiwi-clamav.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/dukiwi-clamav.gpg] https://www.dukiwi.com/repo/apt noble main" | sudo tee /etc/apt/sources.list.d/dukiwi-clamav.list
+sudo apt update && sudo apt install clamav-antivirus
+```
+
+Les mises à jour arrivent ensuite par le Gestionnaire de mises à jour de Mint. L'application
+vérifie aussi elle-même, chaque jour, le manifeste signé du dépôt
+(`manifest.json` + `manifest.json.sig`, clé Ed25519 `C9EC B8C7 A3BA 05AA 9446 D33D 4301 B5B9 784F 6C1F`
+conservée hors ligne) : version, SHA-256 du paquet et de chaque fichier installé. Une mise à jour
+non signée ou altérée est refusée, même si le serveur web était compromis ; l'installation
+d'une mise à jour vérifiée demande une authentification administrateur (popup ou onglet Sécurité).
+
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.6.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.6.0_all.deb)
+[Télécharger clamav-antivirus_1.7.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.7.0_all.deb)
 
 ---
 
@@ -89,12 +125,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.6.0_all.deb`
+Résultat : `clamav-antivirus_1.7.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.6.0_all.deb
+sudo dpkg -i clamav-antivirus_1.7.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
@@ -196,6 +232,9 @@ clamav-antivirus/
 │   ├── clamav-antivirus-update.service
 │   └── clamav-antivirus-update.timer # 07:00 quotidien + 5 min après le boot
 ├── udev/80-clamav-antivirus-usb.rules # Analyse des clés USB avant montage
+├── clamav-antivirus-unlock          # Helper pkexec : session administrateur pour le daemon
+├── polkit/com.dukiwi.clamav-antivirus.policy
+├── keys/dukiwi-clamav.gpg           # Clé publique de vérification des mises à jour
 ├── ui/
 │   ├── index.html                   # Interface HTML
 │   ├── style.css                    # Thème CSS (variables modifiables)

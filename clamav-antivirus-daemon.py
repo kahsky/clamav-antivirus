@@ -32,6 +32,9 @@ Usage :
 """
 
 import ctypes
+import grp
+import hashlib
+import ipaddress
 import json
 import os
 import pwd
@@ -44,7 +47,9 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -60,6 +65,23 @@ from clamav_common import (  # noqa: E402
     sanitize_settings, parse_ufw_verbose, parse_ufw_numbered, systemd_is_active,
 )
 
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+KEYRING = os.path.join(APP_DIR, "keys", "dukiwi-clamav.gpg")
+INTEGRITY_FILE = os.path.join(APP_DIR, "integrity.json")
+MANIFEST_URL = os.environ.get("CLAMAV_ANTIVIRUS_MANIFEST_URL",
+                              "https://www.dukiwi.com/repo/clamav-antivirus/manifest.json")
+UPDATES_DIR = os.path.join(SYSTEM_STATE_DIR, "updates")
+BLOCKLIST_FILE = os.path.join(SYSTEM_STATE_DIR, "ip-blocklist.txt")
+BLOCKLIST_URLS = {
+    "feodo": "https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
+    "sslbl": "https://sslbl.abuse.ch/blacklist/sslipblacklist.txt",
+}
+OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
+OSV_VULN_URL = "https://api.osv.dev/v1/vulns/"
+GEOIP_BATCH_URL = "http://ip-api.com/batch?fields=status,country,countryCode,org,isp,query"
+UNLOCK_TTL = 900
+ADMIN_GROUPS = ("sudo", "admin", "wheel")
+USER_AGENT = f"clamav-antivirus/{VERSION}"
 LOG_MAX_BYTES = 5 * 1024 * 1024
 PROGRESS_INTERVAL = 0.25      # secondes entre deux événements de progression
 PROGRESS_SAVE_INTERVAL = 2.0  # secondes entre deux sauvegardes du fichier de reprise
@@ -83,6 +105,70 @@ def run_quiet(cmd, timeout=60):
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except Exception as e:  # noqa: BLE001
         return subprocess.CompletedProcess(cmd, 1, "", str(e))
+
+
+def http_get(url, timeout=60, data=None, headers=None):
+    """GET/POST simple (urllib) avec User-Agent ; retourne bytes ; lève en cas d'erreur."""
+    req = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT, **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def gpg_verify(sig_path, data_path):
+    """Vérifie une signature détachée avec la clé publique Dukiwi embarquée."""
+    if not os.path.exists(KEYRING):
+        return False, "no_keyring"
+    if not shutil.which("gpgv"):
+        return False, "no_gpgv"
+    r = run_quiet(["gpgv", "--keyring", KEYRING, sig_path, data_path], timeout=30)
+    return r.returncode == 0, ((r.stderr or "") + (r.stdout or "")).strip()[-300:]
+
+
+def version_gt(a, b):
+    r = run_quiet(["dpkg", "--compare-versions", str(a), "gt", str(b)], timeout=10)
+    return r.returncode == 0
+
+
+def uid_groups(uid):
+    try:
+        pw = pwd.getpwuid(uid)
+    except KeyError:
+        return []
+    groups = [g.gr_name for g in grp.getgrall() if pw.pw_name in g.gr_mem]
+    try:
+        groups.append(grp.getgrgid(pw.pw_gid).gr_name)
+    except KeyError:
+        pass
+    return groups
+
+
+def is_public_ip(ip):
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return not (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_reserved)
+
+
+def ubuntu_osv_ecosystem():
+    codename = ""
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if line.startswith("UBUNTU_CODENAME="):
+                    codename = line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return {"noble": "Ubuntu:24.04:LTS", "jammy": "Ubuntu:22.04:LTS", "focal": "Ubuntu:20.04:LTS",
+            "questing": "Ubuntu:25.10", "plucky": "Ubuntu:25.04"}.get(codename, "Ubuntu:24.04:LTS")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -891,6 +977,757 @@ def collect_system_status(previous=None):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Mises à jour de l'application (manifeste signé) et intégrité des fichiers
+# ═══════════════════════════════════════════════════════════════════════════
+
+class UpdateChecker:
+    def __init__(self, daemon):
+        self.daemon_ref = daemon
+        self.lock = threading.Lock()
+
+    def check(self, force=False):
+        """Télécharge manifest.json + .sig, vérifie la signature, prépare le .deb si plus récent."""
+        with self.lock:
+            os.makedirs(UPDATES_DIR, exist_ok=True)
+            info = {"checked_at": now_iso(), "current": VERSION, "available": False, "verified": False,
+                    "downloaded": False, "version": "", "path": "", "sha256": "", "url": "", "error": "",
+                    "date": "", "size": 0}
+            if not self.daemon_ref.settings.get("app_update_check") and not force:
+                info["error"] = "disabled"
+                return info
+            manifest_path = os.path.join(UPDATES_DIR, "manifest.json")
+            sig_path = manifest_path + ".sig"
+            try:
+                with open(manifest_path, "wb") as f:
+                    f.write(http_get(MANIFEST_URL, timeout=30))
+                with open(sig_path, "wb") as f:
+                    f.write(http_get(MANIFEST_URL + ".sig", timeout=30))
+            except Exception as e:  # noqa: BLE001
+                info["error"] = f"download:{e}"
+                return info
+            ok, detail = gpg_verify(sig_path, manifest_path)
+            if not ok:
+                info["error"] = f"signature:{detail}"
+                self.daemon_ref.write_log(f"⚠ update manifest signature INVALID: {detail}")
+                return info
+            info["verified"] = True
+            try:
+                with open(manifest_path) as f:
+                    manifest = json.load(f)
+            except Exception as e:  # noqa: BLE001
+                info["error"] = f"manifest:{e}"
+                return info
+            info.update({k: manifest.get(k, "") for k in ("version", "url", "sha256", "date")})
+            info["size"] = int(manifest.get("size") or 0)
+            if manifest.get("package") != "clamav-antivirus" or not info["version"]:
+                info["error"] = "manifest:invalid"
+                return info
+            if not version_gt(info["version"], VERSION):
+                return info
+            info["available"] = True
+            deb_path = os.path.join(UPDATES_DIR, os.path.basename(manifest.get("deb") or f"clamav-antivirus_{info['version']}_all.deb"))
+            if not (os.path.exists(deb_path) and sha256_file(deb_path) == info["sha256"]):
+                try:
+                    with open(deb_path + ".part", "wb") as f:
+                        f.write(http_get(info["url"], timeout=300))
+                    if sha256_file(deb_path + ".part") != info["sha256"]:
+                        os.remove(deb_path + ".part")
+                        info["error"] = "sha256_mismatch"
+                        self.daemon_ref.write_log("⚠ update .deb sha256 MISMATCH — refusé")
+                        return info
+                    os.replace(deb_path + ".part", deb_path)
+                except Exception as e:  # noqa: BLE001
+                    info["error"] = f"download_deb:{e}"
+                    return info
+            info["downloaded"] = True
+            info["path"] = deb_path
+            return info
+
+    def install(self, info):
+        """Installe le .deb vérifié dans une unité transitoire (survit au redémarrage du daemon)."""
+        path = info.get("path", "")
+        if not (info.get("available") and info.get("verified") and path and os.path.exists(path)):
+            return False, "not_ready"
+        if sha256_file(path) != info.get("sha256"):
+            return False, "sha256_mismatch"
+        if TEST_MODE:
+            return True, "test_mode"
+        unit = f"clamav-antivirus-upgrade-{int(time.time())}"
+        r = run_quiet(["systemd-run", "--unit", unit, "--collect", "--quiet",
+                       "-p", "Environment=DEBIAN_FRONTEND=noninteractive",
+                       "/bin/sh", "-c", f"apt-get install -y --allow-downgrades '{path}'"], timeout=30)
+        return r.returncode == 0, ((r.stderr or "") + (r.stdout or "")).strip()[-200:]
+
+
+def app_integrity():
+    """Compare les fichiers installés au manifeste d'intégrité livré dans le paquet."""
+    result = {"checked_at": now_iso(), "available": os.path.exists(INTEGRITY_FILE), "signed": False,
+              "verified": False, "modified": [], "missing": [], "count": 0, "version": ""}
+    if not result["available"]:
+        return result
+    sig = INTEGRITY_FILE + ".sig"
+    if os.path.exists(sig):
+        result["signed"] = True
+        result["verified"], _ = gpg_verify(sig, INTEGRITY_FILE)
+    try:
+        with open(INTEGRITY_FILE) as f:
+            manifest = json.load(f)
+    except Exception:  # noqa: BLE001
+        result["available"] = False
+        return result
+    result["version"] = manifest.get("version", "")
+    files = manifest.get("files") or {}
+    result["count"] = len(files)
+    for rel, digest in files.items():
+        full = "/" + rel
+        if not os.path.exists(full):
+            result["missing"].append(full)
+        elif sha256_file(full) != digest:
+            result["modified"].append(full)
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Inventaire des failles ouvertes (OSV.dev, écosystème Ubuntu) + Flatpak/Snap
+# ═══════════════════════════════════════════════════════════════════════════
+
+PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "negligible": 4, "untriaged": 5, "": 6}
+
+
+def installed_sources():
+    """{source_package: {"version": source_version, "binaries": [...]}} des paquets installés."""
+    r = run_quiet(["dpkg-query", "-W", "-f", "${Package}\t${source:Package}\t${source:Version}\t${Version}\t${db:Status-Status}\n"], timeout=60)
+    sources = {}
+    for line in (r.stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 5 or parts[4] != "installed":
+            continue
+        binary, source, sversion, version = parts[0], parts[1] or parts[0], parts[2] or parts[3], parts[3]
+        entry = sources.setdefault(source, {"version": sversion, "binaries": []})
+        entry["binaries"].append(binary)
+    return sources
+
+
+def osv_query(sources, ecosystem):
+    """Interroge OSV par lots ; retourne {source: [ids]}."""
+    names = sorted(sources)
+    found = {}
+    for i in range(0, len(names), 1000):
+        chunk = names[i:i + 1000]
+        payload = {"queries": [{"package": {"name": n, "ecosystem": ecosystem}, "version": sources[n]["version"]} for n in chunk]}
+        data = http_get(OSV_BATCH_URL, timeout=120, data=json.dumps(payload).encode(),
+                        headers={"Content-Type": "application/json"})
+        results = json.loads(data).get("results", [])
+        for name, res in zip(chunk, results):
+            ids = [v["id"] for v in (res or {}).get("vulns", []) if v.get("id")]
+            if ids:
+                found[name] = ids
+    return found
+
+
+def osv_details(ids, cache, ecosystem, max_workers=6):
+    """Détails OSV (mis en cache par id). Retourne {id: detail_simplifié}."""
+    def fetch(vid):
+        try:
+            d = json.loads(http_get(OSV_VULN_URL + vid, timeout=30))
+        except Exception:  # noqa: BLE001
+            return vid, None
+        priority, cvss = "", ""
+        for sev in d.get("severity") or []:
+            if sev.get("type") == "Ubuntu":
+                priority = str(sev.get("score", "")).lower()
+            elif sev.get("type", "").startswith("CVSS") and not cvss:
+                cvss = sev.get("score", "")
+        fixed, pro, affected_pkg = "", False, ""
+        for aff in d.get("affected") or []:
+            if aff.get("package", {}).get("ecosystem") != ecosystem:
+                continue
+            affected_pkg = aff.get("package", {}).get("name", "")
+            for rng in aff.get("ranges") or []:
+                for ev in rng.get("events") or []:
+                    if ev.get("fixed"):
+                        fixed = ev["fixed"]
+            avail = (aff.get("ecosystem_specific") or {}).get("availability", "")
+            if "Ubuntu Pro" in avail:
+                pro = True
+        summary = d.get("summary") or (d.get("details") or "").strip().split("\n")[0]
+        cve = ""
+        for alias in [d.get("id", "")] + list(d.get("aliases") or []) + list(d.get("upstream") or []):
+            if alias.startswith("CVE-"):
+                cve = alias
+                break
+        if not cve and d.get("id", "").startswith("UBUNTU-CVE-"):
+            cve = d["id"][7:]
+        return vid, {"id": d.get("id", vid), "cve": cve, "modified": d.get("modified", ""),
+                     "published": d.get("published", ""), "priority": priority, "cvss": cvss,
+                     "fixed": fixed, "pro": pro, "package": affected_pkg, "summary": summary[:240]}
+
+    todo = [vid for vid in ids if vid not in cache]
+    out = {vid: cache[vid] for vid in ids if vid in cache}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for vid, detail in pool.map(fetch, todo[:800]):
+            if detail:
+                out[vid] = detail
+    return out
+
+
+def collect_vulnerabilities(previous=None):
+    """Failles connues affectant les paquets installés : sans correctif, correctif Pro, ou correctif disponible."""
+    ecosystem = ubuntu_osv_ecosystem()
+    result = {"checked_at": now_iso(), "ok": True, "error": "", "ecosystem": ecosystem,
+              "sources": 0, "items": [], "counts": {"unfixed": 0, "pro_only": 0, "fix_available": 0},
+              "by_priority": {}, "flatpak": [], "snap": [], "cache": {}}
+    try:
+        sources = installed_sources()
+        result["sources"] = len(sources)
+        found = osv_query(sources, ecosystem)
+        ids = sorted({vid for lst in found.values() for vid in lst})
+        cache = (previous or {}).get("cache") or {}
+        details = osv_details(ids, cache, ecosystem)
+        result["cache"] = details
+        for source, vids in found.items():
+            installed = sources[source]["version"]
+            for vid in vids:
+                d = details.get(vid)
+                if not d:
+                    continue
+                if d["fixed"] and version_gt(d["fixed"], installed):
+                    status = "fix_available"
+                elif d["pro"]:
+                    status = "pro_only"
+                else:
+                    status = "unfixed"
+                result["counts"][status] += 1
+                pr = d["priority"] or "untriaged"
+                result["by_priority"][pr] = result["by_priority"].get(pr, 0) + 1
+                result["items"].append({"id": d["id"], "cve": d["cve"] or d["id"], "package": source,
+                                        "installed": installed, "fixed": d["fixed"], "status": status,
+                                        "priority": pr, "cvss": d["cvss"], "summary": d["summary"],
+                                        "url": f"https://ubuntu.com/security/{d['cve']}" if d["cve"] else f"https://osv.dev/vulnerability/{d['id']}"})
+        result["items"].sort(key=lambda it: (PRIORITY_RANK.get(it["priority"], 6), it["status"] != "unfixed", it["package"]))
+    except Exception as e:  # noqa: BLE001
+        result["ok"] = False
+        result["error"] = str(e)[:200]
+    # Flatpak / Snap : mises à jour disponibles
+    if shutil.which("flatpak"):
+        r = run_quiet(["flatpak", "remote-ls", "--updates", "--app", "--columns=application,version,name"], timeout=120)
+        for line in (r.stdout or "").splitlines():
+            parts = line.split("\t")
+            if parts and parts[0].strip():
+                result["flatpak"].append({"id": parts[0].strip(), "version": parts[1].strip() if len(parts) > 1 else "",
+                                          "name": parts[2].strip() if len(parts) > 2 else parts[0].strip()})
+    if shutil.which("snap"):
+        r = run_quiet(["snap", "refresh", "--list"], timeout=120)
+        for line in (r.stdout or "").splitlines()[1:]:
+            parts = line.split()
+            if parts:
+                result["snap"].append({"id": parts[0], "version": parts[1] if len(parts) > 1 else "", "name": parts[0]})
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Checklist de sécurité et score
+# ═══════════════════════════════════════════════════════════════════════════
+
+KNOWN_PORTS = {22: "ssh", 53: "dns", 67: "dhcp", 68: "dhcp", 80: "http", 111: "rpcbind", 139: "samba", 443: "https",
+               445: "samba", 546: "dhcpv6", 631: "cups", 1716: "kdeconnect", 3306: "mysql", 3389: "rdp",
+               5353: "mdns", 5432: "postgresql", 5900: "vnc", 5901: "vnc", 6000: "x11", 8000: "dev-server",
+               8080: "http-alt", 8443: "https-alt", 9050: "tor", 27017: "mongodb", 32400: "plex"}
+
+
+def listening_ports():
+    r = run_quiet(["ss", "-tulnpH"], timeout=15)
+    ports = []
+    for line in (r.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        proto, local = parts[0], parts[4]
+        addr, _, port = local.rpartition(":")
+        addr = addr.split("%")[0].strip("[]")
+        try:
+            port = int(port)
+        except ValueError:
+            continue
+        proc = ""
+        m = re.search(r'users:\(\("([^"]+)"', line)
+        if m:
+            proc = m.group(1)
+        if addr in ("0.0.0.0", "::", "*", ""):
+            exposed = True
+        else:
+            try:
+                ip = ipaddress.ip_address(addr)
+                exposed = not (ip.is_loopback or ip.is_link_local)
+            except ValueError:
+                exposed = False
+        ports.append({"proto": proto, "addr": addr or "*", "port": port, "process": proc,
+                      "service": KNOWN_PORTS.get(port, ""), "exposed": bool(exposed)})
+    ports.sort(key=lambda p: (not p["exposed"], p["port"]))
+    return ports
+
+
+def collect_checklist(daemon):
+    """Liste de contrôles pondérés → score 0-100."""
+    items = []
+    settings = daemon.settings
+    sec = daemon.security or {}
+    ufw, ssh = sec.get("ufw", {}), sec.get("ssh", {})
+    sysst = daemon.state.get("system_status") or {}
+    vulns = daemon.state.get("vulns") or {}
+    persistence = daemon.state.get("persistence") or {}
+
+    def add(key, status, weight, detail=""):
+        items.append({"key": key, "status": status, "weight": weight, "detail": str(detail)[:200]})
+
+    add("firewall", "ok" if ufw.get("active") else ("fail" if ufw.get("installed") else "warn"), 15,
+        f"{ufw.get('default_incoming', '')}/{ufw.get('default_outgoing', '')}" if ufw.get("active") else "")
+    if ssh.get("installed") and ssh.get("active"):
+        add("ssh", "ok" if (ufw.get("active") and ssh.get("allowed_by_firewall")) else "warn", 6, f"port {ssh.get('port')}")
+    else:
+        add("ssh", "ok", 6, "off")
+    # Chiffrement du disque
+    r = run_quiet(["lsblk", "-rno", "TYPE,FSTYPE"], timeout=10)
+    encrypted = any("crypt" in line or "LUKS" in line for line in (r.stdout or "").splitlines())
+    if not encrypted:
+        encrypted = os.path.isdir("/home/.ecryptfs") and any(os.scandir("/home/.ecryptfs")) if os.path.isdir("/home/.ecryptfs") else False
+    add("disk_encryption", "ok" if encrypted else "warn", 8)
+    # Secure Boot
+    sb = "unknown"
+    if shutil.which("mokutil"):
+        r = run_quiet(["mokutil", "--sb-state"], timeout=10)
+        out = (r.stdout or "").lower()
+        sb = "ok" if "enabled" in out and "disabled" not in out else ("warn" if out else "unknown")
+    elif not os.path.isdir("/sys/firmware/efi"):
+        sb = "na"
+    add("secure_boot", sb, 5)
+    # AppArmor
+    try:
+        with open("/sys/module/apparmor/parameters/enabled") as f:
+            aa = f.read().strip() == "Y"
+    except OSError:
+        aa = False
+    add("apparmor", "ok" if aa else "warn", 6)
+    # Mises à jour automatiques
+    auto = False
+    try:
+        with open("/etc/apt/apt.conf.d/20auto-upgrades") as f:
+            auto = 'Unattended-Upgrade "1"' in f.read()
+    except OSError:
+        pass
+    auto = auto or os.path.exists("/etc/cron.daily/mintupdate-automation-upgrade") \
+        or os.path.exists("/etc/systemd/system/mintupdate-automation-upgrade.timer")
+    add("auto_updates", "ok" if auto else "warn", 6)
+    add("security_updates", "ok" if not sysst.get("security") else "fail", 12, sysst.get("security", 0))
+    add("reboot", "ok" if not sysst.get("reboot_required") else "warn", 3)
+    # Comptes sans mot de passe / sudo sans mot de passe (root uniquement)
+    if os.geteuid() == 0:
+        empty = []
+        try:
+            with open("/etc/shadow") as f:
+                for line in f:
+                    parts = line.split(":")
+                    if len(parts) > 1 and parts[1] == "":
+                        empty.append(parts[0])
+        except OSError:
+            pass
+        add("empty_passwords", "fail" if empty else "ok", 10, ", ".join(empty))
+        nopass = []
+        for path in ["/etc/sudoers"] + sorted(str(p) for p in Path("/etc/sudoers.d").glob("*") if p.is_file()):
+            try:
+                with open(path) as f:
+                    for line in f:
+                        if "NOPASSWD" in line and not line.strip().startswith("#"):
+                            nopass.append(os.path.basename(path))
+                            break
+            except OSError:
+                pass
+        add("nopasswd_sudo", "warn" if nopass else "ok", 5, ", ".join(nopass))
+    else:
+        add("empty_passwords", "unknown", 10)
+        add("nopasswd_sudo", "unknown", 5)
+    # Ports exposés
+    ports = listening_ports()
+    exposed = [p for p in ports if p["exposed"] and p["port"] not in (5353, 68, 546, 67)]
+    add("open_ports", "ok" if not exposed else ("warn" if ufw.get("active") else "fail"), 8,
+        ", ".join(f"{p['port']}/{p['proto']} {p['process'] or p['service']}".strip() for p in exposed[:8]))
+    # Services exposés courants
+    exposed_services = sorted({p["service"] or p["process"] for p in exposed if p["port"] in (139, 445, 631, 5900, 5901, 3389, 3306, 5432, 27017)})
+    add("exposed_services", "ok" if not exposed_services else "warn", 5, ", ".join(exposed_services))
+    # ld.so.preload (persistance de rootkit)
+    add("ld_preload", "fail" if os.path.exists("/etc/ld.so.preload") and os.path.getsize("/etc/ld.so.preload") > 0 else "ok", 8)
+    # Antivirus
+    db = db_last_update()
+    age_days = (datetime.now() - db).days if db else 99
+    add("signatures", "ok" if age_days < 1 else ("warn" if age_days < 2 else "fail"), 8, f"{age_days} d")
+    add("realtime", "ok" if daemon.monitor.active else "warn", 6)
+    add("weekly_scan", "ok" if settings.get("weekly_scan") else "warn", 3)
+    last_scan = daemon.state.get("last_scan")
+    try:
+        scan_age = (datetime.now() - datetime.fromisoformat(last_scan)).days if last_scan else 99
+    except ValueError:
+        scan_age = 99
+    add("recent_scan", "ok" if scan_age <= 7 else ("warn" if scan_age <= 30 else "fail"), 4, f"{scan_age} d")
+    # Failles ouvertes
+    counts = vulns.get("counts") or {}
+    high = sum(1 for it in vulns.get("items", []) if it.get("status") == "unfixed" and it.get("priority") in ("critical", "high"))
+    add("open_vulns", "unknown" if not vulns else ("ok" if not high else "warn"), 6,
+        f"{counts.get('unfixed', 0)} unfixed, {high} high/critical")
+    # Persistance inconnue
+    unknown = [it for it in persistence.get("items", []) if not it.get("trusted")]
+    add("persistence", "ok" if not unknown else "warn", 4, f"{len(unknown)}")
+    # Réponse automatique
+    add("auto_response", "ok" if settings.get("auto_response") else "warn", 2)
+
+    applicable = [it for it in items if it["status"] in ("ok", "warn", "fail")]
+    total = sum(it["weight"] for it in applicable) or 1
+    earned = sum(it["weight"] for it in applicable if it["status"] == "ok") + \
+        sum(it["weight"] * 0.5 for it in applicable if it["status"] == "warn")
+    score = int(round(100 * earned / total))
+    grade = "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 60 else "D" if score >= 40 else "E"
+    return {"checked_at": now_iso(), "score": score, "grade": grade, "items": items, "ports": ports[:40]}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Connexions sortantes : programmes inconnus, IP malveillantes, géolocalisation
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ConnectionMonitor(threading.Thread):
+    INTERVAL = 20
+
+    def __init__(self, daemon):
+        super().__init__(daemon=True, name="connection-monitor")
+        self.daemon_ref = daemon
+        self.active = False
+        self.seen = {}             # (pid, ip) -> first seen
+        self.reported = {}         # pid -> last alert time
+        self.blocklist = set()
+        self.blocklist_loaded = 0
+        self.geo = {}              # ip -> {country, countryCode, org, isp, ts}
+        self.current = {"checked_at": None, "processes": []}
+        self.lock = threading.Lock()
+
+    def load_blocklist(self, refresh=False):
+        try:
+            age = time.time() - os.path.getmtime(BLOCKLIST_FILE) if os.path.exists(BLOCKLIST_FILE) else 1e9
+        except OSError:
+            age = 1e9
+        if refresh or age > 86400:
+            ips = set()
+            for name, url in BLOCKLIST_URLS.items():
+                try:
+                    text = http_get(url, timeout=60).decode(errors="replace")
+                    for line in text.splitlines():
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            ip = line.split(",")[0].strip()
+                            try:
+                                ipaddress.ip_address(ip)
+                                ips.add(ip)
+                            except ValueError:
+                                pass
+                except Exception as e:  # noqa: BLE001
+                    log(f"Liste {name} indisponible : {e}")
+            if ips:
+                with open(BLOCKLIST_FILE, "w") as f:
+                    f.write("\n".join(sorted(ips)))
+        try:
+            with open(BLOCKLIST_FILE) as f:
+                self.blocklist = {line.strip() for line in f if line.strip()}
+            self.blocklist_loaded = time.time()
+        except OSError:
+            self.blocklist = set()
+
+    def geolocate(self, ips):
+        if not self.daemon_ref.settings.get("geoip_lookup"):
+            return
+        todo = [ip for ip in ips if is_public_ip(ip) and (ip not in self.geo or time.time() - self.geo[ip]["ts"] > 86400)]
+        if not todo:
+            return
+        try:
+            data = json.dumps([{"query": ip} for ip in todo[:100]]).encode()
+            for entry in json.loads(http_get(GEOIP_BATCH_URL, timeout=20, data=data,
+                                             headers={"Content-Type": "application/json"})):
+                if entry.get("status") == "success":
+                    self.geo[entry["query"]] = {"country": entry.get("country", ""), "countryCode": entry.get("countryCode", ""),
+                                                "org": entry.get("org") or entry.get("isp", ""), "ts": time.time()}
+        except Exception as e:  # noqa: BLE001
+            log(f"GeoIP : {e}")
+
+    @staticmethod
+    def parse_ss():
+        r = run_quiet(["ss", "-Htnp", "state", "established"], timeout=15)
+        conns = []
+        for line in (r.stdout or "").splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            peer = parts[3]
+            host, _, port = peer.rpartition(":")
+            host = host.strip("[]").split("%")[0]
+            for m in re.finditer(r'\("([^"]+)",pid=(\d+)', line):
+                conns.append({"comm": m.group(1), "pid": int(m.group(2)), "ip": host, "port": port})
+        return conns
+
+    def run(self):
+        self.active = True
+        try:
+            self.load_blocklist()
+        except Exception as e:  # noqa: BLE001
+            log(f"Blocklist : {e}")
+        while not self.daemon_ref.shutdown.is_set():
+            try:
+                if self.daemon_ref.settings.get("connection_monitor"):
+                    self.tick()
+            except Exception as e:  # noqa: BLE001
+                log(f"Connexions : {e}")
+            self.daemon_ref.shutdown.wait(self.INTERVAL)
+        self.active = False
+
+    def tick(self):
+        if time.time() - self.blocklist_loaded > 86400:
+            self.load_blocklist()
+        conns = self.parse_ss()
+        now = time.time()
+        procs = {}
+        new_pairs = []
+        for c in conns:
+            if not is_public_ip(c["ip"]):
+                continue
+            key = (c["pid"], c["ip"])
+            if key not in self.seen:
+                self.seen[key] = now
+                new_pairs.append(c)
+            p = procs.setdefault(c["pid"], {"pid": c["pid"], "comm": c["comm"], "exe": "", "trusted": None, "remotes": {}})
+            p["remotes"].setdefault(c["ip"], {"ip": c["ip"], "ports": set(), "flagged": c["ip"] in self.blocklist})
+            p["remotes"][c["ip"]]["ports"].add(c["port"])
+        if len(self.seen) > 5000:
+            cutoff = now - 3600
+            self.seen = {k: v for k, v in self.seen.items() if v >= cutoff}
+        self.geolocate([c["ip"] for c in new_pairs])
+        monitor = self.daemon_ref.monitor
+        for p in procs.values():
+            info = monitor.process_info(p["pid"])
+            p["exe"] = info["exe"]
+            p["user"] = info["user"]
+            p["trusted"] = monitor.exe_trusted(info["exe"]) if info["exe"] else None
+            for r in p["remotes"].values():
+                r["ports"] = sorted(r["ports"])[:6]
+                g = self.geo.get(r["ip"], {})
+                r["country"] = g.get("countryCode", "")
+                r["org"] = g.get("org", "")
+        with self.lock:
+            self.current = {"checked_at": now_iso(), "processes": sorted(procs.values(), key=lambda p: (p["trusted"] is not False, p["comm"]))}
+        # Alertes : programme inconnu qui se connecte, ou IP malveillante
+        for c in new_pairs:
+            p = procs.get(c["pid"])
+            if not p:
+                continue
+            flagged = c["ip"] in self.blocklist
+            if not flagged and p["trusted"] is not False:
+                continue
+            if now - self.reported.get(c["pid"], 0) < 600 and not flagged:
+                continue
+            self.reported[c["pid"]] = now
+            g = self.geo.get(c["ip"], {})
+            alert = {"kind": "connection", "severity": "danger" if flagged else "warn", "time": now_iso(),
+                     "pid": c["pid"], "comm": c["comm"], "exe": p["exe"], "user": p.get("user", ""),
+                     "trusted": bool(p["trusted"]), "ip": c["ip"], "port": c["port"], "flagged": flagged,
+                     "country": g.get("country", ""), "org": g.get("org", ""),
+                     "reasons": ["ip_blocklisted"] if flagged else ["untrusted_connection"],
+                     "count": 0, "top_dir": os.path.dirname(p["exe"]) if p["exe"] else "", "sample": [], "cmdline": ""}
+            self.daemon_ref.publish_alert(alert)
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.current, blocklist_size=len(self.blocklist))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Persistance (démarrages automatiques, cron, unités) et extensions de navigateur
+# ═══════════════════════════════════════════════════════════════════════════
+
+def dpkg_owners(paths):
+    """{path: paquet} pour une liste de chemins, en un seul appel dpkg -S par lot."""
+    owners = {}
+    paths = [p for p in dict.fromkeys(paths)]
+    for i in range(0, len(paths), 150):
+        chunk = paths[i:i + 150]
+        r = run_quiet(["dpkg", "-S"] + chunk, timeout=120)
+        for line in (r.stdout or "").splitlines():
+            if ": " not in line:
+                continue
+            pkgs, _, path = line.partition(": ")
+            path = path.strip()
+            if path in chunk and path not in owners:
+                owners[path] = pkgs.split(",")[0].split(":")[0].strip()
+    return owners
+
+
+def desktop_exec(path):
+    try:
+        with open(path, errors="replace") as f:
+            for line in f:
+                if line.startswith("Exec="):
+                    return line[5:].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def user_homes():
+    homes = []
+    for pw in pwd.getpwall():
+        if (pw.pw_uid >= 1000 or pw.pw_uid == 0) and pw.pw_dir.startswith(("/home/", "/root")) and os.path.isdir(pw.pw_dir):
+            homes.append((pw.pw_name, pw.pw_dir))
+    return homes
+
+
+def collect_persistence():
+    items = []
+
+    def add(kind, path, name, exec_line="", user="", trusted=None):
+        items.append({"kind": kind, "path": path, "name": name, "exec": exec_line[:200], "user": user,
+                      "trusted": trusted, "owner": "", "key": f"{kind}:{path}"})
+
+    for p in sorted(Path("/etc/xdg/autostart").glob("*.desktop")):
+        add("autostart", str(p), p.stem, desktop_exec(str(p)))
+    def safe_glob(base, pattern):
+        try:
+            return sorted(Path(base).glob(pattern))
+        except OSError:
+            return []
+
+    for user, home in user_homes():
+        for p in safe_glob(Path(home, ".config/autostart"), "*.desktop"):
+            add("autostart", str(p), p.stem, desktop_exec(str(p)), user, trusted=False)
+        for p in safe_glob(Path(home, ".config/systemd/user"), "*.service"):
+            add("user_unit", str(p), p.stem, "", user, trusted=False)
+        cron = Path("/var/spool/cron/crontabs", user)
+        try:
+            lines = [ln for ln in cron.read_text(errors="replace").splitlines() if ln.strip() and not ln.startswith("#")] if cron.exists() else []
+        except OSError:
+            lines = []
+        if lines:
+            add("crontab", str(cron), user, " | ".join(lines)[:200], user, trusted=False)
+    for d in ("/etc/cron.d", "/etc/cron.hourly", "/etc/cron.daily", "/etc/cron.weekly", "/etc/cron.monthly"):
+        for p in safe_glob(d, "*"):
+            if p.is_file() and not p.name.startswith("."):
+                add("cron", str(p), p.name)
+    for p in safe_glob("/etc/systemd/system", "*.service"):
+        if p.is_file() and not p.is_symlink():
+            add("system_unit", str(p), p.stem)
+    for p in safe_glob("/etc/profile.d", "*.sh"):
+        add("profile", str(p), p.name)
+    for path in ("/etc/rc.local", "/etc/ld.so.preload"):
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            add("rc", path, os.path.basename(path), trusted=False)
+
+    owners = dpkg_owners([it["path"] for it in items if it["trusted"] is None])
+    for it in items:
+        if it["trusted"] is None:
+            it["owner"] = owners.get(it["path"], "")
+            it["trusted"] = bool(it["owner"])
+
+    extensions = []
+    for user, home in user_homes():
+        for browser, sub in (("chrome", ".config/google-chrome"), ("chromium", ".config/chromium"),
+                             ("brave", ".config/BraveSoftware/Brave-Browser"), ("edge", ".config/microsoft-edge")):
+            base = Path(home, sub)
+            try:
+                if not base.is_dir():
+                    continue
+            except OSError:
+                continue
+            for profile in safe_glob(base, "Default") + safe_glob(base, "Profile *"):
+                prefs = {}
+                for pref_name in ("Secure Preferences", "Preferences"):
+                    try:
+                        with open(profile / pref_name, errors="replace") as f:
+                            prefs.update((json.load(f).get("extensions") or {}).get("settings") or {})
+                    except Exception:  # noqa: BLE001
+                        pass
+                for ext_dir in safe_glob(profile / "Extensions", "*"):
+                    if not ext_dir.is_dir():
+                        continue
+                    versions = sorted(ext_dir.glob("*"))
+                    if not versions:
+                        continue
+                    manifest_path = versions[-1] / "manifest.json"
+                    name, version = ext_dir.name, versions[-1].name
+                    try:
+                        with open(manifest_path, errors="replace") as f:
+                            man = json.load(f)
+                        name = man.get("name", name)
+                        version = man.get("version", version)
+                        if name.startswith("__MSG_"):
+                            key = name[6:-2]
+                            locales = [man.get("default_locale", "en"), "en", "en_US", "en_GB", "fr", "de", "it"]
+                            locales += [d.name for d in safe_glob(versions[-1] / "_locales", "*")]
+                            for loc in locales:
+                                msg_file = versions[-1] / "_locales" / str(loc) / "messages.json"
+                                if msg_file.exists():
+                                    with open(msg_file, errors="replace") as f:
+                                        msgs = json.load(f)
+                                    entry = msgs.get(key) or msgs.get(key.lower()) or {}
+                                    if entry.get("message"):
+                                        name = entry["message"]
+                                        break
+                    except Exception:  # noqa: BLE001
+                        pass
+                    pref = prefs.get(ext_dir.name) or {}
+                    extensions.append({"browser": browser, "user": user, "profile": profile.name, "id": ext_dir.name,
+                                       "name": str(name)[:80], "version": str(version), "from_store": bool(pref.get("from_webstore", True)),
+                                       "enabled": pref.get("state", 1) == 1, "key": f"{browser}:{user}:{ext_dir.name}"})
+        for ext_json in safe_glob(Path(home, ".mozilla/firefox"), "*/extensions.json"):
+            try:
+                with open(ext_json, errors="replace") as f:
+                    addons = json.load(f).get("addons") or []
+            except Exception:  # noqa: BLE001
+                continue
+            for a in addons:
+                if a.get("type") != "extension" or a.get("location") == "app-builtin":
+                    continue
+                extensions.append({"browser": "firefox", "user": user, "profile": ext_json.parent.name, "id": a.get("id", ""),
+                                   "name": str(a.get("defaultLocale", {}).get("name") or a.get("id", ""))[:80],
+                                   "version": str(a.get("version", "")), "from_store": a.get("signedState", 0) not in (0, None) or a.get("location") == "app-system-defaults",
+                                   "enabled": bool(a.get("active")), "key": f"firefox:{user}:{a.get('id', '')}"})
+    return {"checked_at": now_iso(), "items": items, "extensions": extensions,
+            "counts": {"items": len(items), "untrusted": sum(1 for it in items if not it["trusted"]),
+                       "extensions": len(extensions), "ext_outside_store": sum(1 for e in extensions if not e["from_store"])}}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Intégrité : rkhunter, chkrootkit, debsums + fichiers de l'application
+# ═══════════════════════════════════════════════════════════════════════════
+
+def run_integrity_checks():
+    result = {"checked_at": now_iso(), "tools": {}, "app": app_integrity(), "warnings": 0}
+    tools = {"rkhunter": ["rkhunter", "--check", "--sk", "--nocolors", "--rwo"],
+             "chkrootkit": ["chkrootkit", "-q"],
+             "debsums": ["debsums", "-s"]}
+    for name, cmd in tools.items():
+        entry = {"installed": shutil.which(cmd[0]) is not None, "ran": False, "warnings": [], "rc": None}
+        if entry["installed"] and os.geteuid() == 0:
+            r = run_quiet(cmd, timeout=1800)
+            entry["ran"] = True
+            entry["rc"] = r.returncode
+            out = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+            lines = [ln.strip() for ln in out if ln.strip()]
+            if name == "rkhunter":
+                lines = [ln for ln in lines if "Warning" in ln or "warning" in ln]
+            elif name == "chkrootkit":
+                lines = [ln for ln in lines if "INFECTED" in ln or "Warning" in ln or "suspicious" in ln.lower()]
+            elif name == "debsums":
+                lines = [ln for ln in lines if ln and not ln.startswith("debsums:") or "FAILED" in ln or "REPLACED" in ln][:80]
+            entry["warnings"] = lines[:80]
+        result["tools"][name] = entry
+        result["warnings"] += len(entry["warnings"])
+    result["warnings"] += len(result["app"]["modified"]) + len(result["app"]["missing"])
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Daemon
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -908,7 +1745,16 @@ class Daemon:
         self.settings = Settings()
         self.monitor = ActivityMonitor(self)
         self.network = NetworkMonitor(self)
+        self.connections = ConnectionMonitor(self)
+        self.updater = UpdateChecker(self)
         self.usb = UsbWatcher(self)
+        self.unlocked = {}          # uid -> expiry (session administrateur)
+        self.suspended = {}         # pid -> info (processus suspendus par la réponse automatique)
+        self.last_daily = 0
+        self.last_integrity = 0
+        self.integrity_running = False
+        self.daily_running = False
+        self.overall = {"color": "green", "reasons": []}
         self.security = None
         self.security_lock = threading.Lock()
         self.last_security = 0
@@ -941,16 +1787,32 @@ class Daemon:
         self.broadcast({"event": "progress", **job.public()})
 
     def publish_alert(self, alert):
+        pid = alert.get("pid") or 0
+        if alert.get("severity") == "danger" and pid > 1 and pid != os.getpid() \
+                and self.settings.get("auto_response") and alert.get("kind") in ("burst", "connection"):
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                alert["suspended"] = True
+                self.suspended[pid] = {"pid": pid, "comm": alert.get("comm"), "exe": alert.get("exe"),
+                                       "time": now_iso(), "kind": alert.get("kind")}
+                self.write_log(f"⏸ suspended pid {pid} ({alert.get('comm')})")
+            except OSError:
+                alert["suspended"] = False
         self.state.prepend("alerts", alert, ALERTS_MAX)
         if alert.get("kind") == "upload":
             self.write_log(f"⚠ upload: {alert.get('gb')} GB sent in {alert.get('window_hours')} h "
                            f"(threshold {alert.get('threshold_gb')} GB)")
             log(f"Alerte envoi Internet : {alert.get('gb')} Go en {alert.get('window_hours')} h")
+        elif alert.get("kind") == "connection":
+            self.write_log(f"⚠ connection {alert['severity']}: {alert.get('comm')} (pid {alert.get('pid')}) → {alert.get('ip')}:{alert.get('port')} {alert.get('country', '')}")
+        elif alert.get("kind") in ("persistence", "integrity", "update"):
+            self.write_log(f"⚠ {alert.get('kind')}: {alert.get('title', '')} {alert.get('detail', '')}")
         else:
             self.write_log(f"⚠ {alert['severity']}: {alert['comm']} (pid {alert['pid']}, {alert.get('exe')}) "
                            f"modified {alert['count']} files in {alert['window']} s — {alert['top_dir']}")
             log(f"Alerte {alert['severity']} : {alert['comm']} pid {alert['pid']} {alert['count']} fichiers")
         self.broadcast({"event": "alert", "alert": alert})
+        self.refresh_overall()
 
     # ── Journal ──────────────────────────────────────────────────────────
     def write_log(self, text):
@@ -1399,6 +2261,206 @@ class Daemon:
         log("Scan complet hebdomadaire planifié")
         self.enqueue(Job("scan", path="/", auto=True, requested_by="system"))
 
+    # ── Tâches quotidiennes : failles, persistance, mise à jour de l'app, checklist ───
+    def daily_tasks(self, force=False):
+        if self.daily_running:
+            return
+        self.daily_running = True
+        try:
+            self.last_daily = time.time()
+            # Failles ouvertes
+            vulns = collect_vulnerabilities(self.state.get("vulns"))
+            self.state.update(vulns=vulns)
+            self.broadcast({"event": "vulns", "vulns": self.public_vulns(vulns)})
+            log(f"Failles : {vulns['counts']} ({vulns['sources']} paquets sources)")
+            # Persistance & extensions
+            prev = self.state.get("persistence") or {}
+            prev_keys = {it["key"] for it in prev.get("items", [])} | {e["key"] for e in prev.get("extensions", [])}
+            pers = collect_persistence()
+            self.state.update(persistence=pers)
+            if prev_keys:
+                for it in pers["items"]:
+                    if it["key"] not in prev_keys:
+                        self.publish_alert({"kind": "persistence", "severity": "warn" if not it["trusted"] else "info",
+                                            "time": now_iso(), "title": it["name"], "detail": it["path"],
+                                            "item": it, "pid": 0, "comm": it["name"], "exe": it["path"], "count": 0,
+                                            "top_dir": os.path.dirname(it["path"]), "reasons": [], "sample": []})
+                for e in pers["extensions"]:
+                    if e["key"] not in prev_keys:
+                        self.publish_alert({"kind": "persistence", "severity": "warn" if not e["from_store"] else "info",
+                                            "time": now_iso(), "title": e["name"], "detail": f"{e['browser']} · {e['id']}",
+                                            "extension": e, "pid": 0, "comm": e["name"], "exe": "", "count": 0,
+                                            "top_dir": "", "reasons": [], "sample": []})
+            self.broadcast({"event": "persistence", "persistence": pers})
+            # Listes d'IP malveillantes
+            try:
+                self.connections.load_blocklist(refresh=True)
+            except Exception as e:  # noqa: BLE001
+                log(f"Blocklist : {e}")
+            # Mise à jour de l'application
+            self.check_app_update()
+            # Checklist
+            self.refresh_checklist()
+        except Exception as e:  # noqa: BLE001
+            log(f"Tâches quotidiennes : {e}")
+        finally:
+            self.daily_running = False
+
+    def check_app_update(self, force=False):
+        info = self.updater.check(force=force)
+        prev = self.state.get("app_update") or {}
+        self.state.update(app_update=info)
+        if info.get("available") and info.get("verified") and info.get("version") != prev.get("version"):
+            self.publish_alert({"kind": "update", "severity": "info", "time": now_iso(),
+                                "title": info["version"], "detail": info.get("date", ""), "update": info,
+                                "pid": 0, "comm": "", "exe": "", "count": 0, "top_dir": "", "reasons": [], "sample": []})
+            if self.settings.get("app_update_auto"):
+                ok, detail = self.updater.install(info)
+                self.write_log(f"auto-update {info['version']}: {ok} {detail}")
+        self.broadcast({"event": "app_update", "update": info})
+        self.refresh_overall()
+        return info
+
+    def refresh_checklist(self):
+        checklist = collect_checklist(self)
+        self.state.update(checklist=checklist)
+        self.broadcast({"event": "checklist", "checklist": checklist})
+        self.refresh_overall()
+        return checklist
+
+    def run_integrity(self):
+        if self.integrity_running:
+            return False
+        self.integrity_running = True
+        try:
+            self.last_integrity = time.time()
+            self.broadcast({"event": "integrity_running"})
+            result = run_integrity_checks()
+            self.state.update(integrity=result, last_integrity=now_iso())
+            if result["warnings"]:
+                self.publish_alert({"kind": "integrity", "severity": "warn", "time": now_iso(),
+                                    "title": str(result["warnings"]), "detail": ", ".join(
+                                        [n for n, t in result["tools"].items() if t["warnings"]] +
+                                        (["app"] if result["app"]["modified"] or result["app"]["missing"] else [])),
+                                    "pid": 0, "comm": "", "exe": "", "count": 0, "top_dir": "", "reasons": [], "sample": []})
+            self.broadcast({"event": "integrity", "integrity": result})
+            self.refresh_overall()
+            return True
+        finally:
+            self.integrity_running = False
+
+    def check_weekly_integrity(self):
+        if not self.settings.get("integrity_weekly"):
+            return
+        now = datetime.now()
+        if now.weekday() != int(self.settings.get("integrity_day")) or now.hour != int(self.settings.get("integrity_hour")):
+            return
+        last = self.state.get("last_integrity")
+        try:
+            if last and (now - datetime.fromisoformat(last)).days < 6:
+                return
+        except ValueError:
+            pass
+        threading.Thread(target=self.run_integrity, daemon=True).start()
+
+    @staticmethod
+    def public_vulns(vulns):
+        return {k: v for k, v in (vulns or {}).items() if k != "cache"}
+
+    # ── Couleur globale (icône du tray, vue simple) ──────────────────────
+    def compute_overall(self):
+        reasons = []
+        color = "green"
+
+        def raise_to(level, reason):
+            nonlocal color
+            order = {"green": 0, "yellow": 1, "blue": 2, "red": 3}
+            if order[level] > order[color]:
+                color = level
+            reasons.append(reason)
+
+        db = db_last_update()
+        age_days = (datetime.now() - db).days if db else 99
+        if age_days >= 2:
+            raise_to("red", "signatures_old")
+        elif age_days >= 1:
+            raise_to("blue", "signatures_stale")
+        sysst = self.state.get("system_status") or {}
+        if sysst.get("security"):
+            raise_to("red", "security_updates")
+        elif sysst.get("upgradable"):
+            raise_to("yellow", "updates")
+        if sysst.get("reboot_required"):
+            raise_to("yellow", "reboot")
+        sec = self.security or {}
+        ufw, ssh = sec.get("ufw", {}), sec.get("ssh", {})
+        if ufw.get("installed") and not ufw.get("active"):
+            raise_to("red", "firewall_off")
+        elif not ufw.get("installed"):
+            raise_to("red", "firewall_missing")
+        if ssh.get("active"):
+            raise_to("red" if not ufw.get("active") else "yellow", "ssh_exposed" if not ufw.get("active") else "ssh_active")
+        cutoff = time.time() - 86400
+        for a in (self.state.get("alerts") or [])[:20]:
+            try:
+                ts = datetime.fromisoformat(a.get("time", "")).timestamp()
+            except ValueError:
+                continue
+            if ts < cutoff:
+                continue
+            if a.get("severity") == "danger":
+                raise_to("red", "danger_alert")
+                break
+        if self.suspended:
+            raise_to("red", "suspended_process")
+        integ = self.state.get("integrity") or {}
+        if integ.get("warnings"):
+            raise_to("red", "integrity_warnings")
+        vulns = self.state.get("vulns") or {}
+        counts = vulns.get("counts") or {}
+        if counts.get("unfixed") or counts.get("pro_only"):
+            raise_to("blue", "open_vulns")
+        if vulns.get("flatpak") or vulns.get("snap"):
+            raise_to("yellow", "app_store_updates")
+        upd = self.state.get("app_update") or {}
+        if upd.get("available") and upd.get("verified"):
+            raise_to("yellow", "app_update")
+        pers = self.state.get("persistence") or {}
+        if (pers.get("counts") or {}).get("untrusted"):
+            raise_to("yellow", "unknown_persistence")
+        if not self.monitor.active and not TEST_MODE:
+            raise_to("yellow", "monitor_inactive")
+        return {"color": color, "reasons": reasons}
+
+    def refresh_overall(self):
+        new = self.compute_overall()
+        if new != self.overall:
+            self.overall = new
+            self.broadcast({"event": "overall", "overall": new})
+        return new
+
+    # ── Sessions administrateur ──────────────────────────────────────────
+    def is_unlocked(self, uid):
+        if uid == 0:
+            return True
+        exp = self.unlocked.get(uid, 0)
+        if exp and exp > time.time():
+            return True
+        self.unlocked.pop(uid, None)
+        return False
+
+    def admin_required(self, cmd, req, uid):
+        """Actions réservées à un administrateur authentifié (pkexec → unlock)."""
+        if cmd == "firewall_set":
+            return not req.get("enabled")
+        if cmd == "ssh_set":
+            return bool(req.get("enabled"))
+        if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools"):
+            return True
+        if cmd == "set_settings":
+            return bool(self.settings.get("family_mode"))
+        return False
+
     # ── Première installation / reprise automatique ──────────────────────
     def check_first_scan(self):
         """Programme le scan complet initial (et une MàJ avant si les bases manquent)."""
@@ -1437,12 +2499,19 @@ class Daemon:
                     threading.Thread(target=self.refresh_system_status, daemon=True).start()
                 if time.time() - self.last_security > 300:
                     self.refresh_security(force=True)
+                    self.refresh_overall()
+                if time.time() - self.last_daily > 86400 and not self.daily_running:
+                    threading.Thread(target=self.daily_tasks, daemon=True).start()
+                self.check_weekly_integrity()
+                for uid, exp in list(self.unlocked.items()):
+                    if exp < time.time():
+                        self.unlocked.pop(uid, None)
             except Exception as e:  # noqa: BLE001
                 log(f"Maintenance : {e}")
             self.shutdown.wait(60)
 
     # ── Statut ───────────────────────────────────────────────────────────
-    def status(self):
+    def status(self, uid=-1):
         with self.queue_lock:
             job = self.current.public() if self.current else None
             queue = [j.public() for j in self.queue]
@@ -1456,7 +2525,7 @@ class Daemon:
         sys_status = state.get("system_status") or {}
         return {
             "ok": True, "version": VERSION, "job": job, "queue": queue,
-            "state": {k: v for k, v in state.items() if k not in ("system_status", "alerts")},
+            "state": {k: v for k, v in state.items() if k not in ("system_status", "alerts", "vulns", "checklist", "integrity", "persistence", "app_update")},
             "resumable": resumable,
             "first_scan_pending": os.path.exists(FIRST_SCAN_FLAG),
             "db_last_update": db.isoformat(timespec="seconds") if db else None,
@@ -1468,6 +2537,20 @@ class Daemon:
             "usb_pending": self.usb.pending_list(),
             "settings": self.settings.snapshot(),
             "security": self.security or self.refresh_security(broadcast=False),
+            "overall": self.overall,
+            "unlocked": self.is_unlocked(uid) if uid >= 0 else False,
+            "family_mode": bool(self.settings.get("family_mode")),
+            "admin_groups": [g for g in uid_groups(uid) if g in ADMIN_GROUPS] if uid > 0 else [],
+            "suspended": list(self.suspended.values()),
+            "app_update": {k: v for k, v in (state.get("app_update") or {}).items() if k != "path"},
+            "vulns_summary": {k: (state.get("vulns") or {}).get(k) for k in ("checked_at", "counts", "by_priority", "ok", "error")}
+                              | {"flatpak": len((state.get("vulns") or {}).get("flatpak", [])), "snap": len((state.get("vulns") or {}).get("snap", []))}
+                              if state.get("vulns") else None,
+            "checklist_summary": {k: (state.get("checklist") or {}).get(k) for k in ("checked_at", "score", "grade")} if state.get("checklist") else None,
+            "integrity_summary": {"checked_at": (state.get("integrity") or {}).get("checked_at"),
+                                  "warnings": (state.get("integrity") or {}).get("warnings")} if state.get("integrity") else None,
+            "persistence_summary": (state.get("persistence") or {}).get("counts"),
+            "connections_active": self.connections.active,
             "alerts": (state.get("alerts") or [])[:10],
             "system_status": {k: sys_status.get(k) for k in
                               ("checked_at", "ok", "upgradable", "security", "cve_count",
@@ -1535,7 +2618,115 @@ class Daemon:
             return {"ok": True, "version": VERSION}
 
         if cmd == "status":
-            return self.status()
+            return self.status(uid)
+
+        if cmd == "unlock":
+            target = int(req.get("uid", -1))
+            if uid != 0 and not TEST_MODE:
+                return {"ok": False, "error": "forbidden"}
+            if target < 0:
+                return {"ok": False, "error": "invalid_uid"}
+            self.unlocked[target] = time.time() + UNLOCK_TTL
+            self.write_log(f"admin unlock uid {target}")
+            self.broadcast({"event": "unlocked", "uid": target, "ttl": UNLOCK_TTL})
+            return {"ok": True, "ttl": UNLOCK_TTL}
+
+        if cmd == "lock":
+            self.unlocked.pop(uid, None)
+            self.broadcast({"event": "locked", "uid": uid})
+            return {"ok": True}
+
+        if cmd == "auth_status":
+            return {"ok": True, "unlocked": self.is_unlocked(uid), "family_mode": bool(self.settings.get("family_mode")),
+                    "admin_groups": [g for g in uid_groups(uid) if g in ADMIN_GROUPS] if uid > 0 else []}
+
+        if self.admin_required(cmd, req, uid) and not self.is_unlocked(uid):
+            return {"ok": False, "error": "admin_required"}
+
+        if cmd == "overall":
+            return {"ok": True, "overall": self.refresh_overall()}
+
+        if cmd == "check_update":
+            info = self.check_app_update(force=True)
+            return {"ok": True, "update": {k: v for k, v in info.items() if k != "path"}}
+
+        if cmd == "install_update":
+            info = self.state.get("app_update") or {}
+            ok, detail = self.updater.install(info)
+            self.write_log(f"install update {info.get('version')}: {ok} {detail}")
+            return {"ok": ok, "error": "" if ok else "command_failed", "detail": detail}
+
+        if cmd == "app_integrity":
+            return {"ok": True, "integrity": app_integrity()}
+
+        if cmd == "vulns":
+            if req.get("refresh") and not self.daily_running:
+                threading.Thread(target=self.daily_tasks, kwargs={"force": True}, daemon=True).start()
+                return {"ok": True, "refreshing": True, "vulns": self.public_vulns(self.state.get("vulns"))}
+            return {"ok": True, "refreshing": self.daily_running, "vulns": self.public_vulns(self.state.get("vulns"))}
+
+        if cmd == "checklist":
+            if req.get("refresh"):
+                self.refresh_security(force=True, broadcast=False)
+                return {"ok": True, "checklist": self.refresh_checklist()}
+            return {"ok": True, "checklist": self.state.get("checklist")}
+
+        if cmd == "connections":
+            return {"ok": True, "connections": self.connections.snapshot()}
+
+        if cmd == "persistence":
+            if req.get("refresh"):
+                pers = collect_persistence()
+                self.state.update(persistence=pers)
+                return {"ok": True, "persistence": pers}
+            return {"ok": True, "persistence": self.state.get("persistence")}
+
+        if cmd == "integrity":
+            if req.get("run"):
+                started = not self.integrity_running
+                if started:
+                    threading.Thread(target=self.run_integrity, daemon=True).start()
+                return {"ok": True, "running": True, "started": started, "integrity": self.state.get("integrity")}
+            return {"ok": True, "running": self.integrity_running, "integrity": self.state.get("integrity")}
+
+        if cmd == "install_tools":
+            if TEST_MODE:
+                return {"ok": True, "detail": "test_mode"}
+            r = run_quiet(["systemd-run", "--unit", f"clamav-antivirus-tools-{int(time.time())}", "--collect", "--quiet",
+                           "-p", "Environment=DEBIAN_FRONTEND=noninteractive",
+                           "/bin/sh", "-c", "apt-get install -y rkhunter chkrootkit debsums"], timeout=30)
+            return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else "command_failed",
+                    "detail": ((r.stderr or "") + (r.stdout or "")).strip()[-200:]}
+
+        if cmd == "process_action":
+            try:
+                pid = int(req.get("pid"))
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "invalid_pid"}
+            info = self.suspended.get(pid)
+            if not info:
+                return {"ok": False, "error": "not_suspended"}
+            action = req.get("action")
+            try:
+                if action == "continue":
+                    os.kill(pid, signal.SIGCONT)
+                elif action in ("kill", "quarantine"):
+                    os.kill(pid, signal.SIGKILL)
+                    if action == "quarantine":
+                        exe = (info.get("exe") or "").replace(" (deleted)", "")
+                        if exe and os.path.isfile(exe) and not exe.startswith(("/usr/", "/bin/", "/sbin/", "/lib")):
+                            target = os.path.join(SYSTEM_QUARANTINE_DIR, os.path.basename(exe))
+                            shutil.move(exe, target)
+                            os.chmod(target, 0o600)
+                else:
+                    return {"ok": False, "error": "invalid_action"}
+            except OSError as e:
+                return {"ok": False, "error": "command_failed", "detail": str(e)}
+            self.suspended.pop(pid, None)
+            self.write_log(f"process {pid} ({info.get('comm')}): {action}")
+            self.broadcast({"event": "suspended", "suspended": list(self.suspended.values())})
+            self.refresh_overall()
+            return {"ok": True}
 
         if cmd == "scan":
             path = req.get("path", "/")
@@ -1596,6 +2787,7 @@ class Daemon:
             if changed:
                 self.write_log(f"settings: {', '.join(f'{k}={v}' for k, v in changed.items())}")
                 self.broadcast({"event": "settings", "settings": self.settings.snapshot()})
+                self.refresh_overall()
             return {"ok": True, "settings": self.settings.snapshot(), "changed": changed,
                     "applied": applied, "errors": errors}
 
@@ -1609,6 +2801,7 @@ class Daemon:
                 return {"ok": False, "error": "forbidden"}
             ok, text = self.security_command(cmd, req)
             self.refresh_security(force=True)
+            self.refresh_overall()
             return {"ok": ok, "error": "" if ok else "command_failed", "detail": text}
 
         if cmd == "alerts":
@@ -1737,7 +2930,7 @@ class Daemon:
             if req is None:
                 return
             if req.get("cmd") == "subscribe":
-                conn.send(self.status())
+                conn.send(self.status(uid))
                 sock.settimeout(5)   # ne jamais bloquer la diffusion sur un client lent
                 with self.sub_lock:
                     self.subscribers.append(conn)
@@ -1780,8 +2973,17 @@ class Daemon:
         threading.Thread(target=self.maintenance_loop, daemon=True, name="maintenance").start()
         self.monitor.start()
         self.network.start()
+        self.connections.start()
         self.usb.start()
-        threading.Thread(target=self.refresh_security, kwargs={"force": True, "broadcast": False}, daemon=True).start()
+        os.makedirs(UPDATES_DIR, exist_ok=True)
+
+        def warmup():
+            self.refresh_security(force=True, broadcast=False)
+            self.refresh_overall()
+            time.sleep(90)
+            if not self.shutdown.is_set():
+                self.daily_tasks()
+        threading.Thread(target=warmup, daemon=True).start()
 
         log(f"ClamAV Antivirus daemon v{VERSION} à l'écoute sur {DAEMON_SOCKET}"
             + (" (mode test)" if TEST_MODE else ""))
@@ -1838,6 +3040,11 @@ def client_request(kind, path="/"):
     if kind == "system-status":
         resp = daemon_request("system_status", timeout=3, refresh=True, force=True)
         print(json.dumps(resp, indent=2, ensure_ascii=False))
+        return 0 if resp.get("ok") else 1
+    if kind in ("check-update", "checklist", "vulns", "integrity", "connections", "persistence"):
+        cmd = {"check-update": "check_update"}.get(kind, kind)
+        resp = daemon_request(cmd, timeout=600, refresh=True, run=(kind == "integrity"))
+        print(json.dumps(resp, indent=2, ensure_ascii=False)[:20000])
         return 0 if resp.get("ok") else 1
 
     # S'abonner avant de lancer pour ne rater aucun événement

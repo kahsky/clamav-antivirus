@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""
+ClamAV Antivirus — déverrouillage administrateur.
+
+Lancé via pkexec (polkit demande le mot de passe d'un administrateur), ce script
+s'exécute en root et informe le service que l'utilisateur d'origine (PKEXEC_UID)
+est autorisé, pendant quelques minutes, à effectuer les actions réservées :
+désactiver le pare-feu, ouvrir un port, activer SSH, modifier les réglages en
+mode famille, installer une mise à jour.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from clamav_common import daemon_request  # noqa: E402
+
+uid = os.environ.get("PKEXEC_UID")
+if uid is None or not uid.isdigit():
+    print("PKEXEC_UID absent : ce programme doit être lancé via pkexec.", file=sys.stderr)
+    sys.exit(2)
+resp = daemon_request("unlock", timeout=5, uid=int(uid))
+if not resp.get("ok"):
+    print(f"Déverrouillage refusé : {resp.get('error')}", file=sys.stderr)
+    sys.exit(1)
+print(f"Session administrateur ouverte pour l'uid {uid} ({resp.get('ttl')} s).")

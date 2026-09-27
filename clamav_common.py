@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -84,6 +84,20 @@ DEFAULT_SETTINGS = {
     "weekly_scan": False,
     "weekly_scan_day": 6,
     "weekly_scan_hour": 12,
+    # Mode famille : réglages et actions sensibles réservés à un administrateur authentifié
+    "family_mode": False,
+    # Réponse automatique : suspendre (SIGSTOP) un programme jugé dangereux, puis demander
+    "auto_response": True,
+    # Connexions sortantes : programmes inconnus, listes d'IP malveillantes, géolocalisation
+    "connection_monitor": True,
+    "geoip_lookup": True,
+    # Vérification d'intégrité hebdomadaire (rkhunter, chkrootkit, debsums, fichiers de l'app)
+    "integrity_weekly": True,
+    "integrity_day": 6,
+    "integrity_hour": 13,
+    # Mises à jour de l'application (manifeste signé sur le dépôt Dukiwi)
+    "app_update_check": True,
+    "app_update_auto": False,
 }
 
 SETTINGS_LIMITS = {
@@ -92,6 +106,7 @@ SETTINGS_LIMITS = {
     "usb_auto_scan_max_gib": (1, 100000),
     "update_hour": (0, 23), "update_minute": (0, 59),
     "weekly_scan_day": (0, 6), "weekly_scan_hour": (0, 23),
+    "integrity_day": (0, 6), "integrity_hour": (0, 23),
 }
 
 

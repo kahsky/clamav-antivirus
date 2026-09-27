@@ -16,6 +16,9 @@ let alerts = [];
 let viewMode = 'simple';
 let securityStatus = null;
 let settingsData = null;
+let overall = null;
+let secData = { vulns: null, checklist: null, integrity: null, persistence: null, connections: null, app_update: null };
+let vulnFilter = 'unfixed';
 
 const RING_CIRC = 2 * Math.PI * 52;   // circonférence de l'anneau (r = 52)
 
@@ -77,6 +80,13 @@ function setLanguage(code) {
     renderAlerts();
     renderSecurity();
     renderSimpleView();
+    renderAdmin();
+    if (secData.checklist) renderChecklist();
+    if (secData.vulns) renderVulns();
+    if (secData.integrity) renderIntegrity();
+    if (secData.persistence) renderPersistence();
+    if (secData.connections) renderConnections();
+    renderAppUpdate();
     const btnUpdate = $('btnUpdate');
     if (btnUpdate) btnUpdate.textContent = isUpdating ? t('update.btn_running') : t('update.btn');
     const btnInstall = $('btnInstall');
@@ -125,6 +135,8 @@ function onBackendMessage(msg) {
         case 'alertsList':      alerts = data.alerts || []; renderAlerts(data.available !== false); break;
         case 'securityStatus':  onSecurityStatus(data); break;
         case 'settingsData':    onSettingsData(data); break;
+        case 'securityData':    onSecurityData(data); break;
+        case 'overall':         overall = data; renderSimpleView(); renderAdmin(); break;
         case 'error':           showToast(data.message, 'error'); break;
     }
 }
@@ -169,7 +181,215 @@ function switchTab(tabId) {
         sendToBackend({ action: 'get_security', refresh: true });
     } else if (tabId === 'settings') {
         loadSettings();
+    } else if (tabId === 'security') {
+        ['checklist', 'vulns', 'integrity', 'app_update'].forEach(k => loadSecurityData(k));
     }
+    if (tabId === 'system') { loadSecurityData('connections'); loadSecurityData('persistence'); }
+}
+
+
+// ─── Centre de sécurité ─────────────────────────────────────────────────────
+
+function loadSecurityData(type, refresh = false, run = false) {
+    if (type === 'vulns' && refresh) { $('btnVulnsRefresh').disabled = true; $('vulnsChecked').textContent = t('system.refreshing'); }
+    if (type === 'integrity' && run) { $('btnIntegrityRun').disabled = true; }
+    sendToBackend({ action: 'get_security_data', type, refresh, run });
+}
+
+function onSecurityData(data) {
+    const type = data.type;
+    if (type === 'integrity_running') { $('btnIntegrityRun').disabled = true; $('integrityList').innerHTML = `<p class="text-muted">${t('security.integrity.running')}</p>`; return; }
+    if (type === 'suspended') { if (lastStatus) { lastStatus.suspended = data.data; renderSimpleView(); } return; }
+    if (data.available === false) { renderSecurityUnavailable(type); return; }
+    secData[type] = data.data || null;
+    if (type === 'vulns') { renderVulns(data.refreshing); }
+    else if (type === 'checklist') renderChecklist();
+    else if (type === 'integrity') renderIntegrity(data.refreshing);
+    else if (type === 'persistence') renderPersistence();
+    else if (type === 'connections') renderConnections();
+    else if (type === 'app_update') renderAppUpdate();
+    renderSecurityBadge();
+}
+
+function renderSecurityUnavailable(type) {
+    const map = { vulns: 'vulnList', checklist: 'checklistList', integrity: 'integrityList', persistence: 'persistenceList', connections: 'connectionsList' };
+    if (map[type]) $(map[type]).innerHTML = `<p class="text-muted">${t('system.unavailable')}</p>`;
+    if (type === 'app_update') { $('appUpdateSummary').textContent = t('system.unavailable'); }
+}
+
+function renderSecurityBadge() {
+    const v = secData.vulns || (lastStatus && lastStatus.vulns_summary);
+    const counts = (v && v.counts) || {};
+    const n = (counts.unfixed || 0) + (counts.pro_only || 0);
+    const b = $('securityBadge');
+    if (n > 0) { b.textContent = n > 99 ? '99+' : n; b.style.display = ''; } else b.style.display = 'none';
+}
+
+function renderChecklist() {
+    const c = secData.checklist || null;
+    const banner = $('scoreBanner');
+    if (!c) { $('scoreValue').textContent = '—'; $('scoreGrade').textContent = ''; $('checklistList').innerHTML = `<p class="text-muted">${t('security.checklist.none_yet')}</p>`; return; }
+    banner.dataset.grade = c.grade || '';
+    $('scoreValue').textContent = c.score;
+    $('scoreGrade').textContent = c.grade || '';
+    $('scoreFill').style.strokeDashoffset = RING_CIRC * (1 - (c.score || 0) / 100);
+    $('scoreChecked').textContent = c.checked_at ? t('system.checked', { date: formatDateTime(c.checked_at), rel: formatRelative(c.checked_at) }) : '';
+    const items = c.items || [];
+    const counts = { ok: 0, warn: 0, fail: 0 };
+    items.forEach(i => { if (counts[i.status] !== undefined) counts[i.status]++; });
+    $('checklistCounts').textContent = t('security.checklist.counts', { ok: counts.ok, warn: counts.warn, fail: counts.fail });
+    const order = { fail: 0, warn: 1, unknown: 2, ok: 3, na: 4 };
+    $('checklistList').innerHTML = items.slice().sort((a, b) => order[a.status] - order[b.status] || b.weight - a.weight).map(i => `
+        <div class="check-item check-${i.status}">
+            <span class="check-icon">${i.status === 'ok' ? '✓' : i.status === 'fail' ? '✕' : i.status === 'warn' ? '!' : '?'}</span>
+            <div class="check-text">
+                <span class="check-title">${t(`check.${i.key}.title`)}</span>
+                <span class="check-detail">${t(`check.${i.key}.${i.status === 'ok' ? 'ok' : 'hint'}`)}${i.detail ? ` — ${escapeHtml(i.detail)}` : ''}</span>
+            </div>
+            <span class="check-weight">${i.weight}</span>
+        </div>`).join('');
+    const ports = c.ports || [];
+    $('portsList').innerHTML = ports.length ? ports.map(p => `<div class="port-item ${p.exposed ? 'exposed' : ''}"><span class="rule-to">${p.port}/${p.proto}</span><span class="rule-from">${escapeHtml(p.addr)}</span><span>${escapeHtml(p.process || '')}</span><span class="text-muted">${escapeHtml(p.service || '')}</span>${p.exposed ? `<span class="scope-badge scope-danger">${t('security.ports.exposed')}</span>` : `<span class="scope-badge scope-user">${t('security.ports.local')}</span>`}</div>`).join('') : `<p class="text-muted">${t('security.ports.none')}</p>`;
+}
+
+function setVulnFilter(f) {
+    vulnFilter = f;
+    document.querySelectorAll('#vulnFilter .seg-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+    renderVulns();
+}
+
+function renderVulns(refreshing = false) {
+    const v = secData.vulns;
+    $('btnVulnsRefresh').disabled = !!refreshing;
+    if (!v || !v.checked_at) { $('vulnsChecked').textContent = refreshing ? t('system.refreshing') : ''; $('vulnList').innerHTML = `<p class="text-muted">${refreshing ? t('system.refreshing') : t('security.vulns.none_yet')}</p>`; $('vulnSummary').innerHTML = ''; return; }
+    $('vulnsChecked').textContent = (refreshing ? t('system.refreshing') + ' · ' : '') + t('system.checked', { date: formatDateTime(v.checked_at), rel: formatRelative(v.checked_at) }) + (v.ok === false ? ` · ${t('security.vulns.error', { error: v.error || '' })}` : '');
+    const c = v.counts || {};
+    const bp = v.by_priority || {};
+    $('vulnSummary').innerHTML = [
+        ['unfixed', c.unfixed || 0, 'danger'], ['pro_only', c.pro_only || 0, 'warn'], ['fix_available', c.fix_available || 0, 'info'],
+    ].map(([k, n, cls]) => `<div class="stat ${n && cls === 'danger' ? 'has-threats' : n && cls === 'warn' ? 'has-warning' : ''}"><span class="stat-value">${formatNumber(n)}</span><span class="stat-label">${t(`security.vulns.${k === 'pro_only' ? 'pro' : k}`)}</span></div>`).join('')
+        + ['critical', 'high', 'medium', 'low'].map(pr => `<div class="stat"><span class="stat-value">${formatNumber(bp[pr] || 0)}</span><span class="stat-label">${t(`priority.${pr}`)}</span></div>`).join('')
+        + `<div class="stat"><span class="stat-value">${formatNumber(v.sources || 0)}</span><span class="stat-label">${t('security.vulns.sources')}</span></div>`;
+    const items = (v.items || []).filter(i => i.status === vulnFilter);
+    $('vulnList').innerHTML = items.length ? items.slice(0, 300).map(i => `
+        <div class="cve-item vuln-${i.status} prio-${i.priority}">
+            <div class="cve-head">
+                <a class="cve-id" href="#" onclick="sendToBackend({action:'open_url', url:'${escapeJs(i.url)}'}); return false;">${escapeHtml(i.cve)}</a>
+                <span class="scope-badge prio-badge prio-${i.priority}">${t(`priority.${i.priority}`) !== `priority.${i.priority}` ? t(`priority.${i.priority}`) : escapeHtml(i.priority)}</span>
+                <span class="scope-badge scope-system">${escapeHtml(i.package)}</span>
+                <span class="cve-versions">${escapeHtml(i.installed)}${i.fixed ? ` → ${escapeHtml(i.fixed)}` : ''}</span>
+                ${i.cvss ? `<span class="cve-versions">${escapeHtml(i.cvss)}</span>` : ''}
+            </div>
+            <div class="cve-title">${escapeHtml(i.summary || '')}</div>
+        </div>`).join('') + (items.length > 300 ? `<p class="text-muted">+${items.length - 300}</p>` : '') : `<p class="text-muted">${t('security.vulns.none_in_filter')}</p>`;
+    const store = [...(v.flatpak || []).map(x => ({ ...x, kind: 'Flatpak' })), ...(v.snap || []).map(x => ({ ...x, kind: 'Snap' }))];
+    $('storeUpdates').innerHTML = store.length ? `<h5 class="sub-title">${t('security.vulns.store_updates')}</h5>` + store.map(x => `<div class="package-item"><span class="package-name">${escapeHtml(x.name)}</span><span class="package-versions">${escapeHtml(x.id)} · ${escapeHtml(x.version)}</span><span class="scope-badge scope-user">${x.kind}</span></div>`).join('') : '';
+}
+
+function renderIntegrity(running = false) {
+    const it = secData.integrity;
+    $('btnIntegrityRun').disabled = !!running;
+    if (!it || !it.checked_at) { $('integrityList').innerHTML = `<p class="text-muted">${running ? t('security.integrity.running') : t('security.integrity.none_yet')}</p>`; $('btnInstallTools').hidden = true; return; }
+    const tools = it.tools || {};
+    const missing = Object.keys(tools).filter(k => !tools[k].installed);
+    $('btnInstallTools').hidden = !missing.length;
+    let html = `<div class="text-muted">${t('system.checked', { date: formatDateTime(it.checked_at), rel: formatRelative(it.checked_at) })}</div>`;
+    for (const [name, tl] of Object.entries(tools)) {
+        const st = !tl.installed ? 'unknown' : (tl.warnings || []).length ? 'warn' : 'ok';
+        html += `<div class="check-item check-${st}"><span class="check-icon">${st === 'ok' ? '✓' : st === 'warn' ? '!' : '?'}</span><div class="check-text"><span class="check-title">${escapeHtml(name)}</span><span class="check-detail">${!tl.installed ? t('security.integrity.not_installed') : (tl.warnings || []).length ? t('security.integrity.warnings', { n: tl.warnings.length }) : t('security.integrity.clean')}</span>${(tl.warnings || []).length ? `<details class="alert-sample"><summary>${t('popup.btn.details')}</summary>${tl.warnings.map(w => `<div>${escapeHtml(w)}</div>`).join('')}</details>` : ''}</div></div>`;
+    }
+    const app = it.app || {};
+    const appSt = !app.available ? 'unknown' : (app.modified || []).length || (app.missing || []).length ? 'fail' : 'ok';
+    html += `<div class="check-item check-${appSt}"><span class="check-icon">${appSt === 'ok' ? '✓' : appSt === 'fail' ? '✕' : '?'}</span><div class="check-text"><span class="check-title">${t('security.integrity.app')}</span><span class="check-detail">${!app.available ? t('security.integrity.app_no_manifest') : appSt === 'ok' ? t('security.integrity.app_ok', { n: app.count, signed: app.signed ? (app.verified ? t('security.integrity.signed_ok') : t('security.integrity.signed_bad')) : t('security.integrity.unsigned') }) : t('security.integrity.app_modified', { n: (app.modified || []).length + (app.missing || []).length })}</span>${(app.modified || []).concat(app.missing || []).length ? `<details class="alert-sample"><summary>${t('popup.btn.details')}</summary>${(app.modified || []).map(f => `<div>${escapeHtml(f)}</div>`).join('')}${(app.missing || []).map(f => `<div>${escapeHtml(f)} (${t('security.integrity.missing')})</div>`).join('')}</details>` : ''}</div></div>`;
+    $('integrityList').innerHTML = html;
+}
+
+function renderAppUpdate() {
+    const u = secData.app_update || (lastStatus && lastStatus.app_update) || null;
+    const card = $('cardAppUpdate');
+    const badge = $('appUpdateBadge');
+    const current = (u && u.current) || (lastStatus && lastStatus.version) || '';
+    if (!u || !u.checked_at) {
+        card.dataset.state = 'unknown'; badge.textContent = t('simple.unknown'); badge.className = 'badge';
+        $('appUpdateSummary').textContent = t('security.update.never', { current });
+        $('btnInstallUpdate').hidden = true;
+    } else if (u.error && !u.available) {
+        card.dataset.state = 'error'; badge.textContent = t('security.update.error_badge'); badge.className = 'badge badge-amber';
+        $('appUpdateSummary').textContent = t('security.update.error', { current, error: u.error.startsWith('download') ? t('security.update.unreachable') : u.error.startsWith('signature') ? t('security.update.bad_signature') : u.error });
+        $('btnInstallUpdate').hidden = true;
+    } else if (u.available) {
+        card.dataset.state = 'available'; badge.textContent = u.version; badge.className = 'badge badge-blue';
+        $('appUpdateSummary').textContent = t('security.update.available', { version: u.version, current, size: formatSize(u.size || 0), date: u.date ? formatDateTime(u.date) : '' }) + (u.verified ? ` · ${t('security.update.verified')}` : '');
+        $('btnInstallUpdate').hidden = !(u.verified && u.downloaded);
+    } else {
+        card.dataset.state = 'ok'; badge.textContent = t('security.update.uptodate_badge'); badge.className = 'badge badge-green';
+        $('appUpdateSummary').textContent = t('security.update.uptodate', { current, rel: formatRelative(u.checked_at) }) + (u.verified ? ` · ${t('security.update.verified')}` : '');
+        $('btnInstallUpdate').hidden = true;
+    }
+    $('appUpdateRepo').textContent = t('security.update.repo_hint');
+}
+
+function renderConnections() {
+    const c = secData.connections;
+    const el = $('connectionsList');
+    if (!c) { el.innerHTML = `<p class="text-muted">${t('system.unavailable')}</p>`; return; }
+    $('connectionsChecked').textContent = c.checked_at ? t('system.connections.checked', { rel: formatRelative(c.checked_at), n: c.blocklist_size || 0 }) : '';
+    const procs = c.processes || [];
+    el.innerHTML = procs.length ? procs.map(p => `
+        <div class="conn-item ${p.trusted === false ? 'untrusted' : ''}">
+            <div class="conn-head">
+                <span class="alert-program">${escapeHtml(p.comm)}</span>
+                <span class="alert-meta">pid ${p.pid}${p.user ? ` · ${escapeHtml(p.user)}` : ''}</span>
+                ${p.trusted === false ? `<span class="scope-badge scope-danger">${t('system.alert.untrusted')}</span>` : p.trusted ? `<span class="scope-badge scope-user">${t('system.connections.trusted')}</span>` : ''}
+                <span class="alert-exe conn-exe">${escapeHtml(p.exe || '')}</span>
+            </div>
+            <div class="conn-remotes">${Object.values(p.remotes || {}).map(r => `<span class="conn-remote ${r.flagged ? 'flagged' : ''}" title="${escapeHtml(r.org || '')}">${r.country ? `<span class="conn-flag">${escapeHtml(r.country)}</span>` : ''}${escapeHtml(r.ip)}:${(r.ports || []).join(',')}${r.org ? ` <em>${escapeHtml(r.org)}</em>` : ''}${r.flagged ? ` <strong>${t('system.connections.flagged')}</strong>` : ''}</span>`).join('')}</div>
+        </div>`).join('') : `<p class="text-muted">${t('system.connections.none')}</p>`;
+}
+
+function renderPersistence() {
+    const p = secData.persistence;
+    if (!p) { $('persistenceList').innerHTML = `<p class="text-muted">${t('system.unavailable')}</p>`; $('extensionsList').innerHTML = ''; return; }
+    $('persistenceChecked').textContent = p.checked_at ? t('system.checked', { date: formatDateTime(p.checked_at), rel: formatRelative(p.checked_at) }) : '';
+    const items = (p.items || []).slice().sort((a, b) => (a.trusted === b.trusted) ? a.kind.localeCompare(b.kind) : (a.trusted ? 1 : -1));
+    $('persistenceList').innerHTML = items.length ? items.slice(0, 200).map(i => `
+        <div class="package-item ${i.trusted ? '' : 'security'}">
+            <span class="scope-badge scope-user">${t(`persist.${i.kind}`) !== `persist.${i.kind}` ? t(`persist.${i.kind}`) : escapeHtml(i.kind)}</span>
+            <span class="package-name">${escapeHtml(i.name)}</span>
+            <span class="package-versions" title="${escapeHtml(i.path)}">${escapeHtml(i.exec || i.path)}</span>
+            ${i.user ? `<span class="alert-meta">${escapeHtml(i.user)}</span>` : ''}
+            ${i.trusted ? `<span class="scope-badge scope-user">${escapeHtml(i.owner || t('system.connections.trusted'))}</span>` : `<span class="scope-badge scope-danger">${t('system.persistence.unknown')}</span>`}
+        </div>`).join('') : `<p class="text-muted">${t('system.persistence.none')}</p>`;
+    const exts = p.extensions || [];
+    $('extensionsList').innerHTML = exts.length ? exts.map(e => `
+        <div class="package-item ${e.from_store ? '' : 'security'}">
+            <span class="scope-badge scope-user">${escapeHtml(e.browser)}</span>
+            <span class="package-name">${escapeHtml(e.name)}</span>
+            <span class="package-versions">${escapeHtml(e.id)} · ${escapeHtml(e.version)}${e.enabled === false ? ` · ${t('system.extensions.disabled')}` : ''}</span>
+            <span class="alert-meta">${escapeHtml(e.user)}</span>
+            ${e.from_store ? `<span class="scope-badge scope-user">${t('system.extensions.store')}</span>` : `<span class="scope-badge scope-danger">${t('system.extensions.outside_store')}</span>`}
+        </div>`).join('') : `<p class="text-muted">${t('system.extensions.none')}</p>`;
+}
+
+
+// ─── Session administrateur ─────────────────────────────────────────────────
+
+function renderAdmin() {
+    const pill = $('adminPill');
+    if (!pill) return;
+    const d = (lastStatus && lastStatus.daemon) || {};
+    pill.hidden = !d.available;
+    if (!d.available) return;
+    const unlocked = !!(lastStatus && lastStatus.unlocked);
+    const family = !!(lastStatus && lastStatus.family_mode);
+    $('adminText').textContent = unlocked ? t('admin.unlocked') : (family ? t('admin.locked_family') : t('admin.locked'));
+    pill.classList.toggle('unlocked', unlocked);
+    $('btnAdminToggle').textContent = unlocked ? t('admin.lock') : t('admin.unlock');
+}
+
+function toggleAdmin() {
+    if (lastStatus && lastStatus.unlocked) sendToBackend({ action: 'lock' });
+    else sendToBackend({ action: 'unlock' });
 }
 
 
@@ -229,14 +449,20 @@ function simpleOverall() {
     const sysRowState = sysState === 'security' ? 'danger' : (sysState === 'reboot' || sysState === 'updates') ? 'warn' : sysState === 'ok' ? 'ok' : 'neutral';
     bump(sysRowState === 'neutral' ? 'ok' : sysRowState);
     const sysLabels = { unknown: t('dash.system.unknown'), ok: t('dash.system.uptodate'), updates: t('dash.system.updates', { n: sys ? sys.upgradable : 0 }), security: t('dash.system.security', { n: sys ? sys.security : 0, cves: sys ? (sys.cve_count || 0) : 0 }), reboot: t('dash.system.reboot') };
-    rows.push({ state: sysRowState, label: t('simple.row.system'), value: sysLabels[sysState],
-        action: (sysState === 'security' || sysState === 'updates') ? { label: t('simple.update_system'), fn: "sendToBackend({action:'open_update_manager'})" } : null });
+    const vs = (lastStatus && lastStatus.vulns_summary) || null;
+    const openVulns = vs && vs.counts ? (vs.counts.unfixed || 0) + (vs.counts.pro_only || 0) : 0;
+    let sysValue = sysLabels[sysState];
+    if (sysState === 'ok' && openVulns) sysValue = t('simple.vulns_open', { n: openVulns });
+    rows.push({ state: sysRowState === 'ok' && openVulns ? 'warn' : sysRowState, label: t('simple.row.system'), value: sysValue,
+        action: (sysState === 'security' || sysState === 'updates') ? { label: t('simple.update_system'), fn: "sendToBackend({action:'open_update_manager'})" } : (openVulns ? { label: t('popup.btn.details'), fn: "setViewMode('advanced'); switchTab('security')" } : null) });
 
     // Menaces / quarantaine
     const danger = alerts.find(a => a.severity === 'danger');
     const lastScan = lastStatus && lastStatus.last_scan;
     let thrState = 'ok', thrValue = t('simple.threats.none');
-    if (danger) { thrState = 'danger'; thrValue = t('simple.threats.danger', { program: danger.comm || '?' }); }
+    const suspended = (lastStatus && lastStatus.suspended) || [];
+    if (suspended.length) { thrState = 'danger'; thrValue = t('simple.threats.suspended', { program: suspended[0].comm || '?' }); }
+    else if (danger) { thrState = 'danger'; thrValue = t('simple.threats.danger', { program: danger.comm || '?' }); }
     else if (lastScan && lastScan.infected > 0) { thrState = 'warn'; thrValue = t('simple.threats.quarantined', { n: lastScan.infected }); }
     bump(thrState);
     rows.push({ state: thrState, label: t('simple.row.threats'), value: thrValue,
@@ -248,7 +474,11 @@ function simpleOverall() {
 function renderSimpleView() {
     const view = $('simpleView');
     if (!view) return;
-    const { worst, rows } = simpleOverall();
+    let { worst, rows } = simpleOverall();
+    if (overall && overall.color) {
+        const map = { green: 'ok', yellow: 'warn', blue: 'warn', red: 'danger' };
+        worst = map[overall.color] || worst;
+    }
     view.dataset.state = worst;
     $('simpleTitle').textContent = t(`simple.title.${worst}`);
     $('simpleSub').textContent = t(`simple.sub.${worst}`);
@@ -417,6 +647,15 @@ function onSettingsData(data) {
     $('setUsbAuto').checked = sys.usb_auto_scan !== false;
     $('setUsbMax').value = sys.usb_auto_scan_max_gib ?? 128;
     $('setUpdateTime').value = `${String(sys.update_hour ?? 7).padStart(2, '0')}:${String(sys.update_minute ?? 0).padStart(2, '0')}`;
+    $('setFamilyMode').checked = !!sys.family_mode;
+    $('setAutoResponse').checked = sys.auto_response !== false;
+    $('setConnectionMonitor').checked = sys.connection_monitor !== false;
+    $('setGeoip').checked = sys.geoip_lookup !== false;
+    $('setIntegrityWeekly').checked = sys.integrity_weekly !== false;
+    $('setIntegrityDay').value = String(sys.integrity_day ?? 6);
+    $('setIntegrityHour').value = sys.integrity_hour ?? 13;
+    $('setAppUpdateCheck').checked = sys.app_update_check !== false;
+    $('setAppUpdateAuto').checked = !!sys.app_update_auto;
     $('setWeekly').checked = !!sys.weekly_scan;
     $('setWeeklyDay').value = String(sys.weekly_scan_day ?? 6);
     $('setWeeklyHour').value = sys.weekly_scan_hour ?? 12;
@@ -443,6 +682,15 @@ function saveSettings() {
         usb_auto_scan_max_gib: parseInt($('setUsbMax').value, 10) || 128,
         update_hour: isNaN(h) ? 7 : h, update_minute: isNaN(m) ? 0 : m,
         weekly_scan: $('setWeekly').checked,
+        family_mode: $('setFamilyMode').checked,
+        auto_response: $('setAutoResponse').checked,
+        connection_monitor: $('setConnectionMonitor').checked,
+        geoip_lookup: $('setGeoip').checked,
+        integrity_weekly: $('setIntegrityWeekly').checked,
+        integrity_day: parseInt($('setIntegrityDay').value, 10),
+        integrity_hour: parseInt($('setIntegrityHour').value, 10) || 0,
+        app_update_check: $('setAppUpdateCheck').checked,
+        app_update_auto: $('setAppUpdateAuto').checked,
         weekly_scan_day: parseInt($('setWeeklyDay').value, 10),
         weekly_scan_hour: parseInt($('setWeeklyHour').value, 10) || 0,
     };
@@ -463,6 +711,10 @@ function updateDashboardStatus(data) {
     if (data.lang && data.lang !== lang) setLanguage(data.lang);
     if (data.view_mode && data.view_mode !== viewMode) setViewMode(data.view_mode, false);
     if (data.security) securityStatus = data.security;
+    if (data.overall) overall = data.overall;
+    if (data.app_update && !secData.app_update) secData.app_update = data.app_update;
+    renderAdmin();
+    renderSecurityBadge();
     updateStatusUI(data.color, data.message);
     toggleInstallTab(!data.fully_installed);
 
@@ -758,6 +1010,31 @@ function renderAlerts(available = true) {
         return;
     }
     el.innerHTML = alerts.map(a => {
+        if (a.kind === 'connection') {
+            return `
+        <div class="alert-item ${a.severity === 'danger' ? 'alert-danger' : 'alert-info'}">
+            <div class="alert-head">
+                <span class="badge ${a.severity === 'danger' ? 'badge-red' : 'badge-amber'}">${a.flagged ? t('system.alert.blocklisted') : t('system.alert.connection')}</span>
+                <span class="alert-program">${escapeHtml(a.comm || '?')}</span>
+                <span class="alert-meta">${formatDateTime(a.time)} · pid ${a.pid}${a.user ? ` · ${escapeHtml(a.user)}` : ''}</span>
+            </div>
+            <div class="alert-body">${t('popup.connection.body', { program: escapeHtml(a.comm || '?'), ip: escapeHtml(a.ip || ''), port: escapeHtml(String(a.port || '')), where: escapeHtml([a.country, a.org].filter(Boolean).join(' · ') || '?') })}</div>
+            ${a.exe ? `<div class="alert-exe">${escapeHtml(a.exe)}</div>` : ''}
+            ${a.suspended ? `<div class="alert-actions"><button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'kill'})">${t('popup.btn.kill')}</button> <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'continue'})">${t('popup.btn.resume')}</button></div>` : ''}
+        </div>`;
+        }
+        if (a.kind === 'persistence' || a.kind === 'integrity' || a.kind === 'update') {
+            const titles = { persistence: t('popup.persistence.title'), integrity: t('popup.integrity.title'), update: t('popup.appupdate.title', { version: a.title || '' }) };
+            return `
+        <div class="alert-item ${a.severity === 'warn' ? 'alert-warn' : 'alert-info'}">
+            <div class="alert-head">
+                <span class="badge ${a.severity === 'warn' ? 'badge-amber' : 'badge-blue'}">${t(`system.alert.${a.kind}`)}</span>
+                <span class="alert-program">${escapeHtml(titles[a.kind])}</span>
+                <span class="alert-meta">${formatDateTime(a.time)}</span>
+            </div>
+            <div class="alert-body">${escapeHtml(a.kind === 'update' ? '' : a.title || '')}${a.detail ? ` — ${escapeHtml(a.detail)}` : ''}</div>
+        </div>`;
+        }
         if (a.kind === 'upload') {
             const procs = (a.processes || []).map(p => `${escapeHtml(p.name)} (${p.connections})`).join(', ');
             return `
@@ -786,7 +1063,7 @@ function renderAlerts(available = true) {
             ${reasons ? `<div class="alert-reasons">${escapeHtml(reasons)}</div>` : ''}
             ${infected.length ? `<div class="alert-infected">${infected.map(escapeHtml).join('<br>')}</div>` : ''}
             ${(a.sample || []).length ? `<details class="alert-sample"><summary>${t('system.alert.sample', { n: (a.sample || []).length })}</summary>${(a.sample || []).map(p => `<div>${escapeHtml(p)}</div>`).join('')}</details>` : ''}
-            <div class="alert-actions"><button class="btn btn-secondary btn-sm" onclick="startScan('${escapeJs(a.top_dir || '/')}')">${t('popup.btn.scan_folder')}</button></div>
+            <div class="alert-actions"><button class="btn btn-secondary btn-sm" onclick="startScan('${escapeJs(a.top_dir || '/')}')">${t('popup.btn.scan_folder')}</button>${a.suspended ? ` <button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'kill'})">${t('popup.btn.kill')}</button> <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'continue'})">${t('popup.btn.resume')}</button>` : ''}</div>
         </div>`;
     }).join('');
 }
@@ -1520,6 +1797,21 @@ function simulateBackend(data) {
         case 'security_action':
             reply('operationResult', { status: 'success', message: 'OK', op: data.action === 'security_action' ? 'security' : 'settings' });
             break;
+        case 'get_security_data': {
+            const now = new Date().toISOString();
+            const sim = {
+                checklist: { checked_at: now, score: 78, grade: 'B', ports: [{ proto: 'tcp', addr: '0.0.0.0', port: 22, process: 'sshd', service: 'ssh', exposed: true }, { proto: 'tcp', addr: '127.0.0.1', port: 631, process: 'cupsd', service: 'cups', exposed: false }],
+                    items: [{ key: 'firewall', status: 'ok', weight: 15, detail: 'deny/allow' }, { key: 'disk_encryption', status: 'warn', weight: 8, detail: '' }, { key: 'secure_boot', status: 'ok', weight: 5 }, { key: 'apparmor', status: 'ok', weight: 6 }, { key: 'auto_updates', status: 'warn', weight: 6 }, { key: 'security_updates', status: 'fail', weight: 12, detail: '2' }, { key: 'empty_passwords', status: 'ok', weight: 10 }, { key: 'nopasswd_sudo', status: 'ok', weight: 5 }, { key: 'open_ports', status: 'warn', weight: 8, detail: '22/tcp sshd' }, { key: 'signatures', status: 'ok', weight: 8, detail: '0 d' }, { key: 'realtime', status: 'ok', weight: 6 }, { key: 'open_vulns', status: 'warn', weight: 6, detail: '12 unfixed, 2 high/critical' }] },
+                vulns: { checked_at: now, ok: true, sources: 1480, counts: { unfixed: 12, pro_only: 3, fix_available: 5 }, by_priority: { high: 2, medium: 9, low: 9 }, flatpak: [{ id: 'org.gimp.GIMP', version: '3.2.7', name: 'GIMP' }], snap: [],
+                    items: [{ id: 'UBUNTU-CVE-2026-32741', cve: 'CVE-2026-32741', package: 'libheif', installed: '1.17.6-1ubuntu4', fixed: '', status: 'unfixed', priority: 'high', cvss: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H', summary: 'Heap buffer overflow when decoding crafted HEIF images', url: 'https://ubuntu.com/security/CVE-2026-32741' }, { id: 'x', cve: 'CVE-2026-54369', package: 'acl', installed: '2.3.2-1build1.1', fixed: '', status: 'unfixed', priority: 'medium', cvss: '', summary: 'Race condition in setfacl', url: '#' }, { id: 'y', cve: 'CVE-2026-63072', package: 'openssl', installed: '3.0.13-0ubuntu3.13', fixed: '3.0.13-0ubuntu3.15', status: 'fix_available', priority: 'medium', cvss: '', summary: 'Heap Buffer Overflow in CMS Key Unwrapping', url: '#' }, { id: 'z', cve: 'CVE-2025-1234', package: 'libxml2', installed: '2.9.14', fixed: '2.9.14+esm1', status: 'pro_only', priority: 'low', cvss: '', summary: 'Use-after-free in xmlXPath', url: '#' }] },
+                integrity: { checked_at: now, warnings: 1, tools: { rkhunter: { installed: true, ran: true, warnings: ['Warning: The file properties have changed: /usr/bin/ss'] }, chkrootkit: { installed: false, warnings: [] }, debsums: { installed: true, ran: true, warnings: [] } }, app: { available: true, signed: true, verified: true, modified: [], missing: [], count: 27 } },
+                persistence: { checked_at: now, counts: { items: 5, untrusted: 1, extensions: 2, ext_outside_store: 1 }, items: [{ kind: 'autostart', path: '/home/user/.config/autostart/Conky.desktop', name: 'Conky', exec: 'conky -d', user: 'user', trusted: false, owner: '' }, { kind: 'cron', path: '/etc/cron.daily/apt-compat', name: 'apt-compat', exec: '', trusted: true, owner: 'apt' }], extensions: [{ browser: 'chrome', user: 'user', id: 'abcd', name: 'uBlock Origin', version: '1.60', from_store: true, enabled: true }, { browser: 'chrome', user: 'user', id: 'efgh', name: 'Mystery Helper', version: '0.1', from_store: false, enabled: true }] },
+                connections: { checked_at: now, blocklist_size: 1234, processes: [{ pid: 5099, comm: 'chrome', exe: '/opt/google/chrome/chrome', user: 'user', trusted: true, remotes: { '140.82.112.26': { ip: '140.82.112.26', ports: ['443'], flagged: false, country: 'US', org: 'GitHub' } } }, { pid: 777, comm: 'miner', exe: '/tmp/miner', user: 'user', trusted: false, remotes: { '185.220.101.1': { ip: '185.220.101.1', ports: ['4444'], flagged: true, country: 'DE', org: 'Hetzner' } } }] },
+                app_update: { checked_at: now, current: '1.7.0', available: true, verified: true, downloaded: true, version: '1.8.0', size: 102400, date: now, error: '' },
+            };
+            reply('securityData', { type: data.type, data: sim[data.type], available: true });
+            break;
+        }
         case 'get_alerts':
             reply('alertsList', { available: true, alerts: [{ time: new Date().toISOString(), severity: 'danger', reasons: ['untrusted_home_burst'], pid: 4242, comm: 'cryptolocker', exe: '/home/user/Downloads/cryptolocker', cmdline: './cryptolocker', user: 'user', trusted: false, count: 120, home_count: 120, window: 15, sample: ['/home/user/Documents/a.docx.locked', '/home/user/Documents/b.xlsx.locked'], top_dir: '/home/user/Documents', infected_exe: [], infected_files: [] },
                                                             { time: new Date(Date.now() - 600e3).toISOString(), severity: 'info', reasons: [], pid: 1234, comm: 'apt', exe: '/usr/bin/apt', cmdline: 'apt upgrade', user: 'root', trusted: true, count: 340, home_count: 0, window: 15, sample: ['/usr/lib/x86_64-linux-gnu/libssl.so.3'], top_dir: '/usr/lib/x86_64-linux-gnu', infected_exe: [], infected_files: [] }] });

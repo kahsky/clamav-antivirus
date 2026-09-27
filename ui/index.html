@@ -115,6 +115,13 @@
                 <span data-i18n="nav.system">État du système</span>
                 <span class="nav-badge nav-badge-amber" id="systemBadge" style="display:none">0</span>
             </button>
+            <button class="nav-btn" data-tab="security" onclick="switchTab('security')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4"/><path d="M12 16h.01"/>
+                </svg>
+                <span data-i18n="nav.security">Sécurité</span>
+                <span class="nav-badge nav-badge-amber" id="securityBadge" style="display:none">0</span>
+            </button>
             <button class="nav-btn" data-tab="firewall" onclick="switchTab('firewall')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="18" height="4" rx="1"/><line x1="9" y1="4" x2="9" y2="8"/><line x1="15" y1="10" x2="15" y2="14"/><line x1="9" y1="16" x2="9" y2="20"/>
@@ -165,6 +172,10 @@
                 <span class="status-dot"></span>
                 <span class="status-text" data-i18n="sidebar.loading">Chargement…</span>
             </div>
+            <div class="admin-pill" id="adminPill" hidden>
+                <span class="admin-text" id="adminText"></span>
+                <button class="btn btn-mini" id="btnAdminToggle" onclick="toggleAdmin()"></button>
+            </div>
             <button class="btn btn-secondary btn-sm mode-btn" onclick="setViewMode('simple')" data-i18n="simple.simple_mode">Mode simple</button>
             <div class="lang-row">
                 <select id="langSelect" class="lang-select" onchange="changeLanguage(this.value)" aria-label="Language">
@@ -173,7 +184,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select>
-                <small class="version">v1.6.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a></small>
+                <small class="version">v1.7.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a></small>
             </div>
         </div>
     </aside>
@@ -675,6 +686,106 @@
                     <p class="text-muted" data-i18n="system.alerts.none">Aucune activité inhabituelle enregistrée</p>
                 </div>
             </div>
+
+            <div class="card card-connections">
+                <div class="card-title-row">
+                    <h4 data-i18n="system.connections.title">Connexions sortantes en cours</h4>
+                    <div class="log-actions-right">
+                        <span class="text-muted" id="connectionsChecked"></span>
+                        <button class="btn btn-secondary btn-sm" onclick="loadSecurityData('connections')" data-i18n="system.refresh">Actualiser</button>
+                    </div>
+                </div>
+                <p class="text-muted alerts-intro" data-i18n="system.connections.intro">Programmes connectés à Internet, avec pays et opérateur des adresses distantes. Un programme inconnu du système ou une adresse figurant sur les listes Feodo Tracker / SSLBL déclenche une alerte.</p>
+                <div id="connectionsList" class="connections-list"><p class="text-muted" data-i18n="sidebar.loading">Chargement…</p></div>
+            </div>
+
+            <div class="card card-persistence">
+                <div class="card-title-row">
+                    <h4 data-i18n="system.persistence.title">Démarrages automatiques et tâches planifiées</h4>
+                    <div class="log-actions-right">
+                        <span class="text-muted" id="persistenceChecked"></span>
+                        <button class="btn btn-secondary btn-sm" onclick="loadSecurityData('persistence', true)" data-i18n="system.refresh">Actualiser</button>
+                    </div>
+                </div>
+                <p class="text-muted alerts-intro" data-i18n="system.persistence.intro">Entrées d'autostart, unités systemd, tâches cron et fichiers de démarrage. Les entrées qui n'appartiennent à aucun paquet sont marquées « inconnu » ; toute nouvelle entrée déclenche une alerte.</p>
+                <div id="persistenceList" class="persistence-list"></div>
+                <h5 class="sub-title" data-i18n="system.extensions.title">Extensions de navigateur</h5>
+                <div id="extensionsList" class="persistence-list"></div>
+            </div>
+        </section>
+
+        <!-- ── CENTRE DE SÉCURITÉ ──────────────────────────────────── -->
+        <section class="tab-panel" id="tab-security">
+            <div class="page-header">
+                <h1 data-i18n="security.title">Sécurité</h1>
+                <p class="subtitle" data-i18n="security.subtitle">Score, failles ouvertes des programmes installés, intégrité du système et mises à jour de l'application</p>
+            </div>
+
+            <div class="score-banner" id="scoreBanner" data-grade="">
+                <div class="score-ring">
+                    <svg viewBox="0 0 120 120"><circle class="score-track" cx="60" cy="60" r="52"/><circle class="score-fill" id="scoreFill" cx="60" cy="60" r="52" stroke-dasharray="326.73" stroke-dashoffset="326.73"/></svg>
+                    <div class="score-center"><span class="score-value" id="scoreValue">—</span><span class="score-grade" id="scoreGrade"></span></div>
+                </div>
+                <div class="score-body">
+                    <h2 id="scoreTitle" data-i18n="security.score.title">Score de sécurité</h2>
+                    <p class="text-muted" id="scoreSub" data-i18n="security.score.sub">Calculé à partir de la checklist ci-dessous (pare-feu, chiffrement, mises à jour, comptes, ports, antivirus…).</p>
+                    <div class="score-actions">
+                        <button class="btn btn-secondary btn-sm" onclick="loadSecurityData('checklist', true)" data-i18n="system.refresh">Actualiser</button>
+                        <span class="text-muted" id="scoreChecked"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card card-checklist">
+                <div class="card-title-row"><h4 data-i18n="security.checklist.title">Checklist</h4><span class="text-muted" id="checklistCounts"></span></div>
+                <div id="checklistList" class="checklist-list"><p class="text-muted" data-i18n="sidebar.loading">Chargement…</p></div>
+                <details class="ports-details" id="portsDetails"><summary data-i18n="security.ports.title">Ports en écoute</summary><div id="portsList" class="ports-list"></div></details>
+            </div>
+
+            <div class="card card-vulns">
+                <div class="card-title-row">
+                    <h4 data-i18n="security.vulns.title">Failles connues des programmes installés</h4>
+                    <div class="log-actions-right">
+                        <span class="text-muted" id="vulnsChecked"></span>
+                        <button class="btn btn-secondary btn-sm" id="btnVulnsRefresh" onclick="loadSecurityData('vulns', true)" data-i18n="system.refresh">Actualiser</button>
+                    </div>
+                </div>
+                <p class="text-muted alerts-intro" data-i18n="security.vulns.intro">Comparaison des versions installées avec la base OSV.dev (données du suivi CVE d'Ubuntu). « Sans correctif » : aucune version corrigée n'existe encore pour votre distribution. « Ubuntu Pro » : le correctif n'est fourni qu'aux abonnés Ubuntu Pro. « Correctif disponible » : installez les mises à jour.</p>
+                <div class="vuln-summary" id="vulnSummary"></div>
+                <div class="segmented" id="vulnFilter">
+                    <button class="seg-btn active" data-filter="unfixed" onclick="setVulnFilter('unfixed')" data-i18n="security.vulns.unfixed">Sans correctif</button>
+                    <button class="seg-btn" data-filter="pro_only" onclick="setVulnFilter('pro_only')" data-i18n="security.vulns.pro">Ubuntu Pro</button>
+                    <button class="seg-btn" data-filter="fix_available" onclick="setVulnFilter('fix_available')" data-i18n="security.vulns.fix_available">Correctif disponible</button>
+                </div>
+                <div id="vulnList" class="vuln-list"><p class="text-muted" data-i18n="security.vulns.none_yet">Inventaire pas encore effectué.</p></div>
+                <div id="storeUpdates" class="store-updates"></div>
+            </div>
+
+            <div class="cards-grid">
+                <div class="card card-integrity">
+                    <div class="card-title-row">
+                        <h4 data-i18n="security.integrity.title">Intégrité et rootkits</h4>
+                        <button class="btn btn-secondary btn-sm" id="btnIntegrityRun" onclick="loadSecurityData('integrity', false, true)" data-i18n="security.integrity.run">Vérifier maintenant</button>
+                    </div>
+                    <p class="text-muted alerts-intro" data-i18n="security.integrity.intro">rkhunter et chkrootkit recherchent des rootkits, debsums compare les fichiers des paquets à leurs empreintes d'origine, et l'application vérifie ses propres fichiers grâce au manifeste signé livré dans le paquet.</p>
+                    <div id="integrityList" class="integrity-list"><p class="text-muted" data-i18n="security.integrity.none_yet">Aucune vérification effectuée.</p></div>
+                    <div class="fw-actions"><button class="btn btn-secondary btn-sm" id="btnInstallTools" onclick="sendToBackend({action:'install_tools'})" hidden data-i18n="security.integrity.install_tools">Installer rkhunter, chkrootkit et debsums</button></div>
+                </div>
+
+                <div class="card card-appupdate" id="cardAppUpdate" data-state="unknown">
+                    <div class="card-title-row">
+                        <h4 data-i18n="security.update.title">Mise à jour de l'application</h4>
+                        <span class="badge" id="appUpdateBadge">…</span>
+                    </div>
+                    <p class="text-muted" id="appUpdateSummary"></p>
+                    <p class="text-muted alerts-intro" data-i18n="security.update.intro">Les mises à jour proviennent du dépôt Dukiwi. Un manifeste signé (clé Ed25519 conservée hors ligne) indique la version, l'empreinte SHA-256 du paquet et celle de chaque fichier : une mise à jour non signée ou modifiée est refusée, même si le serveur était compromis.</p>
+                    <div class="fw-actions">
+                        <button class="btn btn-secondary btn-sm" onclick="loadSecurityData('app_update', true)" data-i18n="security.update.check">Vérifier</button>
+                        <button class="btn btn-primary btn-sm" id="btnInstallUpdate" onclick="sendToBackend({action:'install_update'})" hidden data-i18n="security.update.install">Installer la mise à jour</button>
+                    </div>
+                    <p class="text-muted" id="appUpdateRepo"></p>
+                </div>
+            </div>
         </section>
 
         <!-- ── PARE-FEU & SSH ──────────────────────────────────────── -->
@@ -778,6 +889,20 @@
                     <label class="setting-row"><span data-i18n="settings.burst.info">Info à partir de (fichiers)</span><input type="number" id="setBurstInfo" class="input-field input-sm" min="5" step="5"></label>
                     <label class="setting-row"><span data-i18n="settings.burst.danger">Danger à partir de (fichiers personnels, programme inconnu)</span><input type="number" id="setBurstDanger" class="input-field input-sm" min="5" step="5"></label>
                     <label class="setting-row"><span data-i18n="settings.burst.window">Fenêtre (secondes)</span><input type="number" id="setBurstWindow" class="input-field input-sm" min="5" max="600" step="5"></label>
+                </div>
+
+                <div class="card settings-card">
+                    <h4 data-i18n="settings.security">Sécurité et famille</h4>
+                    <label class="setting-row toggle"><span data-i18n="settings.family_mode">Mode famille : réglages et actions sensibles réservés à un administrateur</span><input type="checkbox" id="setFamilyMode"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.auto_response">Suspendre automatiquement un programme jugé dangereux, puis demander</span><input type="checkbox" id="setAutoResponse"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.connection_monitor">Surveiller les connexions sortantes</span><input type="checkbox" id="setConnectionMonitor"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.geoip">Géolocaliser les adresses distantes (ip-api.com)</span><input type="checkbox" id="setGeoip"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.integrity_weekly">Vérification d'intégrité hebdomadaire</span><input type="checkbox" id="setIntegrityWeekly"></label>
+                    <label class="setting-row"><span data-i18n="settings.schedule.weekly_day">Jour</span>
+                        <select id="setIntegrityDay" class="lang-select"><option value="0" data-i18n="day.mon">Lundi</option><option value="1" data-i18n="day.tue">Mardi</option><option value="2" data-i18n="day.wed">Mercredi</option><option value="3" data-i18n="day.thu">Jeudi</option><option value="4" data-i18n="day.fri">Vendredi</option><option value="5" data-i18n="day.sat">Samedi</option><option value="6" data-i18n="day.sun">Dimanche</option></select></label>
+                    <label class="setting-row"><span data-i18n="settings.schedule.weekly_hour">Heure</span><input type="number" id="setIntegrityHour" class="input-field input-sm" min="0" max="23"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.app_update_check">Rechercher les mises à jour de l'application</span><input type="checkbox" id="setAppUpdateCheck"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.app_update_auto">Installer automatiquement les mises à jour signées</span><input type="checkbox" id="setAppUpdateAuto"></label>
                 </div>
 
                 <div class="card settings-card">
@@ -918,7 +1043,7 @@
                         </svg>
                         <div>
                             <h3>ClamAV Antivirus</h3>
-                            <span class="credits-version">Version 1.6.0</span>
+                            <span class="credits-version">Version 1.7.0</span>
                         </div>
                     </div>
                     <p data-i18n="credits.app.p1">Interface graphique moderne pour ClamAV sur Linux. Conçue pour simplifier la gestion de votre antivirus : mise à jour des signatures, scans de répertoires, quarantaine automatique et surveillance système via un bouclier dans la barre des tâches.</p>
