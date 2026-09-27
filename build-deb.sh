@@ -8,7 +8,7 @@
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.4.0"
+VERSION="1.5.0"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -29,6 +29,7 @@ mkdir -p "${PKG_DIR}/usr/share/applications"
 mkdir -p "${PKG_DIR}/usr/share/nemo/actions"
 mkdir -p "${PKG_DIR}/etc/xdg/autostart"
 mkdir -p "${PKG_DIR}/lib/systemd/system"
+mkdir -p "${PKG_DIR}/lib/udev/rules.d"
 
 # ── Copy application files ──
 echo "[2/5] Copying application files..."
@@ -41,6 +42,8 @@ cp "${SCRIPT_DIR}/systemd/"*.timer                 "${PKG_DIR}/lib/systemd/syste
 cp "${SCRIPT_DIR}/ui/index.html"                    "${PKG_DIR}/opt/${APP_NAME}/ui/"
 cp "${SCRIPT_DIR}/ui/style.css"                     "${PKG_DIR}/opt/${APP_NAME}/ui/"
 cp "${SCRIPT_DIR}/ui/app.js"                        "${PKG_DIR}/opt/${APP_NAME}/ui/"
+cp "${SCRIPT_DIR}/ui/i18n.js"                       "${PKG_DIR}/opt/${APP_NAME}/ui/"
+cp "${SCRIPT_DIR}/udev/"*.rules                     "${PKG_DIR}/lib/udev/rules.d/"
 cp "${SCRIPT_DIR}/icons/"*.svg                      "${PKG_DIR}/opt/${APP_NAME}/icons/"
 cp "${SCRIPT_DIR}/clamav-antivirus.desktop"         "${PKG_DIR}/usr/share/applications/"
 cp "${SCRIPT_DIR}/clamav-antivirus-nemo.nemo_action" "${PKG_DIR}/usr/share/nemo/actions/"
@@ -61,8 +64,8 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
-Depends: python3 (>= 3.8), python3-gi, gir1.2-webkit2-4.1, gir1.2-appindicator3-0.1, gir1.2-gtk-3.0, policykit-1, clamav, clamav-daemon, clamav-freshclam, zenity, systemd
-Recommends: libnotify-bin
+Depends: python3 (>= 3.8), python3-gi, python3-pyudev, python3-apt, gir1.2-webkit2-4.1, gir1.2-appindicator3-0.1, gir1.2-gtk-3.0, policykit-1, clamav, clamav-daemon, clamav-freshclam, zenity, systemd, udev, udisks2
+Recommends: libnotify-bin, mintupdate | update-manager
 Maintainer: Dukiwi SA <info@dukiwi.ch>
 Homepage: https://dukiwi.ch
 Description: ClamAV Antivirus - Interface graphique ClamAV
@@ -70,6 +73,10 @@ Description: ClamAV Antivirus - Interface graphique ClamAV
  - Service système : scan complet et mises à jour sans mot de passe
  - Mises à jour planifiées tous les jours à 07:00 et 5 min après le démarrage
  - Scan complet automatique après la première installation
+ - Surveillance des rafales d'écritures (fanotify) et alerte "danger potentiel"
+ - Analyse des clés USB avant leur mise à disposition (question pour les disques)
+ - État du système : mises à jour de sécurité en attente et CVE associées
+ - Popups glissants en bas à droite, interface en français, anglais, allemand, italien
  - Scan rapide de répertoires avec progression détaillée
  - Quarantaine automatique des fichiers infectés
  - Icône bouclier dans la barre des tâches
@@ -100,6 +107,7 @@ if [ "$1" = "configure" ] && [ ! -f "$STATE_DIR/state.json" ]; then
 fi
 
 systemctl daemon-reload 2>/dev/null || true
+udevadm control --reload-rules 2>/dev/null || true
 systemctl enable clamav-antivirus-daemon.service 2>/dev/null || true
 systemctl enable clamav-antivirus-update.timer 2>/dev/null || true
 systemctl restart clamav-antivirus-daemon.service 2>/dev/null || true
@@ -123,6 +131,7 @@ echo ""
 echo "  Service système : clamav-antivirus-daemon (actif)"
 echo "  Mises à jour    : tous les jours à 07:00 et"
 echo "                    5 minutes après le démarrage"
+echo "  Surveillance    : écritures (fanotify), clés USB (udev)"
 if [ "$FIRST_INSTALL" = "1" ]; then
 echo "  Scan initial    : un scan complet du système va"
 echo "                    démarrer automatiquement."
@@ -155,6 +164,7 @@ cat > "${PKG_DIR}/DEBIAN/postrm" << 'EOF'
 #!/bin/bash
 set -e
 systemctl daemon-reload 2>/dev/null || true
+udevadm control --reload-rules 2>/dev/null || true
 if [ "$1" = "purge" ]; then
     rm -rf /var/lib/clamav-antivirus /var/log/clamav-antivirus /run/clamav-antivirus
 fi

@@ -8,15 +8,20 @@ sont déléguées au service système clamav-antivirus-daemon (root) via un sock
 Unix : aucun mot de passe n'est demandé. Si le service est absent, l'application
 se rabat sur pkexec (demande de mot de passe administrateur).
 
+L'application affiche aussi les notifications glissantes (popups en bas à droite)
+émises par le service : rafales d'écritures, danger potentiel, signatures à jour,
+scan terminé, analyse des clés USB, question pour les disques durs USB.
+
 (c) 2026 Dukiwi SA - Estavayer-le-Lac
 """
 
 import gi
 gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
 gi.require_version('WebKit2', '4.1')
 gi.require_version('AppIndicator3', '0.1')
 
-from gi.repository import Gtk, WebKit2, GLib, AppIndicator3
+from gi.repository import Gtk, Gdk, WebKit2, GLib, AppIndicator3
 import subprocess
 import threading
 import socket
@@ -30,10 +35,10 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from clamav_common import (  # noqa: E402
-    VERSION, DAEMON_ALLOWED_ROOTS, UPDATE_TIMER_UNIT, DAEMON_UNIT,
+    VERSION, DAEMON_ALLOWED_ROOTS, UPDATE_TIMER_UNIT, DAEMON_UNIT, LANGUAGES,
     daemon_connect, daemon_request, find_command, is_noise_line,
     classify_line, db_last_update, db_files_info, systemd_next_elapse,
-    systemd_is_active,
+    systemd_is_active, load_i18n, pick_language, t as translate,
 )
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
@@ -59,6 +64,15 @@ os.makedirs(QUARANTINE_DIR, exist_ok=True)
 
 def now_iso():
     return datetime.now().isoformat(timespec="seconds")
+
+
+def format_size(num):
+    num = float(num or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if num < 1024 or unit == "TB":
+            return f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
+        num /= 1024
+    return f"{num:.1f} TB"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -112,7 +126,6 @@ class DaemonClient:
     def __init__(self, on_event):
         self.on_event = on_event
         self.available = False
-        self.initial = None
         threading.Thread(target=self._loop, daemon=True, name="daemon-subscribe").start()
 
     @staticmethod
@@ -133,7 +146,6 @@ class DaemonClient:
                 time.sleep(5)
                 continue
             self.available = True
-            self.initial = initial
             GLib.idle_add(self.on_event, {"event": "connected", "status": initial})
             try:
                 while True:
@@ -153,7 +165,7 @@ class DaemonClient:
 def daemon_can_scan(path):
     """Le service accepte-t-il ce chemin pour l'utilisateur courant ?"""
     norm = os.path.normpath(path)
-    if norm in DAEMON_ALLOWED_ROOTS:
+    if norm in DAEMON_ALLOWED_ROOTS or norm.startswith(("/media/", "/mnt/")):
         return True
     return norm == HOME_DIR or norm.startswith(HOME_DIR.rstrip("/") + "/")
 
@@ -203,6 +215,10 @@ class LocalScan:
     def emit(self, event, data):
         GLib.idle_add(self.callback, event, data)
 
+    def done(self, status, key, params=None):
+        self.emit("done", {"status": status, "msg_key": key, "msg_params": params or {},
+                           "summary": self.summary()})
+
     def cancel(self):
         self.cancel_event.set()
         with self.proc_lock:
@@ -245,7 +261,7 @@ class LocalScan:
                         last = time.time()
         rc = self.proc.wait()
         if self.use_sudo and rc in (126, 127):
-            raise PermissionError("Authentification administrateur annulée ou refusée")
+            raise PermissionError("auth")
         return self.found
 
     def _resume_offset(self):
@@ -279,27 +295,24 @@ class LocalScan:
                     start_idx, resumed = idx, True
 
             if not resumed:
-                write_log(f"▶ Scan de {self.path}")
-                self.emit("line", {"kind": "info", "text": f"▶ Inventaire des fichiers de {self.path}…"})
+                write_log(f"▶ scan {self.path}")
+                self.emit("line", {"kind": "info", "text": f"▶ {self.path}"})
                 self.total = self._count()
                 if self.cancel_event.is_set():
                     self._save_progress(False)
-                    self.emit("done", {"status": "cancelled", "message": "Scan annulé pendant l'inventaire",
-                                       "summary": self.summary()})
+                    self.done("cancelled", "msg.scan.cancelled_counting")
                     return
                 self.scanned = 0
                 self.infected = 0
                 self._save_progress(True)
             else:
                 self.scanned = start_idx
-                self.emit("line", {"kind": "info",
-                                   "text": f"▶ Reprise du scan à {start_idx:,} / {self.total:,} fichiers".replace(",", " ")})
+                self.emit("line", {"kind": "info", "text": f"▶ {start_idx} / {self.total}"})
 
             if self.total == 0:
                 self._save_progress(False)
                 self._record("clean")
-                self.emit("done", {"status": "clean", "message": "Aucun fichier à analyser",
-                                   "summary": self.summary()})
+                self.done("clean", "msg.scan.nofiles")
                 return
 
             tmp_list = SCAN_FILES_CACHE + ".tmp"
@@ -310,8 +323,7 @@ class LocalScan:
 
             self.phase = "scanning"
             self.emit("progress", self.progress())
-            self.emit("line", {"kind": "info",
-                               "text": f"▶ {self.total:,} fichier(s) à analyser — démarrage de clamscan…".replace(",", " ")})
+            self.emit("line", {"kind": "info", "text": f"▶ clamscan × {self.total}"})
 
             prefix = ["pkexec"] if self.use_sudo else []
             cmd = prefix + ["nice", "-n", "5", "clamscan", "--verbose", "--suppress-ok-results",
@@ -359,10 +371,8 @@ class LocalScan:
 
             if self.cancel_event.is_set():
                 self._save_progress(True)
-                write_log(f"■ Scan interrompu à {self.scanned}/{self.total}")
-                self.emit("done", {"status": "cancelled",
-                                   "message": f"Scan interrompu à {self.scanned:,} / {self.total:,} fichiers — reprise possible".replace(",", " "),
-                                   "summary": self.summary()})
+                write_log(f"■ interrupted {self.scanned}/{self.total}")
+                self.done("cancelled", "msg.scan.cancelled", {"scanned": self.scanned, "total": self.total})
                 return
 
             self.scanned = self.total
@@ -373,22 +383,22 @@ class LocalScan:
             except OSError:
                 pass
             if self.use_sudo and rc in (126, 127):
-                raise PermissionError("Authentification administrateur annulée ou refusée")
+                raise PermissionError("auth")
             if rc not in (0, 1, 2):
                 self._record("error")
-                self.emit("done", {"status": "error", "message": f"clamscan a échoué (code {rc})",
-                                   "summary": self.summary()})
+                self.done("error", "msg.scan.failed", {"code": rc})
                 return
             status = "infected" if self.infected else "clean"
             self._record(status)
+            write_log(f"■ done: {self.infected} infected / {self.total} files")
             if self.infected:
-                msg = f"{self.infected} menace(s) détectée(s) — fichiers déplacés en quarantaine"
+                self.done("infected", "msg.scan.infected", {"count": self.infected})
             else:
-                msg = f"Aucune menace détectée sur {self.total:,} fichiers".replace(",", " ")
-            write_log(f"■ Scan terminé : {msg}")
-            self.emit("done", {"status": status, "message": msg, "summary": self.summary()})
-        except Exception as e:
-            self.emit("done", {"status": "error", "message": str(e), "summary": self.summary()})
+                self.done("clean", "msg.scan.clean", {"files": self.total})
+        except PermissionError:
+            self.done("error", "msg.auth_cancelled")
+        except Exception as e:  # noqa: BLE001
+            self.done("error", "msg.scan.internal", {"error": str(e)})
 
     def _record(self, status):
         duration = round(time.time() - self.started_at)
@@ -422,14 +432,16 @@ class ClamAVBackend:
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
                 )
                 for line in proc.stdout:
-                    GLib.idle_add(callback, "progress", line.strip())
+                    GLib.idle_add(callback, "progress", line.strip(), None)
                 proc.wait()
                 if proc.returncode == 0:
-                    GLib.idle_add(callback, "success", "ClamAV installé avec succès !")
+                    GLib.idle_add(callback, "success", "msg.install.success", {})
+                elif proc.returncode in (126, 127):
+                    GLib.idle_add(callback, "error", "msg.auth_cancelled", {})
                 else:
-                    GLib.idle_add(callback, "error", f"Erreur d'installation (code {proc.returncode})")
-            except Exception as e:
-                GLib.idle_add(callback, "error", str(e))
+                    GLib.idle_add(callback, "error", "msg.install.failed", {"code": proc.returncode})
+            except Exception as e:  # noqa: BLE001
+                GLib.idle_add(callback, "error", "msg.scan.internal", {"error": str(e)})
         threading.Thread(target=run, daemon=True).start()
 
     @staticmethod
@@ -438,13 +450,10 @@ class ClamAVBackend:
         def run():
             try:
                 update_script = (
-                    "echo '→ Arrêt du service clamav-freshclam...' && "
                     "systemctl stop clamav-freshclam 2>/dev/null || true && "
                     "sleep 1 && "
-                    "echo '→ Téléchargement des signatures...' && "
                     "freshclam --stdout 2>&1 ; "
                     "RETCODE=$? && "
-                    "echo '→ Redémarrage du service clamav-freshclam...' && "
                     "systemctl start clamav-freshclam 2>/dev/null || true && "
                     "exit $RETCODE"
                 )
@@ -452,18 +461,24 @@ class ClamAVBackend:
                     ["pkexec", "bash", "-c", update_script],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
                 )
+                output = []
                 for line in proc.stdout:
-                    GLib.idle_add(callback, "progress", line.strip())
+                    output.append(line.strip())
+                    GLib.idle_add(callback, "progress", line.strip(), None)
                 proc.wait()
                 if proc.returncode == 0:
                     save_state({"last_update": now_iso()})
-                    GLib.idle_add(callback, "success", "Base de données mise à jour !")
+                    changed = any("updated (" in line for line in output)
+                    db = db_last_update()
+                    GLib.idle_add(callback, "success",
+                                  "msg.update.updated" if changed else "msg.update.uptodate",
+                                  {"date": db.strftime("%d.%m.%Y %H:%M") if db else ""})
                 elif proc.returncode in (126, 127):
-                    GLib.idle_add(callback, "error", "Authentification administrateur annulée")
+                    GLib.idle_add(callback, "error", "msg.auth_cancelled", {})
                 else:
-                    GLib.idle_add(callback, "error", f"Erreur de mise à jour (code {proc.returncode})")
-            except Exception as e:
-                GLib.idle_add(callback, "error", str(e))
+                    GLib.idle_add(callback, "error", "msg.update.failed", {"code": proc.returncode})
+            except Exception as e:  # noqa: BLE001
+                GLib.idle_add(callback, "error", "msg.scan.internal", {"error": str(e)})
         threading.Thread(target=run, daemon=True).start()
 
     @staticmethod
@@ -493,18 +508,18 @@ class ClamAVBackend:
     @classmethod
     def delete_quarantine_file(cls, filepath):
         if not cls._in_quarantine(filepath):
-            return "error", "Chemin non autorisé"
+            return "error", "msg.forbidden", {}
         os.remove(filepath)
-        return "success", f"Fichier supprimé : {os.path.basename(filepath)}"
+        return "success", "msg.quarantine.deleted", {"name": os.path.basename(filepath)}
 
     @classmethod
     def restore_quarantine_file(cls, filepath, dest):
         if not cls._in_quarantine(filepath):
-            return "error", "Chemin non autorisé"
+            return "error", "msg.forbidden", {}
         if not os.path.isdir(dest):
-            return "error", "Dossier de destination introuvable"
+            return "error", "msg.restore_dest", {}
         shutil.move(filepath, os.path.join(dest, os.path.basename(filepath)))
-        return "success", f"Fichier restauré : {os.path.basename(filepath)}"
+        return "success", "msg.quarantine.restored", {"name": os.path.basename(filepath)}
 
     @staticmethod
     def empty_quarantine():
@@ -513,7 +528,7 @@ class ClamAVBackend:
             if f.is_file() and not f.name.startswith(".clamav-quarantine-lock"):
                 f.unlink()
                 count += 1
-        return "success", f"Quarantaine vidée — {count} fichier(s) supprimé(s)"
+        return "success", "msg.quarantine.emptied", {"count": count}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -536,25 +551,311 @@ def effective_last_update(daemon_status=None):
     return max(candidates) if candidates else None
 
 
-def get_protection_status(daemon_status=None):
-    """
-    - green : ClamAV installé + signatures < 1 jour
-    - blue  : signatures entre 1 et 2 jours
-    - red   : ClamAV absent, base absente ou signatures > 2 jours
-    """
+def get_protection_status(lang, daemon_status=None):
+    """(couleur, message) : vert < 1 jour, bleu < 2 jours, rouge sinon."""
+    def T(key, **p):
+        return translate(lang, key, **p)
     if not ClamAVBackend.is_installed():
-        return "red", "ClamAV non installé"
+        return "red", T("status.not_installed")
     last = effective_last_update(daemon_status)
     if not last:
-        return "red", "Base de données introuvable"
+        return "red", T("status.no_db")
     age = datetime.now() - last
     if age < timedelta(days=1):
         hours = int(age.total_seconds() // 3600)
-        return "green", f"Protégé — signatures à jour ({hours} h)" if hours else "Protégé — signatures à jour"
+        return "green", T("status.protected_h", hours=hours) if hours else T("status.protected")
     elif age < timedelta(days=2):
-        return "blue", f"Mise à jour recommandée — signatures d'il y a {age.days} j"
+        return "blue", T("status.update_recommended", days=age.days)
     else:
-        return "red", f"Non protégé — signatures d'il y a {age.days} j"
+        return "red", T("status.not_protected", days=age.days)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Popups glissants (bas à droite, sortent de derrière la barre des tâches)
+# ═══════════════════════════════════════════════════════════════════════════
+
+POPUP_CSS = b"""
+.popup-window { background-color: transparent; }
+.popup-card {
+    background-color: #111827;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 14px;
+    padding: 14px 16px;
+    color: #f1f5f9;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+}
+.popup-card.info    { border-color: rgba(59,130,246,0.55); }
+.popup-card.success { border-color: rgba(34,197,94,0.55); }
+.popup-card.danger  { border-color: rgba(239,68,68,0.75); background-color: #1a1116; }
+.popup-card.warning { border-color: rgba(245,158,11,0.6); }
+.popup-card.usb     { border-color: rgba(59,130,246,0.55); }
+.popup-title { font-weight: bold; font-size: 14px; color: #f1f5f9; }
+.popup-body  { font-size: 12px; color: #cbd5e1; }
+.popup-meta  { font-size: 11px; color: #94a3b8; }
+.popup-close { background: transparent; border: none; color: #94a3b8; padding: 0 4px; min-height: 0; min-width: 0; }
+.popup-close:hover { color: #f1f5f9; }
+.popup-btn { padding: 4px 12px; border-radius: 6px; font-size: 12px; background-color: #1f2b42; color: #f1f5f9; border: 1px solid rgba(255,255,255,0.1); }
+.popup-btn.primary { background-color: #16a34a; border-color: #16a34a; color: white; }
+.popup-btn.danger  { background-color: #dc2626; border-color: #dc2626; color: white; }
+.popup-progress trough { min-height: 6px; border-radius: 3px; background-color: rgba(255,255,255,0.08); border: none; }
+.popup-progress progress { min-height: 6px; border-radius: 3px; background-color: #3b82f6; border: none; }
+"""
+
+POPUP_ICONS = {
+    "info": "shield-blue", "success": "shield-green", "danger": "shield-red",
+    "warning": "shield-blue", "usb": "shield-blue",
+}
+
+
+class Popup(Gtk.Window):
+    WIDTH = 380
+    MARGIN = 16
+    GAP = 10
+
+    def __init__(self, manager, kind, title, body, buttons=None, progress=None,
+                 timeout=None, on_activate=None, key=None, meta=None):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.manager = manager
+        self.kind = kind
+        self.key = key
+        self.on_activate = on_activate
+        self.timeout = timeout
+        self.timeout_id = None
+        self.anim_id = None
+        self.target_y = 0
+        self.closing = False
+
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION)
+        self.set_keep_above(True)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_accept_focus(False)
+        self.set_focus_on_map(False)
+        self.stick()
+        self.set_default_size(self.WIDTH, -1)
+        self.set_size_request(self.WIDTH, -1)
+        self.get_style_context().add_class("popup-window")
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual and screen.is_composited():
+            self.set_visual(visual)
+            self.set_app_paintable(True)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        card.get_style_context().add_class("popup-card")
+        card.get_style_context().add_class(kind)
+        event_box = Gtk.EventBox()
+        event_box.set_visible_window(False)
+        event_box.add(card)
+        event_box.connect("button-press-event", self._on_click)
+        self.add(event_box)
+
+        icon = Gtk.Image.new_from_file(os.path.join(ICONS_DIR, f"{POPUP_ICONS.get(kind, 'shield-blue')}.svg"))
+        icon.set_pixel_size(36)
+        icon.set_valign(Gtk.Align.START)
+        card.pack_start(icon, False, False, 0)
+
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        card.pack_start(col, True, True, 0)
+
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.title_label = Gtk.Label(label=title, xalign=0)
+        self.title_label.set_line_wrap(True)
+        self.title_label.set_max_width_chars(34)
+        self.title_label.get_style_context().add_class("popup-title")
+        head.pack_start(self.title_label, True, True, 0)
+        close_btn = Gtk.Button(label="✕")
+        close_btn.get_style_context().add_class("popup-close")
+        close_btn.set_relief(Gtk.ReliefStyle.NONE)
+        close_btn.set_valign(Gtk.Align.START)
+        close_btn.connect("clicked", lambda *_: self.close())
+        head.pack_end(close_btn, False, False, 0)
+        col.pack_start(head, False, False, 0)
+
+        self.body_label = Gtk.Label(label=body, xalign=0)
+        self.body_label.set_line_wrap(True)
+        self.body_label.set_max_width_chars(40)
+        self.body_label.get_style_context().add_class("popup-body")
+        col.pack_start(self.body_label, False, False, 0)
+
+        self.meta_label = Gtk.Label(label=meta or "", xalign=0)
+        self.meta_label.set_line_wrap(True)
+        self.meta_label.set_max_width_chars(40)
+        self.meta_label.get_style_context().add_class("popup-meta")
+        self.meta_label.set_no_show_all(not meta)
+        col.pack_start(self.meta_label, False, False, 0)
+
+        self.progress_bar = Gtk.ProgressBar()
+        self.progress_bar.get_style_context().add_class("popup-progress")
+        self.progress_bar.set_no_show_all(progress is None)
+        if progress is not None:
+            self.progress_bar.set_fraction(max(0.0, min(1.0, progress)))
+        col.pack_start(self.progress_bar, False, False, 2)
+
+        if buttons:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            row.set_margin_top(6)
+            for label, style, callback in buttons:
+                btn = Gtk.Button(label=label)
+                btn.get_style_context().add_class("popup-btn")
+                if style:
+                    btn.get_style_context().add_class(style)
+                btn.connect("clicked", self._on_button, callback)
+                row.pack_start(btn, False, False, 0)
+            col.pack_start(row, False, False, 0)
+
+    # ── Interaction ──────────────────────────────────────────────────────
+    def _on_click(self, _widget, event):
+        if event.button == 1 and self.on_activate:
+            self.on_activate()
+            self.close()
+        return True
+
+    def _on_button(self, _btn, callback):
+        try:
+            if callback:
+                callback()
+        finally:
+            self.close()
+
+    def update(self, title=None, body=None, progress=None, meta=None):
+        if title is not None:
+            self.title_label.set_text(title)
+        if body is not None:
+            self.body_label.set_text(body)
+        if meta is not None:
+            self.meta_label.set_no_show_all(False)
+            self.meta_label.set_text(meta)
+            self.meta_label.show()
+        if progress is not None:
+            self.progress_bar.set_no_show_all(False)
+            self.progress_bar.show()
+            self.progress_bar.set_fraction(max(0.0, min(1.0, progress)))
+
+    # ── Animation ────────────────────────────────────────────────────────
+    def present_sliding(self, target_x, target_y, start_y):
+        self.target_y = target_y
+        self.move(target_x, start_y)
+        self.show_all()
+        self._animate(start_y, target_y, target_x, on_done=self._arm_timeout)
+
+    def slide_to(self, target_x, target_y):
+        if self.closing:
+            return
+        _cur_x, cur_y = self.get_position()
+        self.target_y = target_y
+        self._animate(cur_y, target_y, target_x)
+
+    def _animate(self, y0, y1, x, duration=0.32, on_done=None):
+        if self.anim_id:
+            GLib.source_remove(self.anim_id)
+            self.anim_id = None
+        start = time.monotonic()
+
+        def step():
+            p = min(1.0, (time.monotonic() - start) / duration)
+            eased = 1 - (1 - p) ** 3
+            self.move(x, int(round(y0 + (y1 - y0) * eased)))
+            if p >= 1.0:
+                self.anim_id = None
+                if on_done:
+                    on_done()
+                return False
+            return True
+        self.anim_id = GLib.timeout_add(16, step)
+
+    def _arm_timeout(self):
+        if self.timeout and not self.timeout_id:
+            self.timeout_id = GLib.timeout_add_seconds(int(self.timeout), self._timeout_close)
+
+    def _timeout_close(self):
+        self.timeout_id = None
+        self.close()
+        return False
+
+    def close(self):
+        if self.closing:
+            return
+        self.closing = True
+        if self.timeout_id:
+            GLib.source_remove(self.timeout_id)
+            self.timeout_id = None
+        x, y = self.get_position()
+        geo = self.manager.monitor_geometry()
+        self._animate(y, geo.y + geo.height + 10, x, duration=0.22, on_done=self._destroy)
+
+    def _destroy(self):
+        self.manager.forget(self)
+        self.destroy()
+
+
+class PopupManager:
+    """Empile les popups en bas à droite et les fait glisser depuis derrière la barre des tâches."""
+
+    def __init__(self):
+        self.popups = []
+        provider = Gtk.CssProvider()
+        provider.load_from_data(POPUP_CSS)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    @staticmethod
+    def _monitor():
+        display = Gdk.Display.get_default()
+        return display.get_primary_monitor() or display.get_monitor(0)
+
+    def monitor_geometry(self):
+        return self._monitor().get_geometry()
+
+    def workarea(self):
+        return self._monitor().get_workarea()
+
+    def show(self, popup):
+        # Un popup avec la même clé (ex. même clé USB) remplace le précédent
+        if popup.key:
+            for old in list(self.popups):
+                if old.key == popup.key:
+                    old.close()
+        self.popups.append(popup)
+        popup.show_all()
+        popup.hide()
+        height = popup.get_preferred_height()[1]
+        wa = self.workarea()
+        geo = self.monitor_geometry()
+        x = wa.x + wa.width - Popup.WIDTH - Popup.MARGIN
+        offset = sum(p.get_preferred_height()[1] + Popup.GAP
+                     for p in self.popups if p is not popup and not p.closing)
+        y = wa.y + wa.height - height - Popup.MARGIN - offset
+        popup.present_sliding(x, y, geo.y + geo.height)
+        return popup
+
+    def find(self, key):
+        for p in self.popups:
+            if p.key == key and not p.closing:
+                return p
+        return None
+
+    def close_key(self, key):
+        p = self.find(key)
+        if p:
+            p.close()
+
+    def forget(self, popup):
+        if popup in self.popups:
+            self.popups.remove(popup)
+        self.relayout()
+
+    def relayout(self):
+        wa = self.workarea()
+        x = wa.x + wa.width - Popup.WIDTH - Popup.MARGIN
+        offset = 0
+        for p in [p for p in self.popups if not p.closing]:
+            height = p.get_preferred_height()[1]
+            y = wa.y + wa.height - height - Popup.MARGIN - offset
+            p.slide_to(x, y)
+            offset += height + Popup.GAP
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -575,20 +876,20 @@ class TrayIcon:
         self.indicator.set_title("ClamAV Antivirus")
 
         menu = Gtk.Menu()
-        item_show = Gtk.MenuItem(label="Ouvrir ClamAV Antivirus")
-        item_show.connect("activate", self.on_show)
-        menu.append(item_show)
-
-        item_scan = Gtk.MenuItem(label="Scan complet du système")
-        item_scan.connect("activate", self.on_full_scan)
-        menu.append(item_scan)
-
-        item_update = Gtk.MenuItem(label="Mettre à jour les signatures")
-        item_update.connect("activate", self.on_update)
-        menu.append(item_update)
-
+        self.item_show = Gtk.MenuItem(label="")
+        self.item_show.connect("activate", self.on_show)
+        menu.append(self.item_show)
+        self.item_scan = Gtk.MenuItem(label="")
+        self.item_scan.connect("activate", self.on_full_scan)
+        menu.append(self.item_scan)
+        self.item_update = Gtk.MenuItem(label="")
+        self.item_update.connect("activate", self.on_update)
+        menu.append(self.item_update)
+        self.item_system = Gtk.MenuItem(label="")
+        self.item_system.connect("activate", self.on_system)
+        menu.append(self.item_system)
         menu.append(Gtk.SeparatorMenuItem())
-        self.item_status = Gtk.MenuItem(label="Statut : vérification...")
+        self.item_status = Gtk.MenuItem(label="")
         self.item_status.set_sensitive(False)
         menu.append(self.item_status)
         self.item_job = Gtk.MenuItem(label="")
@@ -596,24 +897,29 @@ class TrayIcon:
         self.item_job.set_no_show_all(True)
         menu.append(self.item_job)
         menu.append(Gtk.SeparatorMenuItem())
-
-        item_quit = Gtk.MenuItem(label="Quitter")
-        item_quit.connect("activate", self.on_quit)
-        menu.append(item_quit)
-
+        self.item_quit = Gtk.MenuItem(label="")
+        self.item_quit.connect("activate", self.on_quit)
+        menu.append(self.item_quit)
         menu.show_all()
         self.indicator.set_menu(menu)
 
+        self.relabel()
         self.update_status()
         GLib.timeout_add_seconds(300, self.update_status)
 
+    def relabel(self):
+        T = self.app.T
+        self.item_show.set_label(T("tray.open"))
+        self.item_scan.set_label(T("tray.full_scan"))
+        self.item_update.set_label(T("tray.update"))
+        self.item_system.set_label(T("tray.system"))
+        self.item_quit.set_label(T("tray.quit"))
+
     def update_status(self):
-        color, message = get_protection_status(self.app.last_daemon_status)
+        color, message = get_protection_status(self.app.lang, self.app.last_daemon_status)
         self.indicator.set_icon_full(os.path.join(ICONS_DIR, f"shield-{color}.svg"), message)
-        self.item_status.set_label(f"Statut : {message}")
-        if self.app.webview:
-            js = f'if(typeof updateTrayStatus==="function")updateTrayStatus({json.dumps(color)},{json.dumps(message)});'
-            self.app.webview.run_javascript(js, None, None, None)
+        self.item_status.set_label(self.app.T("tray.status", message=message))
+        self.app.run_js(f'if(typeof updateTrayStatus==="function")updateTrayStatus({json.dumps(color)},{json.dumps(message)});')
         return True
 
     def set_job(self, text):
@@ -634,19 +940,11 @@ class TrayIcon:
         self.app.window.present()
         self.app.run_js('if(typeof triggerUpdate==="function")triggerUpdate();')
 
+    def on_system(self, _):
+        self.app.show_tab("system")
+
     def on_quit(self, _):
         Gtk.main_quit()
-
-
-def notify(title, body, icon="shield-green"):
-    """Notification bureau (libnotify) — silencieuse si notify-send est absent."""
-    if not shutil.which("notify-send"):
-        return
-    try:
-        subprocess.Popen(["notify-send", "-a", "ClamAV Antivirus",
-                          "-i", os.path.join(ICONS_DIR, f"{icon}.svg"), title, body])
-    except OSError:
-        pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -654,7 +952,7 @@ def notify(title, body, icon="shield-green"):
 # ═══════════════════════════════════════════════════════════════════════════
 
 class ClamAVAntivirusApp:
-    """Fenêtre principale (WebKit2) + tray + pont vers le service système."""
+    """Fenêtre principale (WebKit2) + tray + popups + pont vers le service système."""
 
     def __init__(self, start_hidden=False):
         self.webview = None
@@ -663,6 +961,10 @@ class ClamAVAntivirusApp:
         self.updating = False
         self.last_daemon_status = None
         self.daemon_job = None
+        self.page_loaded = False
+        self.last_security_count = None
+        self.lang = pick_language(load_state().get("language"))
+        load_i18n()
 
         self.window = Gtk.Window(title="ClamAV Antivirus")
         self.window.set_default_size(1040, 720)
@@ -678,9 +980,11 @@ class ClamAVAntivirusApp:
         settings = self.webview.get_settings()
         settings.set_enable_developer_extras(True)
         settings.set_javascript_can_access_clipboard(True)
+        self.webview.connect("load-changed", self.on_load_changed)
         self.webview.load_uri(f"file://{os.path.join(UI_DIR, 'index.html')}")
         self.window.add(self.webview)
 
+        self.popups = PopupManager()
         self.tray = TrayIcon(self)
         self.daemon = DaemonClient(self.on_daemon_event)
 
@@ -690,10 +994,22 @@ class ClamAVAntivirusApp:
         else:
             self.window.present()
 
+    # ── Traduction ──────────────────────────────────────────────────────
+    def T(self, key, **params):
+        return translate(self.lang, key, **params)
+
+    def msg(self, key, params=None):
+        return self.T(key, **(params or {}))
+
     # ── Fenêtre ─────────────────────────────────────────────────────────
     def on_close(self, widget, event):
         self.window.hide()
         return True
+
+    def on_load_changed(self, _webview, load_event):
+        if load_event == WebKit2.LoadEvent.FINISHED:
+            self.page_loaded = True
+            self.run_js(f'if(typeof setLanguage==="function")setLanguage({json.dumps(self.lang)});')
 
     def run_js(self, js):
         if self.webview:
@@ -703,6 +1019,46 @@ class ClamAVAntivirusApp:
         payload = json.dumps({"event": event, "data": data}, ensure_ascii=False)
         self.run_js(f'if(typeof onBackendMessage==="function")onBackendMessage({payload});')
 
+    def show_tab(self, tab):
+        self.window.present()
+        self.run_js(f'if(typeof switchTab==="function")switchTab({json.dumps(tab)});')
+
+    # ── Popups ──────────────────────────────────────────────────────────
+    def popup(self, kind, title, body, **kwargs):
+        return self.popups.show(Popup(self.popups, kind, title, body, **kwargs))
+
+    def show_alert(self, alert):
+        T = self.T
+        severity = alert.get("severity", "info")
+        comm = alert.get("comm") or "?"
+        count = alert.get("count", 0)
+        top_dir = alert.get("top_dir") or "/"
+        meta_parts = []
+        if alert.get("exe"):
+            meta_parts.append(alert["exe"])
+        if alert.get("user"):
+            meta_parts.append(T("popup.alert.user", user=alert["user"]))
+        reasons = alert.get("reasons") or []
+        reason_text = ", ".join(T(f"alert.reason.{r}") for r in reasons if r)
+        if severity == "danger":
+            body = T("popup.alert.danger_body", program=comm, count=count, dir=top_dir)
+            if reason_text:
+                body += f"\n{reason_text}"
+            self.popup("danger", T("popup.alert.danger_title"), body,
+                       buttons=[(T("popup.btn.scan_folder"), "danger", lambda d=top_dir: self.request_scan(d)),
+                                (T("popup.btn.details"), None, lambda: self.show_tab("system"))],
+                       meta=" · ".join(meta_parts) or None,
+                       on_activate=lambda: self.show_tab("system"))
+        else:
+            body = T("popup.alert.body", program=comm, count=count, seconds=alert.get("window", 15), dir=top_dir)
+            self.popup("info", T("popup.alert.info_title"), body, timeout=14,
+                       meta=" · ".join(meta_parts) or None,
+                       on_activate=lambda: self.show_tab("system"))
+
+    def request_scan(self, path):
+        self.window.present()
+        self.run_js(f'if(typeof startScan==="function")startScan({json.dumps(path)});')
+
     # ── Événements du service système ───────────────────────────────────
     def on_daemon_event(self, ev):
         et = ev.get("event")
@@ -711,13 +1067,18 @@ class ClamAVAntivirusApp:
             job = self.last_daemon_status.get("job")
             if job:
                 self._daemon_job_started(job)
+            for usb in self.last_daemon_status.get("usb_pending") or []:
+                self.ask_usb(usb)
+            sys_status = self.last_daemon_status.get("system_status")
+            if sys_status:
+                self.last_security_count = sys_status.get("security")
             self.send_status()
         elif et == "disconnected":
             self.last_daemon_status = None
             if self.scan_source == "daemon":
                 self.scan_source = None
                 self.send_to_js("scanDone", {"status": "error", "source": "daemon",
-                                             "message": "Connexion au service système perdue"})
+                                             "message": self.T("msg.daemon_lost")})
             self.send_status()
         elif et == "job_started":
             self._daemon_job_started(ev.get("job") or {})
@@ -727,6 +1088,8 @@ class ClamAVAntivirusApp:
         elif et == "progress":
             if ev.get("kind") == "scan":
                 self.send_to_js("scanProgress", ev)
+                if ev.get("usb"):
+                    self.update_usb_popup(ev)
         elif et == "line":
             if self.daemon_job and self.daemon_job.get("kind") == "update":
                 self.send_to_js("updateLine", {"text": ev.get("text", "")})
@@ -734,44 +1097,198 @@ class ClamAVAntivirusApp:
                 self.send_to_js("scanLine", {"kind": ev.get("kind"), "text": ev.get("text", "")})
         elif et == "job_done":
             self._daemon_job_done(ev)
+        elif et == "alert":
+            self.show_alert(ev.get("alert") or {})
+            self.send_to_js("alertEvent", ev.get("alert") or {})
+        elif et == "usb_ask":
+            self.ask_usb(ev.get("usb") or {})
+        elif et == "usb_done":
+            self.usb_done(ev)
+        elif et == "usb_error":
+            usb = ev.get("usb") or {}
+            self.popup("warning", self.T("popup.usb.error_title"),
+                       self.T("popup.usb.error_body", name=self.usb_name(usb), error=ev.get("error", "")),
+                       timeout=20)
+        elif et == "usb_removed":
+            self.popups.close_key(f"usb:{ev.get('devnode')}")
+        elif et == "system_status":
+            status = ev.get("status") or {}
+            self.send_to_js("systemStatus", {"status": status, "refreshing": False, "available": True})
+            self.maybe_notify_security(status)
+        elif et == "system_status_refreshing":
+            self.send_to_js("systemStatus", {"status": None, "refreshing": True, "available": True})
         return False
 
     def _daemon_job_started(self, job):
         self.daemon_job = job
         if job.get("kind") == "scan":
             self.scan_source = "daemon"
-            self.tray.set_job(f"Scan en cours : {job.get('path')}")
+            self.tray.set_job(self.T("tray.scanning", path=job.get("path")))
             self.send_to_js("scanStarted", {"source": "daemon", "path": job.get("path"),
                                             "resume": job.get("resume"), "auto": job.get("auto"),
+                                            "usb": job.get("usb"),
                                             "started_at": job.get("started_at"), "job": job})
+            if job.get("usb"):
+                self.show_usb_progress(job)
         else:
             self.updating = True
-            self.tray.set_job("Mise à jour des signatures…")
+            self.tray.set_job(self.T("tray.updating"))
             self.send_to_js("updateStarted", {"source": "daemon", "auto": job.get("auto")})
 
     def _daemon_job_done(self, ev):
         self.daemon_job = None
         self.tray.set_job(None)
         status = ev.get("status")
+        message = self.msg(ev.get("msg_key", ""), ev.get("msg_params"))
         if ev.get("kind") == "scan":
             self.scan_source = None
-            self.send_to_js("scanDone", {"status": status, "message": ev.get("message"),
+            self.send_to_js("scanDone", {"status": status, "message": message,
                                          "summary": ev.get("summary", {}), "source": "daemon",
-                                         "auto": ev.get("auto"), "path": ev.get("path")})
-            if status == "infected":
-                notify("Menaces détectées", ev.get("message", ""), "shield-red")
-            elif status == "clean":
-                notify("Analyse terminée", ev.get("message", ""), "shield-green")
+                                         "auto": ev.get("auto"), "path": ev.get("path"),
+                                         "usb": ev.get("usb")})
+            if not ev.get("usb"):
+                self.notify_scan_result(status, message, ev.get("summary", {}))
         else:
             self.updating = False
-            self.send_to_js("operationResult", {"status": "success" if status == "success" else "error",
-                                                "message": ev.get("message"), "op": "update"})
-        # Rafraîchir l'état global
+            ok = status == "success"
+            self.send_to_js("operationResult", {"status": "success" if ok else "error",
+                                                "message": message, "op": "update"})
+            if ok:
+                self.popup("success", self.T("popup.update.title"), message, timeout=12,
+                           on_activate=lambda: self.show_tab("update"))
         st = DaemonClient.request("status")
         if st.get("ok"):
             self.last_daemon_status = st
         self.send_status()
         self.tray.update_status()
+
+    def notify_scan_result(self, status, message, summary):
+        T = self.T
+        path = (summary or {}).get("path") or ""
+        if status == "clean":
+            self.popup("success", T("popup.scan.clean_title"), message, timeout=12,
+                       meta=path, on_activate=lambda: self.show_tab("scan"))
+        elif status == "infected":
+            self.popup("danger", T("popup.scan.infected_title"), message, meta=path,
+                       buttons=[(T("popup.btn.quarantine"), "danger", lambda: self.show_tab("quarantine"))],
+                       on_activate=lambda: self.show_tab("quarantine"))
+
+    def maybe_notify_security(self, status):
+        count = status.get("security") or 0
+        previous = self.last_security_count
+        self.last_security_count = count
+        if count and count != previous:
+            self.popup("warning", self.T("popup.security.title"),
+                       self.T("popup.security.body", count=count, cves=status.get("cve_count") or 0),
+                       timeout=25,
+                       buttons=[(self.T("popup.btn.details"), "primary", lambda: self.show_tab("system"))],
+                       on_activate=lambda: self.show_tab("system"))
+
+    # ── USB ─────────────────────────────────────────────────────────────
+    @staticmethod
+    def usb_name(usb):
+        return usb.get("label") or usb.get("model") or usb.get("devnode") or "USB"
+
+    def show_usb_progress(self, job):
+        usb = job.get("usb") or {}
+        key = f"usb:{usb.get('devnode')}"
+        title = self.T("popup.usb.scanning_title", name=self.usb_name(usb))
+        return self.popup("usb", title, self.T("popup.usb.preparing"), key=key, progress=0.0,
+                          meta=f"{usb.get('devnode', '')} · {format_size(usb.get('size', 0))}",
+                          on_activate=lambda: self.show_tab("scan"))
+
+    def update_usb_popup(self, ev):
+        usb = ev.get("usb") or {}
+        p = self.popups.find(f"usb:{usb.get('devnode')}")
+        if not p:
+            return
+        if ev.get("phase") == "counting":
+            p.update(body=self.T("popup.usb.counting", found=ev.get("found", 0)))
+        elif ev.get("total"):
+            frac = ev.get("scanned", 0) / max(1, ev.get("total", 1))
+            p.update(body=self.T("popup.usb.progress", scanned=ev.get("scanned", 0),
+                                 total=ev.get("total", 0), infected=ev.get("infected", 0)),
+                     progress=frac)
+
+    def usb_done(self, ev):
+        usb = ev.get("usb") or {}
+        key = f"usb:{usb.get('devnode')}"
+        self.popups.close_key(key)
+        if ev.get("removed"):
+            return
+        name = self.usb_name(usb)
+        status = ev.get("status")
+        message = self.msg(ev.get("msg_key", ""), ev.get("msg_params"))
+        if status == "clean":
+            self.popup("success", self.T("popup.usb.clean_title", name=name), message, timeout=15)
+        elif status == "infected":
+            self.popup("danger", self.T("popup.usb.infected_title", name=name), message,
+                       buttons=[(self.T("popup.btn.quarantine"), "danger", lambda: self.show_tab("quarantine"))])
+        else:
+            self.popup("warning", self.T("popup.usb.done_title", name=name), message, timeout=15)
+        if usb.get("private_mount") and status in ("clean", "infected"):
+            # Le service a démonté la clé : la monter maintenant pour l'utilisateur et l'ouvrir
+            threading.Thread(target=self.mount_for_user, args=(usb, True, False), daemon=True).start()
+
+    def ask_usb(self, usb):
+        key = f"usb:{usb.get('devnode')}"
+        if self.popups.find(key):
+            return
+        name = self.usb_name(usb)
+        body = self.T("popup.usb.ask_body", name=name, size=format_size(usb.get("size", 0)),
+                      model=(usb.get("vendor", "") + " " + usb.get("model", "")).strip())
+        self.popup("usb", self.T("popup.usb.ask_title"), body, key=key,
+                   buttons=[(self.T("popup.btn.scan"), "primary", lambda: self.usb_decide(usb, True)),
+                            (self.T("popup.btn.no_scan"), None, lambda: self.usb_decide(usb, False))])
+
+    def usb_decide(self, usb, scan):
+        DaemonClient.request("usb_decision", devnode=usb.get("devnode", ""))
+        threading.Thread(target=self.mount_for_user, args=(usb, True, scan), daemon=True).start()
+
+    def mount_for_user(self, usb, open_after=True, scan_after=False):
+        """Monte le support via udisks (droits de l'utilisateur) et l'ouvre dans le gestionnaire de fichiers."""
+        devnode = usb.get("devnode", "")
+        mountpoint = None
+        try:
+            r = subprocess.run(["udisksctl", "mount", "-b", devnode], capture_output=True, text=True, timeout=60)
+            out = (r.stdout or "") + (r.stderr or "")
+            if " at " in out:
+                mountpoint = out.rsplit(" at ", 1)[1].strip().rstrip(".")
+        except Exception:  # noqa: BLE001
+            pass
+        if not mountpoint:
+            try:
+                r = subprocess.run(["findmnt", "-n", "-o", "TARGET", devnode], capture_output=True, text=True, timeout=10)
+                lines = (r.stdout or "").strip().splitlines()
+                mountpoint = lines[0].strip() if lines else None
+            except Exception:  # noqa: BLE001
+                mountpoint = None
+        if not mountpoint:
+            GLib.idle_add(self.popup, "warning", self.T("popup.usb.error_title"),
+                          self.T("popup.usb.mount_failed", name=self.usb_name(usb)))
+            return
+        if open_after:
+            try:
+                subprocess.Popen(["xdg-open", mountpoint])
+            except OSError:
+                pass
+        if scan_after:
+            resp = DaemonClient.request("scan", path=mountpoint, usb_devnode=devnode)
+            if not resp.get("ok"):
+                GLib.idle_add(self.send_to_js, "operationResult",
+                              {"status": "error", "message": self.daemon_error(resp)})
+
+    def daemon_error(self, resp):
+        err = resp.get("error", "")
+        if err == "busy":
+            busy = resp.get("busy") or {}
+            return self.T("msg.busy_update") if busy.get("kind") == "update" else \
+                self.T("msg.busy_scan", path=busy.get("path"))
+        key = {"forbidden": "msg.forbidden", "not_found": "msg.not_found", "idle": "msg.idle",
+               "restore_dest": "msg.restore_dest"}.get(err)
+        if key:
+            return self.T(key, path=resp.get("path", ""))
+        return err or self.T("msg.daemon_unavailable")
 
     # ── Scan local (callbacks) ──────────────────────────────────────────
     def on_local_scan_event(self, event, data):
@@ -784,11 +1301,9 @@ class ClamAVAntivirusApp:
             self.scan_source = None
             self.tray.set_job(None)
             data["source"] = "local"
+            data["message"] = self.msg(data.get("msg_key", ""), data.get("msg_params"))
             self.send_to_js("scanDone", data)
-            if data.get("status") == "infected":
-                notify("Menaces détectées", data.get("message", ""), "shield-red")
-            elif data.get("status") == "clean":
-                notify("Analyse terminée", data.get("message", ""), "shield-green")
+            self.notify_scan_result(data.get("status"), data["message"], data.get("summary", {}))
             self.send_status()
             self.tray.update_status()
         return False
@@ -802,13 +1317,24 @@ class ClamAVAntivirusApp:
             if handler:
                 handler(data)
             else:
-                self.send_to_js("error", {"message": f"Action inconnue : {action}"})
-        except Exception as e:
+                self.send_to_js("error", {"message": f"Unknown action: {action}"})
+        except Exception as e:  # noqa: BLE001
             self.send_to_js("error", {"message": str(e)})
 
     def act_check_status(self, _data):
         st = DaemonClient.request("status")
         self.last_daemon_status = st if st.get("ok") else None
+        self.send_status()
+
+    def act_set_language(self, data):
+        lang = data.get("lang")
+        if lang not in LANGUAGES:
+            return
+        save_state({"language": lang})
+        self.lang = lang
+        self.tray.relabel()
+        self.tray.update_status()
+        self.run_js(f'if(typeof setLanguage==="function")setLanguage({json.dumps(self.lang)});')
         self.send_status()
 
     def act_install(self, _data):
@@ -821,16 +1347,13 @@ class ClamAVAntivirusApp:
         if resp.get("ok"):
             self.updating = True
             self.send_to_js("updateStarted", {"source": "daemon", "queued": resp.get("queued", False)})
-            if resp.get("queued"):
-                self.send_to_js("updateLine", {"text": "→ En attente de la fin de l'opération en cours…"})
             return
         if not resp.get("unavailable"):
-            self.send_to_js("operationResult", {"status": "error", "message": resp.get("error"), "op": "update"})
+            self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp), "op": "update"})
             return
         # Service absent : pkexec (mot de passe)
         self.updating = True
         self.send_to_js("updateStarted", {"source": "local"})
-        self.send_to_js("updateLine", {"text": "→ Service système indisponible : authentification administrateur requise"})
         ClamAVBackend.update_database_pkexec(self.operation_callback)
 
     def act_scan(self, data):
@@ -838,10 +1361,10 @@ class ClamAVAntivirusApp:
         resume = bool(data.get("resume", False))
         full = path == "/"
         if self.scan_source or self.local_scan:
-            self.send_to_js("operationResult", {"status": "error", "message": "Un scan est déjà en cours"})
+            self.send_to_js("operationResult", {"status": "error", "message": self.T("msg.scan_running")})
             return
         if not os.path.isdir(path):
-            self.send_to_js("operationResult", {"status": "error", "message": f"Répertoire introuvable : {path}"})
+            self.send_to_js("operationResult", {"status": "error", "message": self.T("msg.not_found", path=path)})
             return
 
         # 1) Service système (root, sans mot de passe)
@@ -850,19 +1373,14 @@ class ClamAVAntivirusApp:
             if resp.get("ok"):
                 return  # l'événement job_started déclenchera scanStarted
             if not resp.get("unavailable"):
-                msg = resp.get("error", "Refusé par le service")
-                if resp.get("busy"):
-                    busy = resp["busy"]
-                    msg = ("Le service exécute déjà une mise à jour" if busy.get("kind") == "update"
-                           else f"Le service analyse déjà {busy.get('path')}")
-                self.send_to_js("operationResult", {"status": "error", "message": msg})
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
                 return
 
         # 2) Repli local : pkexec pour le scan complet, sinon droits de l'utilisateur
         use_sudo = full
         self.scan_source = "local"
         self.local_scan = LocalScan(path, self.on_local_scan_event, resume=resume, use_sudo=use_sudo)
-        self.tray.set_job(f"Scan en cours : {path}")
+        self.tray.set_job(self.T("tray.scanning", path=path))
         self.send_to_js("scanStarted", {"source": "local", "path": path, "resume": resume,
                                         "auto": False, "started_at": self.local_scan.started_at,
                                         "needs_password": use_sudo})
@@ -874,9 +1392,9 @@ class ClamAVAntivirusApp:
         elif self.scan_source == "daemon":
             resp = DaemonClient.request("cancel")
             if not resp.get("ok"):
-                self.send_to_js("operationResult", {"status": "error", "message": resp.get("error")})
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
         else:
-            self.send_to_js("operationResult", {"status": "info", "message": "Aucun scan en cours"})
+            self.send_to_js("operationResult", {"status": "info", "message": self.T("msg.idle")})
 
     def act_get_db_info(self, _data):
         self.send_to_js("dbInfo", {"files": db_files_info()})
@@ -915,41 +1433,46 @@ class ClamAVAntivirusApp:
         files.sort(key=lambda f: f.get("date", ""), reverse=True)
         return files
 
-    def _quarantine_result(self, status, message):
-        self.send_to_js("operationResult", {"status": status, "message": message, "op": "quarantine"})
+    def _quarantine_result(self, status, key, params):
+        self.send_to_js("operationResult", {"status": status, "message": self.msg(key, params), "op": "quarantine"})
         self.send_to_js("quarantineList", {"files": self._merged_quarantine()})
+
+    def _daemon_quarantine_result(self, resp):
+        if resp.get("ok"):
+            self._quarantine_result("success", resp.get("msg_key", ""), resp.get("msg_params"))
+        else:
+            self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp), "op": "quarantine"})
 
     def act_delete_quarantine(self, data):
         if data.get("scope") == "system":
-            resp = DaemonClient.request("quarantine_delete", path=data.get("path", ""))
-            self._quarantine_result("success" if resp.get("ok") else "error",
-                                    resp.get("message") or resp.get("error"))
+            self._daemon_quarantine_result(DaemonClient.request("quarantine_delete", path=data.get("path", "")))
         else:
             self._quarantine_result(*ClamAVBackend.delete_quarantine_file(data.get("path", "")))
 
     def act_restore_quarantine(self, data):
         dest = data.get("dest") or HOME_DIR
         if data.get("scope") == "system":
-            resp = DaemonClient.request("quarantine_restore", path=data.get("path", ""), dest=dest)
-            self._quarantine_result("success" if resp.get("ok") else "error",
-                                    resp.get("message") or resp.get("error"))
+            self._daemon_quarantine_result(DaemonClient.request("quarantine_restore", path=data.get("path", ""), dest=dest))
         else:
             self._quarantine_result(*ClamAVBackend.restore_quarantine_file(data.get("path", ""), dest))
 
     def act_empty_quarantine(self, _data):
-        status, message = ClamAVBackend.empty_quarantine()
+        status, key, params = ClamAVBackend.empty_quarantine()
+        message = self.msg(key, params)
         resp = DaemonClient.request("quarantine_empty")
         if resp.get("ok"):
-            message += " · " + resp.get("message", "")
-        self._quarantine_result(status, message)
+            message += " · " + self.msg(resp.get("msg_key", ""), resp.get("msg_params"))
+        self.send_to_js("operationResult", {"status": status, "message": message, "op": "quarantine"})
+        self.send_to_js("quarantineList", {"files": self._merged_quarantine()})
 
     def act_pick_folder(self, data):
         """Sélecteur de dossier natif GTK (chemin personnalisé, restauration)."""
         purpose = data.get("purpose", "scan")
         dialog = Gtk.FileChooserDialog(
-            title="Choisir un dossier", parent=self.window,
+            title=self.T("dialog.choose_folder"), parent=self.window,
             action=Gtk.FileChooserAction.SELECT_FOLDER)
-        dialog.add_buttons("Annuler", Gtk.ResponseType.CANCEL, "Choisir", Gtk.ResponseType.OK)
+        dialog.add_buttons(self.T("dialog.cancel"), Gtk.ResponseType.CANCEL,
+                           self.T("dialog.choose"), Gtk.ResponseType.OK)
         dialog.set_current_folder(data.get("start") or HOME_DIR)
         resp = dialog.run()
         path = dialog.get_filename() if resp == Gtk.ResponseType.OK else None
@@ -957,20 +1480,54 @@ class ClamAVAntivirusApp:
         self.send_to_js("folderPicked", {"path": path, "purpose": purpose,
                                          "extra": data.get("extra")})
 
+    def act_get_system_status(self, data):
+        resp = DaemonClient.request("system_status", refresh=bool(data.get("refresh")),
+                                    force=bool(data.get("force")))
+        if resp.get("ok"):
+            self.send_to_js("systemStatus", {"status": resp.get("status"),
+                                             "refreshing": bool(resp.get("refreshing")),
+                                             "available": True})
+        else:
+            self.send_to_js("systemStatus", {"status": None, "refreshing": False, "available": False})
+
+    def act_get_alerts(self, _data):
+        resp = DaemonClient.request("alerts")
+        self.send_to_js("alertsList", {"alerts": resp.get("alerts", []) if resp.get("ok") else [],
+                                       "available": bool(resp.get("ok"))})
+
+    def act_clear_alerts(self, _data):
+        DaemonClient.request("clear_alerts")
+        self.act_get_alerts({})
+
+    def act_open_update_manager(self, _data):
+        for cmd in (["mintupdate"], ["update-manager"], ["gnome-software", "--mode=updates"]):
+            if shutil.which(cmd[0]):
+                subprocess.Popen(cmd)
+                return
+        self.send_to_js("operationResult", {"status": "error", "message": self.T("msg.no_update_manager")})
+
+    def act_open_url(self, data):
+        url = data.get("url", "")
+        if url.startswith(("https://", "http://")):
+            subprocess.Popen(["xdg-open", url])
+
     def act_quit(self, _data):
         Gtk.main_quit()
 
     # ── Callbacks des opérations pkexec ─────────────────────────────────
-    def operation_callback(self, status, message):
+    def operation_callback(self, status, key_or_text, params):
         if status == "progress":
             if self.updating:
-                self.send_to_js("updateLine", {"text": message})
+                self.send_to_js("updateLine", {"text": key_or_text})
             else:
-                self.send_to_js("operationResult", {"status": "progress", "message": message})
+                self.send_to_js("operationResult", {"status": "progress", "message": key_or_text})
             return
+        message = self.msg(key_or_text, params)
         if self.updating:
             self.updating = False
             self.send_to_js("operationResult", {"status": status, "message": message, "op": "update"})
+            if status == "success":
+                self.popup("success", self.T("popup.update.title"), message, timeout=12)
         else:
             self.send_to_js("operationResult", {"status": status, "message": message, "op": "install"})
         if status == "success":
@@ -980,13 +1537,12 @@ class ClamAVAntivirusApp:
     # ── Statut global ───────────────────────────────────────────────────
     def send_status(self):
         ds = self.last_daemon_status if isinstance(self.last_daemon_status, dict) else None
-        color, message = get_protection_status(ds)
+        color, message = get_protection_status(self.lang, ds)
         installed = ClamAVBackend.is_installed()
         freshclam_installed = ClamAVBackend.is_freshclam_installed()
         state = load_state()
         dstate = (ds or {}).get("state") or {}
 
-        # Scan interrompu (local ou système) à proposer en reprise
         resumable = (ds or {}).get("resumable")
         if not resumable and not self.local_scan:
             try:
@@ -998,7 +1554,6 @@ class ClamAVAntivirusApp:
             except Exception:
                 pass
 
-        # Historique fusionné (local + système)
         history = list(state.get("history", [])) + list(dstate.get("history", []))
         history.sort(key=lambda e: e.get("date", ""), reverse=True)
         last_scan = history[0] if history else None
@@ -1010,6 +1565,7 @@ class ClamAVAntivirusApp:
         next_update = systemd_next_elapse(UPDATE_TIMER_UNIT)
 
         self.send_to_js("statusUpdate", {
+            "lang": self.lang,
             "color": color,
             "message": message,
             "installed": installed,
@@ -1030,11 +1586,14 @@ class ClamAVAntivirusApp:
                 "first_scan_pending": (ds or {}).get("first_scan_pending", False),
                 "queue": (ds or {}).get("queue", []),
                 "last_update_status": dstate.get("last_update_status"),
+                "monitor_active": (ds or {}).get("monitor_active", False),
+                "usb_active": (ds or {}).get("usb_active", False),
             },
+            "alerts": (ds or {}).get("alerts", []),
+            "system_status": (ds or {}).get("system_status"),
             "schedule": {
                 "next_update": next_update.isoformat(timespec="seconds") if next_update else None,
                 "timer_active": systemd_is_active(UPDATE_TIMER_UNIT),
-                "rule": "Tous les jours à 07:00 et 5 minutes après le démarrage",
             },
             "home": HOME_DIR,
             "version": VERSION,

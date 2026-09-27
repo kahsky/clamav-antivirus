@@ -12,7 +12,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -29,9 +29,37 @@ SYSTEM_LOG_FILE        = os.path.join(SYSTEM_LOG_DIR, "scan.log")
 
 CLAMAV_DB_DIR = "/var/lib/clamav"
 
+USB_MOUNT_ROOT         = os.path.join(os.path.dirname(DAEMON_SOCKET), "mnt")
+
 # Unités systemd
 UPDATE_TIMER_UNIT  = "clamav-antivirus-update.timer"
 DAEMON_UNIT        = "clamav-antivirus-daemon.service"
+
+# ─── Détection avancée ───────────────────────────────────────────────────────
+# Supports USB : en dessous de cette taille, scan automatique avant montage ;
+# au-dessus (disque dur USB), on demande à l'utilisateur.
+USB_AUTO_SCAN_MAX_BYTES = 128 * 1024 ** 3
+# Rafales d'écritures : un processus qui modifie autant de fichiers distincts
+# dans la fenêtre donnée déclenche une alerte (info, ou danger si suspect).
+BURST_WINDOW_SEC        = 15
+BURST_INFO_THRESHOLD    = 50
+BURST_DANGER_THRESHOLD  = 25      # fichiers du répertoire personnel, processus non fiable
+BURST_PID_COOLDOWN_SEC  = 600
+BURST_GLOBAL_COOLDOWN   = 30
+# Écritures ignorées par le moniteur (caches, journaux, fichiers temporaires)
+BURST_IGNORE_PREFIXES = (
+    "/proc/", "/sys/", "/dev/", "/run/", "/tmp/", "/var/tmp/", "/var/log/",
+    "/var/cache/", "/var/lib/apt/lists/", "/var/lib/clamav/", "/var/lib/clamav-antivirus/",
+    "/var/log/journal/", "/var/lib/systemd/", "/home/.ecryptfs/",
+)
+BURST_IGNORE_PARTS = (
+    "/.cache/", "/Cache/", "/cache2/", "/CachedData/", "/.local/share/Trash/",
+    "/.thumbnails/", "/node_modules/", "/.git/", "/__pycache__/", "/.npm/", "/.cargo/registry/",
+    "/.local/share/clamav-antivirus/", "/.config/Code/", "/.vscode/", "/.mozilla/firefox/",
+    "/.config/google-chrome/", "/.config/chromium/", "/.config/BraveSoftware/",
+)
+
+LANGUAGES = ("fr", "en", "de", "it")
 
 # ─── Chemins que le daemon accepte de scanner pour n'importe quel utilisateur ──
 # (en plus du répertoire personnel de l'utilisateur qui fait la demande)
@@ -157,6 +185,60 @@ def systemd_is_active(unit):
         return r.stdout.strip() == "active"
     except Exception:
         return False
+
+
+# ─── Internationalisation ────────────────────────────────────────────────────
+
+_I18N_CACHE = None
+
+
+def load_i18n():
+    """Charge ui/i18n.js (window.I18N = {...};) et retourne le dictionnaire par langue."""
+    global _I18N_CACHE
+    if _I18N_CACHE is not None:
+        return _I18N_CACHE
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui", "i18n.js")
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+        start, end = raw.index("{"), raw.rindex("}")
+        _I18N_CACHE = json.loads(raw[start:end + 1])
+    except Exception:
+        _I18N_CACHE = {}
+    return _I18N_CACHE
+
+
+def pick_language(preferred=None):
+    """Langue de l'interface : préférence explicite, sinon locale du système, sinon anglais."""
+    if preferred in LANGUAGES:
+        return preferred
+    for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(var)
+        if value:
+            code = value.split(":")[0].split("_")[0].split(".")[0].lower()
+            if code in LANGUAGES:
+                return code
+            if code and code != "c":
+                break
+    return "en"
+
+
+def t(lang, key, **params):
+    """Traduit une clé (repli : anglais, puis français, puis la clé elle-même)."""
+    i18n = load_i18n()
+    text = None
+    for candidate in (lang, "en", "fr"):
+        text = (i18n.get(candidate) or {}).get(key)
+        if text is not None:
+            break
+    if text is None:
+        text = key
+    if params:
+        try:
+            text = text.format(**params)
+        except (KeyError, IndexError, ValueError):
+            pass
+    return text
 
 
 def format_duration(seconds):

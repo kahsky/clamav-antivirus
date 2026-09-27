@@ -17,9 +17,23 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   **5 minutes après chaque démarrage** (timer systemd, rattrapage si l'ordinateur était éteint).
 - **Scan initial automatique** — un scan complet du système démarre tout seul après la
   première installation (repris automatiquement s'il est interrompu par un arrêt).
+- **Détection comportementale** — le service surveille (fanotify) les programmes qui
+  modifient beaucoup de fichiers en peu de temps : popup d'information (même pour le
+  système), ou **danger potentiel** si le programme est inconnu du système (hors paquet
+  dpkg, lancé depuis /tmp ou le home) ou si `clamd` reconnaît son exécutable / ses fichiers.
+- **Clés USB** — analysées **avant** leur mise à disposition (règle udev + montage privé par
+  le service), popup de progression, puis montage et ouverture automatiques. Les disques
+  durs USB (> 128 Gio) déclenchent une **question** « analyser ou non ».
+- **État du système** — mises à jour de sécurité en attente et **CVE** qu'elles corrigent
+  (extraites des changelogs apt), redémarrage requis, bouton vers le gestionnaire de
+  mises à jour, historique des alertes.
+- **Popups glissants** — en bas à droite, ils sortent de derrière la barre des tâches :
+  signatures à jour, scan terminé sans menace, menaces, activité inhabituelle, USB.
+- **Quatre langues** — français, anglais, allemand, italien (détection de la locale,
+  sélecteur dans la barre latérale).
 - **Scan moderne** — anneau de progression, étapes (inventaire → analyse), fichiers/s,
   temps restant estimé, menaces en direct, annulation et reprise, résumé de fin,
-  historique des analyses, notifications bureau.
+  historique des analyses.
 - **Scan rapide** — `/home`, `/etc`, `/var`, `/opt`, `/usr`, `/tmp` ou un dossier choisi
   via le sélecteur natif.
 - **Quarantaine** — fichiers infectés isolés (quarantaine système et quarantaine utilisateur).
@@ -31,7 +45,7 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.4.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.4.0_all.deb)
+[Télécharger clamav-antivirus_1.5.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.5.0_all.deb)
 
 ---
 
@@ -62,12 +76,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.4.0_all.deb`
+Résultat : `clamav-antivirus_1.5.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.4.0_all.deb
+sudo dpkg -i clamav-antivirus_1.5.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
@@ -96,9 +110,19 @@ sudo dpkg -r clamav-antivirus
 | `clamav-antivirus-update.service`  | Oneshot : demande la mise à jour au daemon (`--request update`)       |
 
 Le daemon accepte, de n'importe quel utilisateur local, un scan de `/` et des répertoires
-système (`/home`, `/etc`, `/var`, `/opt`, `/usr`, `/tmp`, `/boot`, `/root`, `/srv`) ainsi que
-de tout dossier situé dans le répertoire personnel du demandeur (identifié via `SO_PEERCRED`).
-Les autres chemins sont analysés localement avec les droits de l'utilisateur.
+système (`/home`, `/etc`, `/var`, `/opt`, `/usr`, `/tmp`, `/boot`, `/root`, `/srv`), des
+supports montés sous `/media` et `/mnt`, ainsi que de tout dossier situé dans le répertoire
+personnel du demandeur (identifié via `SO_PEERCRED`). Les autres chemins sont analysés
+localement avec les droits de l'utilisateur.
+
+| Fichier                                  | Rôle                                                              |
+|------------------------------------------|-------------------------------------------------------------------|
+| `/lib/udev/rules.d/80-clamav-antivirus-usb.rules` | Désactive le montage automatique udisks des périphériques USB **uniquement** quand le socket du service existe |
+| `ui/i18n.js`                             | Traductions FR/EN/DE/IT (JSON) partagées par la page et Python    |
+
+Seuils (dans `clamav_common.py`) : `USB_AUTO_SCAN_MAX_BYTES` (128 Gio), `BURST_WINDOW_SEC`
+(15 s), `BURST_INFO_THRESHOLD` (50 fichiers), `BURST_DANGER_THRESHOLD` (25 fichiers du home
+par un programme non fiable).
 
 Fichiers du service : état et quarantaine dans `/var/lib/clamav-antivirus/`, journal dans
 `/var/log/clamav-antivirus/scan.log`.
@@ -109,6 +133,7 @@ Client en ligne de commande (diagnostic) :
 /opt/clamav-antivirus/clamav-antivirus-daemon.py --request status
 /opt/clamav-antivirus/clamav-antivirus-daemon.py --request scan /home
 /opt/clamav-antivirus/clamav-antivirus-daemon.py --request update
+/opt/clamav-antivirus/clamav-antivirus-daemon.py --request system-status
 ```
 
 ---
@@ -150,10 +175,12 @@ clamav-antivirus/
 │   ├── clamav-antivirus-daemon.service
 │   ├── clamav-antivirus-update.service
 │   └── clamav-antivirus-update.timer # 07:00 quotidien + 5 min après le boot
+├── udev/80-clamav-antivirus-usb.rules # Analyse des clés USB avant montage
 ├── ui/
 │   ├── index.html                   # Interface HTML
 │   ├── style.css                    # Thème CSS (variables modifiables)
-│   └── app.js                       # Logique JS frontend
+│   ├── app.js                       # Logique JS frontend
+│   └── i18n.js                      # Traductions FR/EN/DE/IT
 ├── icons/
 │   ├── shield-green.svg             # Tray: protégé
 │   ├── shield-blue.svg              # Tray: MàJ dispo

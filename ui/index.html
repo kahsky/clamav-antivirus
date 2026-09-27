@@ -34,21 +34,28 @@
                     <rect x="3" y="14" width="7" height="7" rx="1"/>
                     <rect x="14" y="14" width="7" height="7" rx="1"/>
                 </svg>
-                Tableau de bord
+                <span data-i18n="nav.dashboard">Tableau de bord</span>
             </button>
             <button class="nav-btn" data-tab="scan" onclick="switchTab('scan')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="11" cy="11" r="8"/>
                     <path d="M21 21l-4.35-4.35"/>
                 </svg>
-                Scanner
+                <span data-i18n="nav.scan">Scanner</span>
                 <span class="nav-live" id="navScanLive" hidden></span>
             </button>
             <button class="nav-btn" data-tab="update" onclick="switchTab('update')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.66 0 3-4.03 3-9s-1.34-9-3-9m0 18c-1.66 0-3-4.03-3-9s1.34-9 3-9"/>
                 </svg>
-                Mises à jour
+                <span data-i18n="nav.update">Mises à jour</span>
+            </button>
+            <button class="nav-btn" data-tab="system" onclick="switchTab('system')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                </svg>
+                <span data-i18n="nav.system">État du système</span>
+                <span class="nav-badge nav-badge-amber" id="systemBadge" style="display:none">0</span>
             </button>
             <button class="nav-btn" data-tab="logs" onclick="switchTab('logs')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -57,7 +64,7 @@
                     <line x1="16" y1="13" x2="8" y2="13"/>
                     <line x1="16" y1="17" x2="8" y2="17"/>
                 </svg>
-                Journaux
+                <span data-i18n="nav.logs">Journaux</span>
             </button>
             <button class="nav-btn" data-tab="quarantine" onclick="switchTab('quarantine')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -65,7 +72,7 @@
                     <line x1="9" y1="9" x2="15" y2="15"/>
                     <line x1="15" y1="9" x2="9" y2="15"/>
                 </svg>
-                Quarantaine
+                <span data-i18n="nav.quarantine">Quarantaine</span>
                 <span class="nav-badge" id="quarantineBadge" style="display:none">0</span>
             </button>
             <button class="nav-btn" data-tab="install" onclick="switchTab('install')">
@@ -74,20 +81,28 @@
                     <polyline points="7,10 12,15 17,10"/>
                     <line x1="12" y1="15" x2="12" y2="3"/>
                 </svg>
-                Installation
+                <span data-i18n="nav.install">Installation</span>
             </button>
         </nav>
 
         <div class="sidebar-footer">
-            <div class="service-pill" id="servicePill" title="Service système clamav-antivirus-daemon">
+            <div class="service-pill" id="servicePill">
                 <span class="service-dot"></span>
-                <span class="service-text">Service : …</span>
+                <span class="service-text" data-i18n="sidebar.loading">Chargement…</span>
             </div>
             <div class="status-pill" id="statusPill">
                 <span class="status-dot"></span>
-                <span class="status-text">Chargement...</span>
+                <span class="status-text" data-i18n="sidebar.loading">Chargement…</span>
             </div>
-            <small class="version">v1.4.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;">Crédits</a></small>
+            <div class="lang-row">
+                <select id="langSelect" class="lang-select" onchange="changeLanguage(this.value)" aria-label="Language">
+                    <option value="fr">Français</option>
+                    <option value="en">English</option>
+                    <option value="de">Deutsch</option>
+                    <option value="it">Italiano</option>
+                </select>
+                <small class="version">v1.5.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a></small>
+            </div>
         </div>
     </aside>
 
@@ -103,21 +118,21 @@
             </div>
             <div class="scan-topbar-info">
                 <span class="pulse-dot"></span>
-                <span class="scan-topbar-title" id="scanTopbarTitle">Analyse en cours</span>
-                <span class="scan-topbar-count" id="scanTopbarCount">0 %</span>
+                <span class="scan-topbar-title" id="scanTopbarTitle"></span>
+                <span class="scan-topbar-count" id="scanTopbarCount"></span>
                 <span class="scan-topbar-sep">·</span>
                 <span class="scan-topbar-eta" id="scanTopbarEta"></span>
                 <span class="scan-topbar-file" id="scanTopbarFile"></span>
-                <button class="btn btn-mini" onclick="switchTab('scan')">Voir</button>
-                <button class="btn btn-mini btn-mini-danger" onclick="cancelScan()">Annuler</button>
+                <button class="btn btn-mini" onclick="switchTab('scan')" data-i18n="topbar.view">Voir</button>
+                <button class="btn btn-mini btn-mini-danger" onclick="cancelScan()" data-i18n="topbar.cancel">Annuler</button>
             </div>
         </div>
 
         <!-- ── DASHBOARD ────────────────────────────────────────────── -->
         <section class="tab-panel active" id="tab-dashboard">
             <div class="page-header">
-                <h1>Tableau de bord</h1>
-                <p class="subtitle">Vue d'ensemble de la protection</p>
+                <h1 data-i18n="dash.title">Tableau de bord</h1>
+                <p class="subtitle" data-i18n="dash.subtitle">Vue d'ensemble de la protection</p>
             </div>
 
             <div class="cards-grid">
@@ -139,17 +154,21 @@
                         </svg>
                     </div>
                     <div class="card-body">
-                        <h3 id="statusTitle">Vérification...</h3>
-                        <p id="statusMessage" class="text-muted">Analyse du statut en cours</p>
+                        <h3 id="statusTitle" data-i18n="status.checking">Vérification…</h3>
+                        <p id="statusMessage" class="text-muted"></p>
                     </div>
                     <div class="status-side">
                         <div class="status-side-item">
-                            <span class="status-side-label">Signatures</span>
+                            <span class="status-side-label" data-i18n="dash.status.signatures">Signatures</span>
                             <span class="status-side-value" id="statusDbAge">—</span>
                         </div>
                         <div class="status-side-item">
-                            <span class="status-side-label">Dernier scan</span>
+                            <span class="status-side-label" data-i18n="dash.status.last_scan">Dernier scan</span>
                             <span class="status-side-value" id="statusLastScan">—</span>
+                        </div>
+                        <div class="status-side-item">
+                            <span class="status-side-label" data-i18n="dash.status.system">Système</span>
+                            <span class="status-side-value" id="statusSystem">—</span>
                         </div>
                     </div>
                 </div>
@@ -158,8 +177,8 @@
                 <div class="card card-scan-live" id="dashScanLive" hidden onclick="switchTab('scan')">
                     <div class="scan-live-header">
                         <span class="pulse-dot"></span>
-                        <span id="dashScanTitle">Analyse en cours</span>
-                        <span class="scan-live-count" id="dashScanCount">0 %</span>
+                        <span id="dashScanTitle"></span>
+                        <span class="scan-live-count" id="dashScanCount"></span>
                     </div>
                     <div class="dash-progress-bar">
                         <div class="dash-progress-fill" id="dashProgressFill"></div>
@@ -170,10 +189,10 @@
                 <!-- Scan interrompu -->
                 <div class="card card-resume-scan" id="dashResumeScan" hidden>
                     <div class="card-body">
-                        <h4>Analyse interrompue</h4>
+                        <h4 data-i18n="dash.resume.title">Analyse interrompue</h4>
                         <p class="text-muted"><strong id="resumeScanPath"></strong> — <span id="resumeScanDetail"></span></p>
                     </div>
-                    <button class="btn btn-primary" onclick="resumeScan()">Reprendre</button>
+                    <button class="btn btn-primary" onclick="resumeScan()" data-i18n="dash.resume.btn">Reprendre</button>
                 </div>
 
                 <!-- Première utilisation -->
@@ -184,16 +203,16 @@
                         </svg>
                     </div>
                     <div class="card-body">
-                        <h3>Première utilisation — analyse initiale recommandée</h3>
-                        <p class="text-muted">Aucune analyse n'a encore été effectuée. Nous recommandons un scan complet pour vérifier l'intégrité de votre machine.</p>
-                        <button class="btn btn-primary" onclick="startFullSystemScan()">Lancer le scan complet</button>
+                        <h3 data-i18n="dash.initial.title">Première utilisation — analyse initiale recommandée</h3>
+                        <p class="text-muted" data-i18n="dash.initial.body">Aucune analyse n'a encore été effectuée. Nous recommandons un scan complet pour vérifier l'intégrité de votre machine.</p>
+                        <button class="btn btn-primary" onclick="startFullSystemScan()" data-i18n="dash.initial.btn">Lancer le scan complet</button>
                     </div>
                 </div>
 
                 <!-- Protection automatique -->
                 <div class="card card-protection" id="cardProtection">
                     <div class="card-title-row">
-                        <h4>Protection automatique</h4>
+                        <h4 data-i18n="dash.protection.title">Protection automatique</h4>
                         <span class="badge" id="daemonBadge">…</span>
                     </div>
                     <ul class="protection-list">
@@ -202,8 +221,9 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                             </span>
                             <div class="protection-text">
-                                <span class="protection-label">Service système</span>
-                                <span class="protection-value" id="protDaemon">Vérification…</span>
+                                <span class="protection-label" data-i18n="dash.protection.service">Service système</span>
+                                <span class="protection-value" id="protDaemon"></span>
+                                <span class="protection-sub" id="protMonitor"></span>
                             </div>
                         </li>
                         <li>
@@ -211,8 +231,8 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>
                             </span>
                             <div class="protection-text">
-                                <span class="protection-label">Recherche de mises à jour</span>
-                                <span class="protection-value" id="protSchedule">Tous les jours à 07:00 et 5 min après le démarrage</span>
+                                <span class="protection-label" data-i18n="dash.protection.updates">Recherche de mises à jour</span>
+                                <span class="protection-value" data-i18n="dash.protection.rule">Tous les jours à 07:00 et 5 minutes après le démarrage</span>
                                 <span class="protection-sub" id="protNextUpdate"></span>
                             </div>
                         </li>
@@ -221,8 +241,8 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
                             </span>
                             <div class="protection-text">
-                                <span class="protection-label">Dernière analyse</span>
-                                <span class="protection-value" id="protLastScan">Aucune</span>
+                                <span class="protection-label" data-i18n="dash.protection.last_scan">Dernière analyse</span>
+                                <span class="protection-value" id="protLastScan"></span>
                                 <span class="protection-sub" id="protLastScanSub"></span>
                             </div>
                         </li>
@@ -237,8 +257,8 @@
                             </svg>
                         </div>
                         <div class="card-body">
-                            <h3>Scan complet du système</h3>
-                            <p class="text-muted" id="fullScanHint">Sans mot de passe via le service système</p>
+                            <h3 data-i18n="dash.action.full_scan">Scan complet du système</h3>
+                            <p class="text-muted" id="fullScanHint"></p>
                         </div>
                         <svg class="card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
                     </div>
@@ -249,8 +269,8 @@
                             </svg>
                         </div>
                         <div class="card-body">
-                            <h3>Analyser un dossier</h3>
-                            <p class="text-muted">Répertoires rapides ou chemin personnalisé</p>
+                            <h3 data-i18n="dash.action.scan_folder">Analyser un dossier</h3>
+                            <p class="text-muted" data-i18n="dash.action.scan_folder_hint">Répertoires rapides ou chemin personnalisé</p>
                         </div>
                         <svg class="card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
                     </div>
@@ -261,8 +281,18 @@
                             </svg>
                         </div>
                         <div class="card-body">
-                            <h3>Mettre à jour</h3>
-                            <p class="text-muted">Actualiser les signatures maintenant</p>
+                            <h3 data-i18n="dash.action.update">Mettre à jour</h3>
+                            <p class="text-muted" data-i18n="dash.action.update_hint">Actualiser les signatures maintenant</p>
+                        </div>
+                        <svg class="card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                    </div>
+                    <div class="card-action" onclick="switchTab('system')">
+                        <div class="card-icon accent-red" id="dashSystemIcon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                        </div>
+                        <div class="card-body">
+                            <h3 data-i18n="dash.action.system">État du système</h3>
+                            <p class="text-muted" id="dashSystemHint"></p>
                         </div>
                         <svg class="card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
                     </div>
@@ -270,18 +300,18 @@
 
                 <div class="card card-history">
                     <div class="card-title-row">
-                        <h4>Historique des analyses</h4>
+                        <h4 data-i18n="dash.history.title">Historique des analyses</h4>
                         <span class="text-muted" id="historyCount"></span>
                     </div>
                     <div id="historyList" class="history-list">
-                        <p class="text-muted">Aucune analyse enregistrée</p>
+                        <p class="text-muted" data-i18n="dash.history.none">Aucune analyse enregistrée</p>
                     </div>
                 </div>
 
                 <div class="card card-info" id="cardDbInfo">
-                    <h4>Base de données virale</h4>
+                    <h4 data-i18n="dash.db.title">Base de données virale</h4>
                     <div id="dbInfoContent" class="db-info">
-                        <p class="text-muted">Chargement...</p>
+                        <p class="text-muted" data-i18n="sidebar.loading">Chargement…</p>
                     </div>
                 </div>
             </div>
@@ -290,8 +320,8 @@
         <!-- ── SCAN ─────────────────────────────────────────────────── -->
         <section class="tab-panel" id="tab-scan">
             <div class="page-header">
-                <h1>Scanner</h1>
-                <p class="subtitle">Analyse antivirus de votre système</p>
+                <h1 data-i18n="scan.title">Scanner</h1>
+                <p class="subtitle" data-i18n="scan.subtitle">Analyse antivirus de votre système</p>
             </div>
 
             <!-- Hero -->
@@ -316,29 +346,29 @@
 
                 <div class="scan-hero-body">
                     <div class="scan-hero-top">
-                        <h2 id="scanHeroTitle">Prêt à analyser</h2>
-                        <span class="badge" id="scanSourceBadge">Service système</span>
+                        <h2 id="scanHeroTitle"></h2>
+                        <span class="badge" id="scanSourceBadge"></span>
                     </div>
-                    <p class="scan-hero-sub" id="scanHeroSub">Lancez un scan complet ou choisissez un dossier ci-dessous.</p>
+                    <p class="scan-hero-sub" id="scanHeroSub"></p>
 
                     <ol class="scan-phases" id="scanPhases">
-                        <li data-phase="prepare"><span class="phase-dot"></span>Préparation</li>
-                        <li data-phase="counting"><span class="phase-dot"></span>Inventaire</li>
-                        <li data-phase="scanning"><span class="phase-dot"></span>Analyse</li>
-                        <li data-phase="done"><span class="phase-dot"></span>Terminé</li>
+                        <li data-phase="prepare"><span class="phase-dot"></span><span data-i18n="scan.phase.prepare">Préparation</span></li>
+                        <li data-phase="counting"><span class="phase-dot"></span><span data-i18n="scan.phase.counting">Inventaire</span></li>
+                        <li data-phase="scanning"><span class="phase-dot"></span><span data-i18n="scan.phase.scanning">Analyse</span></li>
+                        <li data-phase="done"><span class="phase-dot"></span><span data-i18n="scan.phase.done">Terminé</span></li>
                     </ol>
 
                     <div class="scan-stats">
-                        <div class="stat"><span class="stat-value" id="statScanned">0</span><span class="stat-label">Fichiers analysés</span></div>
-                        <div class="stat"><span class="stat-value" id="statTotal">—</span><span class="stat-label">Fichiers au total</span></div>
-                        <div class="stat stat-threat"><span class="stat-value" id="statThreats">0</span><span class="stat-label">Menaces</span></div>
-                        <div class="stat"><span class="stat-value" id="statElapsed">0 s</span><span class="stat-label">Temps écoulé</span></div>
-                        <div class="stat"><span class="stat-value" id="statEta">—</span><span class="stat-label">Temps restant</span></div>
-                        <div class="stat"><span class="stat-value" id="statSpeed">—</span><span class="stat-label">Fichiers / s</span></div>
+                        <div class="stat"><span class="stat-value" id="statScanned">0</span><span class="stat-label" data-i18n="scan.stat.scanned">Fichiers analysés</span></div>
+                        <div class="stat"><span class="stat-value" id="statTotal">—</span><span class="stat-label" data-i18n="scan.stat.total">Fichiers au total</span></div>
+                        <div class="stat stat-threat"><span class="stat-value" id="statThreats">0</span><span class="stat-label" data-i18n="scan.stat.threats">Menaces</span></div>
+                        <div class="stat"><span class="stat-value" id="statElapsed">0 s</span><span class="stat-label" data-i18n="scan.stat.elapsed">Temps écoulé</span></div>
+                        <div class="stat"><span class="stat-value" id="statEta">—</span><span class="stat-label" data-i18n="scan.stat.eta">Temps restant</span></div>
+                        <div class="stat"><span class="stat-value" id="statSpeed">—</span><span class="stat-label" data-i18n="scan.stat.speed">Fichiers / s</span></div>
                     </div>
 
                     <div class="scan-current" id="scanCurrent">
-                        <span class="scan-current-label">Fichier</span>
+                        <span class="scan-current-label" data-i18n="scan.current">Fichier</span>
                         <span class="scan-current-path" id="scanCurrentPath">—</span>
                     </div>
 
@@ -347,13 +377,13 @@
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/>
                             </svg>
-                            Scan complet du système
+                            <span data-i18n="scan.btn.full">Scan complet du système</span>
                         </button>
                         <button class="btn btn-danger" id="btnCancelScan" onclick="cancelScan()" hidden>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-                            Annuler
+                            <span data-i18n="scan.btn.cancel">Annuler</span>
                         </button>
-                        <button class="btn btn-secondary" id="btnToggleDetails" onclick="toggleScanDetails()">Détails</button>
+                        <button class="btn btn-secondary" id="btnToggleDetails" onclick="toggleScanDetails()" data-i18n="scan.btn.details">Détails</button>
                         <span class="scan-hero-note" id="scanHeroNote"></span>
                     </div>
                 </div>
@@ -362,8 +392,8 @@
             <!-- Résultats -->
             <div class="scan-results" id="scanResults" hidden>
                 <div class="scan-results-header">
-                    <h4 id="scanResultsTitle">Résultat</h4>
-                    <button class="btn btn-secondary btn-sm" onclick="switchTab('quarantine')" id="btnSeeQuarantine" hidden>Voir la quarantaine</button>
+                    <h4 id="scanResultsTitle"></h4>
+                    <button class="btn btn-secondary btn-sm" onclick="switchTab('quarantine')" id="btnSeeQuarantine" hidden data-i18n="scan.result.see_quarantine">Voir la quarantaine</button>
                 </div>
                 <div class="scan-results-grid" id="scanResultsGrid"></div>
                 <div class="threat-list" id="threatList"></div>
@@ -372,8 +402,8 @@
             <!-- Cibles rapides -->
             <div class="scan-targets">
                 <div class="section-title-row">
-                    <h4>Répertoires rapides</h4>
-                    <span class="text-muted" id="targetsHint">Analysés par le service système, sans mot de passe</span>
+                    <h4 data-i18n="scan.targets.title">Répertoires rapides</h4>
+                    <span class="text-muted" id="targetsHint"></span>
                 </div>
                 <div class="target-grid">
                     <button class="target-btn" onclick="startScan('/home')" data-path="/home">
@@ -382,35 +412,35 @@
                             <polyline points="9,22 9,12 15,12 15,22"/>
                         </svg>
                         <span>/home</span>
-                        <small>Répertoires personnels</small>
+                        <small data-i18n="scan.targets.home">Répertoires personnels</small>
                     </button>
                     <button class="target-btn" onclick="startScan('/etc')" data-path="/etc">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
                         </svg>
                         <span>/etc</span>
-                        <small>Configuration système</small>
+                        <small data-i18n="scan.targets.etc">Configuration système</small>
                     </button>
                     <button class="target-btn" onclick="startScan('/var')" data-path="/var">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
                         </svg>
                         <span>/var</span>
-                        <small>Données variables</small>
+                        <small data-i18n="scan.targets.var">Données variables</small>
                     </button>
                     <button class="target-btn" onclick="startScan('/opt')" data-path="/opt">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/>
                         </svg>
                         <span>/opt</span>
-                        <small>Logiciels optionnels</small>
+                        <small data-i18n="scan.targets.opt">Logiciels optionnels</small>
                     </button>
                     <button class="target-btn" onclick="startScan('/usr')" data-path="/usr">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
                         </svg>
                         <span>/usr</span>
-                        <small>Programmes</small>
+                        <small data-i18n="scan.targets.usr">Programmes</small>
                     </button>
                     <button class="target-btn" onclick="startScan('/tmp')" data-path="/tmp">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -418,22 +448,22 @@
                             <polyline points="14,2 14,8 20,8"/>
                         </svg>
                         <span>/tmp</span>
-                        <small>Fichiers temporaires</small>
+                        <small data-i18n="scan.targets.tmp">Fichiers temporaires</small>
                     </button>
                 </div>
             </div>
 
             <!-- Chemin personnalisé -->
             <div class="custom-scan">
-                <h4>Chemin personnalisé</h4>
+                <h4 data-i18n="scan.custom.title">Chemin personnalisé</h4>
                 <div class="input-row">
-                    <input type="text" id="customPath" placeholder="/chemin/vers/dossier" class="input-field"
+                    <input type="text" id="customPath" placeholder="/chemin/vers/dossier" data-i18n-placeholder="scan.custom.placeholder" class="input-field"
                            onkeydown="if(event.key==='Enter')startScan(this.value)">
                     <button class="btn btn-secondary" onclick="pickFolder('scan')">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-                        Parcourir…
+                        <span data-i18n="scan.custom.browse">Parcourir…</span>
                     </button>
-                    <button class="btn btn-primary" onclick="startScan(document.getElementById('customPath').value)">Analyser</button>
+                    <button class="btn btn-primary" onclick="startScan(document.getElementById('customPath').value)" data-i18n="scan.custom.scan">Analyser</button>
                 </div>
             </div>
 
@@ -442,10 +472,10 @@
                 <div class="console-header">
                     <span class="console-title">
                         <span class="pulse-dot" id="scanConsoleDot"></span>
-                        Détails de l'analyse
+                        <span data-i18n="scan.console.title">Détails de l'analyse</span>
                     </span>
                     <div class="console-actions">
-                        <label class="console-filter"><input type="checkbox" id="chkOnlyThreats" onchange="renderScanConsole()"> Menaces et erreurs uniquement</label>
+                        <label class="console-filter"><input type="checkbox" id="chkOnlyThreats" onchange="renderScanConsole()"> <span data-i18n="scan.console.filter">Menaces et erreurs uniquement</span></label>
                         <button class="btn-icon" onclick="toggleScanDetails(false)">✕</button>
                     </div>
                 </div>
@@ -456,8 +486,8 @@
         <!-- ── UPDATE ───────────────────────────────────────────────── -->
         <section class="tab-panel" id="tab-update">
             <div class="page-header">
-                <h1>Mises à jour</h1>
-                <p class="subtitle">Signatures antivirales (freshclam)</p>
+                <h1 data-i18n="update.title">Mises à jour</h1>
+                <p class="subtitle" data-i18n="update.subtitle">Signatures antivirales (freshclam)</p>
             </div>
 
             <div class="update-section">
@@ -468,24 +498,22 @@
                         </svg>
                     </div>
                     <div class="card-body">
-                        <h3>Mettre à jour les signatures</h3>
-                        <p class="text-muted">Télécharge les dernières définitions de virus depuis les serveurs ClamAV.</p>
+                        <h3 data-i18n="update.card.title">Mettre à jour les signatures</h3>
+                        <p class="text-muted" data-i18n="update.card.body">Télécharge les dernières définitions de virus depuis les serveurs ClamAV.</p>
                         <div class="update-meta">
-                            <span><strong>Dernière mise à jour :</strong> <span id="updLast">—</span></span>
-                            <span><strong>Prochaine recherche automatique :</strong> <span id="updNext">—</span></span>
-                            <span class="text-muted" id="updRule">Automatique tous les jours à 07:00 et 5 minutes après le démarrage.</span>
+                            <span><strong data-i18n="update.last">Dernière mise à jour :</strong> <span id="updLast">—</span></span>
+                            <span><strong data-i18n="update.next">Prochaine recherche automatique :</strong> <span id="updNext">—</span></span>
+                            <span class="text-muted" data-i18n="update.rule">Automatique tous les jours à 07:00 et 5 minutes après le démarrage.</span>
                         </div>
-                        <button class="btn btn-primary" id="btnUpdate" onclick="triggerUpdate()">
-                            Lancer la mise à jour
-                        </button>
+                        <button class="btn btn-primary" id="btnUpdate" onclick="triggerUpdate()" data-i18n="update.btn">Lancer la mise à jour</button>
                         <span class="scan-hero-note" id="updateNote"></span>
                     </div>
                 </div>
 
                 <div id="dbDetails" class="db-details-card">
-                    <h4>Fichiers de signatures</h4>
+                    <h4 data-i18n="update.db_title">Fichiers de signatures</h4>
                     <div id="dbDetailsList" class="db-list">
-                        <p class="text-muted">Chargement...</p>
+                        <p class="text-muted" data-i18n="sidebar.loading">Chargement…</p>
                     </div>
                 </div>
             </div>
@@ -494,37 +522,103 @@
                 <div class="console-header">
                     <span class="console-title">
                         <span class="pulse-dot"></span>
-                        <span id="updateConsoleTitle">Mise à jour en cours...</span>
+                        <span id="updateConsoleTitle"></span>
                     </span>
                 </div>
                 <div class="console-output" id="updateOutput"></div>
             </div>
         </section>
 
+        <!-- ── ÉTAT DU SYSTÈME ─────────────────────────────────────── -->
+        <section class="tab-panel" id="tab-system">
+            <div class="page-header">
+                <h1 data-i18n="system.title">État du système</h1>
+                <p class="subtitle" data-i18n="system.subtitle">Mises à jour de sécurité, failles connues (CVE) et activité suspecte</p>
+            </div>
+
+            <div class="system-toolbar">
+                <span class="text-muted" id="systemChecked"></span>
+                <div class="log-actions-right">
+                    <button class="btn btn-secondary" id="btnSystemRefresh" onclick="refreshSystemStatus()" data-i18n="system.refresh">Actualiser</button>
+                    <button class="btn btn-primary" onclick="sendToBackend({action:'open_update_manager'})" data-i18n="system.open_manager">Ouvrir le gestionnaire de mises à jour</button>
+                </div>
+            </div>
+
+            <div class="system-banner" id="systemBanner" data-state="unknown">
+                <div class="system-banner-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/></svg>
+                </div>
+                <div>
+                    <h3 id="systemBannerTitle" data-i18n="system.unknown_title">État inconnu</h3>
+                    <p class="text-muted" id="systemBannerBody" data-i18n="system.unknown_body">Le service système n'a pas encore relevé l'état des mises à jour.</p>
+                </div>
+            </div>
+
+            <div class="system-grid" id="systemGrid">
+                <div class="stat"><span class="stat-value" id="sysOs">—</span><span class="stat-label" data-i18n="system.os">Système</span></div>
+                <div class="stat"><span class="stat-value" id="sysKernel">—</span><span class="stat-label" data-i18n="system.kernel">Noyau</span></div>
+                <div class="stat"><span class="stat-value" id="sysUpgradable">—</span><span class="stat-label" data-i18n="system.updates">Mises à jour en attente</span></div>
+                <div class="stat"><span class="stat-value" id="sysSecurity">—</span><span class="stat-label" data-i18n="system.security">Mises à jour de sécurité</span></div>
+                <div class="stat"><span class="stat-value" id="sysCves">—</span><span class="stat-label" data-i18n="system.cves">CVE corrigées en attente</span></div>
+                <div class="stat"><span class="stat-value" id="sysReboot">—</span><span class="stat-label" data-i18n="system.reboot">Redémarrage requis</span></div>
+            </div>
+
+            <div class="card card-cves">
+                <div class="card-title-row">
+                    <h4 data-i18n="system.cve_list">Failles connues corrigées par les mises à jour en attente</h4>
+                    <span class="text-muted" id="cveCount"></span>
+                </div>
+                <div id="cveList" class="cve-list">
+                    <p class="text-muted" data-i18n="system.cve_none">Aucune CVE en attente — les correctifs de sécurité connus sont installés.</p>
+                </div>
+            </div>
+
+            <div class="card card-packages" id="cardPackages" hidden>
+                <div class="card-title-row">
+                    <h4 data-i18n="system.packages_title">Paquets à mettre à jour</h4>
+                </div>
+                <div id="packageList" class="package-list"></div>
+            </div>
+
+            <div class="card card-alerts">
+                <div class="card-title-row">
+                    <h4 data-i18n="system.alerts.title">Activité inhabituelle détectée</h4>
+                    <div class="log-actions-right">
+                        <span class="text-muted" id="alertsHint"></span>
+                        <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'clear_alerts'})" data-i18n="system.alerts.clear">Effacer</button>
+                    </div>
+                </div>
+                <p class="text-muted alerts-intro" data-i18n="system.monitor_hint">Le service surveille les programmes qui modifient beaucoup de fichiers en peu de temps (fanotify). Un programme inconnu du système ou reconnu par ClamAV est signalé comme danger potentiel.</p>
+                <div id="alertsList" class="alerts-list">
+                    <p class="text-muted" data-i18n="system.alerts.none">Aucune activité inhabituelle enregistrée</p>
+                </div>
+            </div>
+        </section>
+
         <!-- ── LOGS ─────────────────────────────────────────────────── -->
         <section class="tab-panel" id="tab-logs">
             <div class="page-header">
-                <h1>Journaux</h1>
-                <p class="subtitle">Historique des analyses et mises à jour</p>
+                <h1 data-i18n="logs.title">Journaux</h1>
+                <p class="subtitle" data-i18n="logs.subtitle">Historique des analyses et mises à jour</p>
             </div>
 
             <div class="log-actions">
                 <div class="segmented" id="logScope">
-                    <button class="seg-btn active" data-scope="system" onclick="setLogScope('system')">Service système</button>
-                    <button class="seg-btn" data-scope="user" onclick="setLogScope('user')">Mon compte</button>
+                    <button class="seg-btn active" data-scope="system" onclick="setLogScope('system')" data-i18n="logs.scope.system">Service système</button>
+                    <button class="seg-btn" data-scope="user" onclick="setLogScope('user')" data-i18n="logs.scope.user">Mon compte</button>
                 </div>
                 <div class="log-actions-right">
-                    <button class="btn btn-secondary" onclick="loadLogs()">Rafraîchir</button>
-                    <button class="btn btn-danger" onclick="clearLogs()">Vider</button>
+                    <button class="btn btn-secondary" onclick="loadLogs()" data-i18n="logs.refresh">Rafraîchir</button>
+                    <button class="btn btn-danger" onclick="clearLogs()" data-i18n="logs.clear">Vider</button>
                 </div>
             </div>
 
             <div class="console-box" id="logConsole">
                 <div class="console-header">
-                    <span class="console-title" id="logTitle">Historique</span>
+                    <span class="console-title" id="logTitle"></span>
                 </div>
                 <div class="console-output" id="logOutput">
-                    <p class="text-muted center">Aucun journal disponible</p>
+                    <p class="text-muted center" data-i18n="logs.none">Aucun journal disponible</p>
                 </div>
             </div>
         </section>
@@ -532,32 +626,32 @@
         <!-- ── QUARANTINE ──────────────────────────────────────────── -->
         <section class="tab-panel" id="tab-quarantine">
             <div class="page-header">
-                <h1>Quarantaine</h1>
-                <p class="subtitle">Fichiers infectés isolés lors des analyses</p>
+                <h1 data-i18n="quarantine.title">Quarantaine</h1>
+                <p class="subtitle" data-i18n="quarantine.subtitle">Fichiers infectés isolés lors des analyses</p>
             </div>
 
             <div class="quarantine-actions">
-                <button class="btn btn-secondary" onclick="loadQuarantine()">Rafraîchir</button>
-                <button class="btn btn-danger" id="btnEmptyQuarantine" onclick="emptyQuarantine()">Vider la quarantaine</button>
+                <button class="btn btn-secondary" onclick="loadQuarantine()" data-i18n="quarantine.refresh">Rafraîchir</button>
+                <button class="btn btn-danger" id="btnEmptyQuarantine" onclick="emptyQuarantine()" data-i18n="quarantine.empty_btn">Vider la quarantaine</button>
             </div>
 
             <div class="quarantine-info">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="info-icon">
                     <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
                 </svg>
-                <p>Les fichiers infectés sont automatiquement déplacés ici. Les fichiers isolés par le service système sont marqués <span class="scope-badge scope-system">Système</span>. Vous pouvez les supprimer définitivement ou les restaurer dans votre dossier personnel s'il s'agit de faux positifs.</p>
+                <p data-i18n="quarantine.info">Les fichiers infectés sont automatiquement déplacés ici. Les fichiers isolés par le service système sont marqués « Système ». Vous pouvez les supprimer définitivement ou les restaurer dans votre dossier personnel s'il s'agit de faux positifs.</p>
             </div>
 
             <div id="quarantineList" class="quarantine-list">
-                <p class="text-muted center">Chargement...</p>
+                <p class="text-muted center" data-i18n="sidebar.loading">Chargement…</p>
             </div>
         </section>
 
         <!-- ── INSTALL ──────────────────────────────────────────────── -->
         <section class="tab-panel" id="tab-install">
             <div class="page-header">
-                <h1>Installation</h1>
-                <p class="subtitle">Installer ClamAV et freshclam</p>
+                <h1 data-i18n="install.title">Installation</h1>
+                <p class="subtitle" data-i18n="install.subtitle">Installer ClamAV et freshclam</p>
             </div>
 
             <div class="install-section">
@@ -569,11 +663,9 @@
                             <circle cx="40" cy="40" r="4" fill="var(--accent)"/>
                         </svg>
                     </div>
-                    <h3>Installer ClamAV</h3>
-                    <p class="text-muted">Installe <code>clamav</code>, <code>clamav-daemon</code> et <code>clamav-freshclam</code> via apt. Les droits administrateur seront demandés.</p>
-                    <button class="btn btn-primary btn-lg" id="btnInstall" onclick="installClamAV()">
-                        Installer maintenant
-                    </button>
+                    <h3 data-i18n="install.card.title">Installer ClamAV</h3>
+                    <p class="text-muted" data-i18n="install.card.body">Installe clamav, clamav-daemon et clamav-freshclam via apt. Les droits administrateur seront demandés.</p>
+                    <button class="btn btn-primary btn-lg" id="btnInstall" onclick="installClamAV()" data-i18n="install.btn">Installer maintenant</button>
                 </div>
             </div>
 
@@ -581,7 +673,7 @@
                 <div class="console-header">
                     <span class="console-title">
                         <span class="pulse-dot"></span>
-                        Installation...
+                        <span data-i18n="install.console">Installation…</span>
                     </span>
                 </div>
                 <div class="console-output" id="installOutput"></div>
@@ -596,14 +688,14 @@
     <div class="modal-overlay" id="creditsModal" onclick="closeCredits(event)">
         <div class="modal" onclick="event.stopPropagation()">
             <div class="modal-header">
-                <h2>Crédits</h2>
+                <h2 data-i18n="credits.title">Crédits</h2>
                 <button class="btn-icon" onclick="closeCredits()">✕</button>
             </div>
             <div class="modal-tabs">
                 <button class="modal-tab active" onclick="switchCreditsTab('app', this)">ClamAV Antivirus</button>
                 <button class="modal-tab" onclick="switchCreditsTab('clamav', this)">ClamAV</button>
                 <button class="modal-tab" onclick="switchCreditsTab('freshclam', this)">Freshclam</button>
-                <button class="modal-tab" onclick="switchCreditsTab('licence', this)">Licence</button>
+                <button class="modal-tab" onclick="switchCreditsTab('licence', this)" data-i18n="credits.tab.licence">Licence</button>
             </div>
             <div class="modal-body">
                 <div class="credits-panel active" id="credits-app">
@@ -615,14 +707,14 @@
                         </svg>
                         <div>
                             <h3>ClamAV Antivirus</h3>
-                            <span class="credits-version">Version 1.4.0</span>
+                            <span class="credits-version">Version 1.5.0</span>
                         </div>
                     </div>
-                    <p>Interface graphique moderne pour ClamAV sur Linux. Conçue pour simplifier la gestion de votre antivirus : mise à jour des signatures, scans de répertoires, quarantaine automatique et surveillance système via un bouclier dans la barre des tâches.</p>
-                    <p>Un service système (<code>clamav-antivirus-daemon</code>) exécute les scans complets et les mises à jour planifiées sans demander de mot de passe.</p>
+                    <p data-i18n="credits.app.p1">Interface graphique moderne pour ClamAV sur Linux. Conçue pour simplifier la gestion de votre antivirus : mise à jour des signatures, scans de répertoires, quarantaine automatique et surveillance système via un bouclier dans la barre des tâches.</p>
+                    <p data-i18n="credits.app.p2">Un service système (clamav-antivirus-daemon) exécute les scans complets, les mises à jour planifiées, la surveillance des écritures et l'analyse des supports USB sans demander de mot de passe.</p>
                     <div class="credits-dev-card">
                         <div class="credits-dev-info">
-                            <h4>Développeur</h4>
+                            <h4 data-i18n="credits.developer">Développeur</h4>
                             <p class="credits-name">Karl Bustamante</p>
                             <p class="credits-company">Dukiwi SA</p>
                             <p class="credits-email">info@dukiwi.com</p>
@@ -639,67 +731,68 @@
 
                 <div class="credits-panel" id="credits-clamav">
                     <h3>ClamAV</h3>
-                    <p>ClamAV est un moteur antivirus open source conçu pour détecter les trojans, virus, malwares et autres menaces. Il est largement utilisé sur les serveurs de messagerie et comme solution antivirus sur les systèmes Unix/Linux.</p>
+                    <p data-i18n="credits.clamav.p1">ClamAV est un moteur antivirus open source conçu pour détecter les trojans, virus, malwares et autres menaces. Il est largement utilisé sur les serveurs de messagerie et comme solution antivirus sur les systèmes Unix/Linux.</p>
                     <div class="credits-features">
                         <div class="credits-feature">
-                            <strong>Moteur de scan</strong>
-                            <span><code>clamscan</code> — Analyseur en ligne de commande pour scanner fichiers et répertoires de manière récursive.</span>
+                            <strong data-i18n="credits.clamav.engine">Moteur de scan</strong>
+                            <span data-i18n="credits.clamav.engine_text">clamscan — Analyseur en ligne de commande pour scanner fichiers et répertoires de manière récursive.</span>
                         </div>
                         <div class="credits-feature">
-                            <strong>Daemon</strong>
-                            <span><code>clamd</code> — Service en arrière-plan pour des scans plus rapides via un socket, idéal pour l'intégration avec d'autres logiciels.</span>
+                            <strong data-i18n="credits.clamav.daemon">Daemon</strong>
+                            <span data-i18n="credits.clamav.daemon_text">clamd — Service en arrière-plan pour des scans plus rapides via un socket, utilisé pour vérifier instantanément les programmes suspects.</span>
                         </div>
                         <div class="credits-feature">
-                            <strong>Base de données</strong>
-                            <span>Signatures virales maintenues par Cisco Talos, mises à jour quotidiennement avec des millions de signatures.</span>
+                            <strong data-i18n="credits.clamav.db">Base de données</strong>
+                            <span data-i18n="credits.clamav.db_text">Signatures virales maintenues par Cisco Talos, mises à jour quotidiennement avec des millions de signatures.</span>
                         </div>
                     </div>
-                    <p class="credits-link-ext">Site officiel : <code>https://www.clamav.net</code></p>
+                    <p class="credits-link-ext"><span data-i18n="credits.website">Site officiel :</span> <code>https://www.clamav.net</code></p>
                 </div>
 
                 <div class="credits-panel" id="credits-freshclam">
                     <h3>Freshclam</h3>
-                    <p>Freshclam est l'outil de mise à jour automatique des bases de données virales de ClamAV. Il télécharge les dernières signatures depuis les serveurs miroirs de ClamAV.</p>
+                    <p data-i18n="credits.freshclam.p1">Freshclam est l'outil de mise à jour automatique des bases de données virales de ClamAV. Il télécharge les dernières signatures depuis les serveurs miroirs de ClamAV.</p>
                     <div class="credits-features">
                         <div class="credits-feature">
-                            <strong>Mise à jour automatique</strong>
-                            <span>Le service <code>clamav-freshclam</code> tourne en arrière-plan ; ClamAV Antivirus force en plus une recherche tous les jours à 07:00 et 5 minutes après chaque démarrage.</span>
+                            <strong data-i18n="credits.freshclam.auto">Mise à jour automatique</strong>
+                            <span data-i18n="credits.freshclam.auto_text">Le service clamav-freshclam tourne en arrière-plan ; ClamAV Antivirus force en plus une recherche tous les jours à 07:00 et 5 minutes après chaque démarrage.</span>
                         </div>
                         <div class="credits-feature">
-                            <strong>Bases de données</strong>
-                            <span><code>main.cvd</code> — Base principale. <code>daily.cvd</code> — Mises à jour quotidiennes. <code>bytecode.cvd</code> — Signatures bytecode avancées.</span>
+                            <strong data-i18n="credits.freshclam.db">Bases de données</strong>
+                            <span data-i18n="credits.freshclam.db_text">main.cvd — Base principale. daily.cvd — Mises à jour quotidiennes. bytecode.cvd — Signatures bytecode avancées.</span>
                         </div>
                         <div class="credits-feature">
-                            <strong>Configuration</strong>
-                            <span>Configurable via <code>/etc/clamav/freshclam.conf</code> — fréquence, miroirs, proxy, notifications.</span>
+                            <strong data-i18n="credits.freshclam.config">Configuration</strong>
+                            <span data-i18n="credits.freshclam.config_text">Configurable via /etc/clamav/freshclam.conf — fréquence, miroirs, proxy, notifications.</span>
                         </div>
                     </div>
                 </div>
 
                 <div class="credits-panel" id="credits-licence">
-                    <h3>Licence</h3>
-                    <p>ClamAV est distribué sous licence <strong>GPL v2</strong> (GNU General Public License version 2). ClamAV est un projet de <strong>Cisco Talos Intelligence Group</strong>.</p>
-                    <p>ClamAV Antivirus (cette interface graphique) est un logiciel libre distribué sous licence <strong>GPL v3</strong> (GNU General Public License version 3), développé par <strong>Dukiwi SA</strong>. L'interface utilise les composants suivants :</p>
+                    <h3 data-i18n="credits.tab.licence">Licence</h3>
+                    <p data-i18n="credits.licence.p1">ClamAV est distribué sous licence GPL v2 (GNU General Public License version 2). ClamAV est un projet de Cisco Talos Intelligence Group.</p>
+                    <p data-i18n="credits.licence.p2">ClamAV Antivirus (cette interface graphique) est un logiciel libre distribué sous licence GPL v3 (GNU General Public License version 3), développé par Dukiwi SA. L'interface utilise les composants suivants :</p>
                     <div class="credits-features">
                         <div class="credits-feature">
                             <strong>Python 3 + GTK3</strong>
-                            <span>Framework d'interface graphique native pour Linux (LGPL)</span>
+                            <span data-i18n="credits.licence.gtk">Framework d'interface graphique native pour Linux (LGPL)</span>
                         </div>
                         <div class="credits-feature">
                             <strong>WebKit2GTK</strong>
-                            <span>Moteur de rendu web intégré pour l'interface HTML/CSS/JS (LGPL)</span>
+                            <span data-i18n="credits.licence.webkit">Moteur de rendu web intégré pour l'interface HTML/CSS/JS (LGPL)</span>
                         </div>
                         <div class="credits-feature">
                             <strong>AppIndicator3</strong>
-                            <span>Intégration barre des tâches pour les environnements de bureau Linux (LGPL)</span>
+                            <span data-i18n="credits.licence.appindicator">Intégration barre des tâches pour les environnements de bureau Linux (LGPL)</span>
                         </div>
                     </div>
-                    <p class="credits-copyright">© 2026 Dukiwi SA — Estavayer-le-Lac, Suisse. Distribué sous licence <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank">GNU GPL v3</a>.</p>
+                    <p class="credits-copyright">© 2026 Dukiwi SA — Estavayer-le-Lac, Suisse. <span data-i18n="credits.licence.distributed">Distribué sous licence</span> <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank">GNU GPL v3</a>.</p>
                 </div>
             </div>
         </div>
     </div>
 
+    <script src="i18n.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
