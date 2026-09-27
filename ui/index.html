@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ClamAV Antivirus</title>
     <link rel="stylesheet" href="style.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
 </head>
 <body>
     <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -14,7 +13,7 @@
     <aside class="sidebar">
         <div class="sidebar-logo">
             <svg class="logo-shield" viewBox="0 0 40 46" fill="none">
-                <path d="M20 2L4 10v12c0 11.1 6.8 21.4 16 24 9.2-2.6 16-12.9 16-24V10L20 2z" 
+                <path d="M20 2L4 10v12c0 11.1 6.8 21.4 16 24 9.2-2.6 16-12.9 16-24V10L20 2z"
                       fill="url(#shieldGrad)" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
                 <path d="M16 23l4 4 8-8" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
                 <defs>
@@ -43,6 +42,7 @@
                     <path d="M21 21l-4.35-4.35"/>
                 </svg>
                 Scanner
+                <span class="nav-live" id="navScanLive" hidden></span>
             </button>
             <button class="nav-btn" data-tab="update" onclick="switchTab('update')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -79,11 +79,15 @@
         </nav>
 
         <div class="sidebar-footer">
+            <div class="service-pill" id="servicePill" title="Service système clamav-antivirus-daemon">
+                <span class="service-dot"></span>
+                <span class="service-text">Service : …</span>
+            </div>
             <div class="status-pill" id="statusPill">
                 <span class="status-dot"></span>
                 <span class="status-text">Chargement...</span>
             </div>
-            <small class="version">v1.3.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;">Crédits</a></small>
+            <small class="version">v1.4.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;">Crédits</a></small>
         </div>
     </aside>
 
@@ -92,19 +96,22 @@
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <main class="content">
 
-        <!-- ── BARRE DE SCAN STICKY (haut de fenêtre, tous onglets) ─── -->
-        <div class="scan-topbar" id="scanTopbar" style="display:none;">
+        <!-- ── BARRE DE SCAN STICKY (visible sur tous les onglets) ──── -->
+        <div class="scan-topbar" id="scanTopbar" hidden>
             <div class="scan-topbar-bar">
                 <div class="scan-topbar-fill" id="scanTopbarFill"></div>
             </div>
             <div class="scan-topbar-info">
                 <span class="pulse-dot"></span>
-                <span id="scanTopbarCount">0 / 0 (0%)</span>
-                <span class="scan-topbar-sep">—</span>
-                <span id="scanTopbarFile" class="scan-topbar-file"></span>
+                <span class="scan-topbar-title" id="scanTopbarTitle">Analyse en cours</span>
+                <span class="scan-topbar-count" id="scanTopbarCount">0 %</span>
+                <span class="scan-topbar-sep">·</span>
+                <span class="scan-topbar-eta" id="scanTopbarEta"></span>
+                <span class="scan-topbar-file" id="scanTopbarFile"></span>
+                <button class="btn btn-mini" onclick="switchTab('scan')">Voir</button>
+                <button class="btn btn-mini btn-mini-danger" onclick="cancelScan()">Annuler</button>
             </div>
         </div>
-
 
         <!-- ── DASHBOARD ────────────────────────────────────────────── -->
         <section class="tab-panel active" id="tab-dashboard">
@@ -117,11 +124,11 @@
                 <div class="card card-status" id="cardStatus">
                     <div class="card-icon">
                         <svg class="shield-large" viewBox="0 0 60 70" fill="none">
-                            <path d="M30 4L8 14v16c0 16 9.5 30.5 22 34 12.5-3.5 22-18 22-34V14L30 4z" 
+                            <path d="M30 4L8 14v16c0 16 9.5 30.5 22 34 12.5-3.5 22-18 22-34V14L30 4z"
                                   fill="url(#statusGrad)" opacity="0.15"/>
-                            <path d="M30 4L8 14v16c0 16 9.5 30.5 22 34 12.5-3.5 22-18 22-34V14L30 4z" 
+                            <path d="M30 4L8 14v16c0 16 9.5 30.5 22 34 12.5-3.5 22-18 22-34V14L30 4z"
                                   stroke="url(#statusGrad)" stroke-width="2" fill="none"/>
-                            <path class="shield-check" d="M22 35l6 6 12-12" stroke="url(#statusGrad)" 
+                            <path class="shield-check" d="M22 35l6 6 12-12" stroke="url(#statusGrad)"
                                   stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
                             <defs>
                                 <linearGradient id="statusGrad" x1="8" y1="4" x2="52" y2="54">
@@ -135,67 +142,24 @@
                         <h3 id="statusTitle">Vérification...</h3>
                         <p id="statusMessage" class="text-muted">Analyse du statut en cours</p>
                     </div>
-                </div>
-
-                <!-- Initial scan prompt (hidden by default, shown if never scanned) -->
-                <div class="card card-initial-scan" id="cardInitialScan" style="display:none;">
-                    <div class="initial-scan-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-                        </svg>
-                    </div>
-                    <div class="card-body">
-                        <h3>Première utilisation — Scan initial recommandé</h3>
-                        <p class="text-muted">Aucun scan n'a encore été effectué sur ce système. Nous recommandons un scan complet pour vérifier l'intégrité de votre machine.</p>
-                        <button class="btn btn-primary" onclick="startFullSystemScan()">
-                            Lancer le scan initial complet
-                        </button>
+                    <div class="status-side">
+                        <div class="status-side-item">
+                            <span class="status-side-label">Signatures</span>
+                            <span class="status-side-value" id="statusDbAge">—</span>
+                        </div>
+                        <div class="status-side-item">
+                            <span class="status-side-label">Dernier scan</span>
+                            <span class="status-side-value" id="statusLastScan">—</span>
+                        </div>
                     </div>
                 </div>
 
-                <div class="card card-action" onclick="switchTab('scan')">
-                    <div class="card-icon accent-blue">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
-                        </svg>
-                    </div>
-                    <div class="card-body">
-                        <h3>Lancer un scan</h3>
-                        <p class="text-muted">Analyser vos répertoires</p>
-                    </div>
-                    <svg class="card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M5 12h14M12 5l7 7-7 7"/>
-                    </svg>
-                </div>
-
-                <div class="card card-action" onclick="switchTab('update')">
-                    <div class="card-icon accent-amber">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
-                        </svg>
-                    </div>
-                    <div class="card-body">
-                        <h3>Mettre à jour</h3>
-                        <p class="text-muted">Actualiser les signatures</p>
-                    </div>
-                    <svg class="card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M5 12h14M12 5l7 7-7 7"/>
-                    </svg>
-                </div>
-
-                <div class="card card-info" id="cardDbInfo">
-                    <h4>Base de données virales</h4>
-                    <div id="dbInfoContent" class="db-info">
-                        <p class="text-muted">Chargement...</p>
-                    </div>
-                </div>
-
-                <!-- Scan en cours (affiché pendant un scan actif) -->
-                <div class="card card-scan-live" id="dashScanLive" style="display:none;">
+                <!-- Scan en cours -->
+                <div class="card card-scan-live" id="dashScanLive" hidden onclick="switchTab('scan')">
                     <div class="scan-live-header">
                         <span class="pulse-dot"></span>
-                        <span>Scan en cours</span>
-                        <span class="scan-live-count" id="dashScanCount">0 / 0 fichiers (0%)</span>
+                        <span id="dashScanTitle">Analyse en cours</span>
+                        <span class="scan-live-count" id="dashScanCount">0 %</span>
                     </div>
                     <div class="dash-progress-bar">
                         <div class="dash-progress-fill" id="dashProgressFill"></div>
@@ -203,13 +167,122 @@
                     <div class="scan-current-file" id="dashCurrentFile"></div>
                 </div>
 
-                <!-- Scan interrompu (affiché au démarrage si scan précédent non terminé) -->
-                <div class="card card-resume-scan" id="dashResumeScan" style="display:none;" onclick="resumeScan()">
+                <!-- Scan interrompu -->
+                <div class="card card-resume-scan" id="dashResumeScan" hidden>
                     <div class="card-body">
-                        <h4>Scan interrompu détecté</h4>
-                        <p class="text-muted">Reprendre le scan de <strong id="resumeScanPath"></strong></p>
+                        <h4>Analyse interrompue</h4>
+                        <p class="text-muted"><strong id="resumeScanPath"></strong> — <span id="resumeScanDetail"></span></p>
                     </div>
-                    <button class="btn btn-primary" style="white-space:nowrap;flex-shrink:0">Reprendre</button>
+                    <button class="btn btn-primary" onclick="resumeScan()">Reprendre</button>
+                </div>
+
+                <!-- Première utilisation -->
+                <div class="card card-initial-scan" id="cardInitialScan" hidden>
+                    <div class="initial-scan-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        </svg>
+                    </div>
+                    <div class="card-body">
+                        <h3>Première utilisation — analyse initiale recommandée</h3>
+                        <p class="text-muted">Aucune analyse n'a encore été effectuée. Nous recommandons un scan complet pour vérifier l'intégrité de votre machine.</p>
+                        <button class="btn btn-primary" onclick="startFullSystemScan()">Lancer le scan complet</button>
+                    </div>
+                </div>
+
+                <!-- Protection automatique -->
+                <div class="card card-protection" id="cardProtection">
+                    <div class="card-title-row">
+                        <h4>Protection automatique</h4>
+                        <span class="badge" id="daemonBadge">…</span>
+                    </div>
+                    <ul class="protection-list">
+                        <li>
+                            <span class="protection-icon accent-green">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                            </span>
+                            <div class="protection-text">
+                                <span class="protection-label">Service système</span>
+                                <span class="protection-value" id="protDaemon">Vérification…</span>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="protection-icon accent-amber">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>
+                            </span>
+                            <div class="protection-text">
+                                <span class="protection-label">Recherche de mises à jour</span>
+                                <span class="protection-value" id="protSchedule">Tous les jours à 07:00 et 5 min après le démarrage</span>
+                                <span class="protection-sub" id="protNextUpdate"></span>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="protection-icon accent-blue">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                            </span>
+                            <div class="protection-text">
+                                <span class="protection-label">Dernière analyse</span>
+                                <span class="protection-value" id="protLastScan">Aucune</span>
+                                <span class="protection-sub" id="protLastScanSub"></span>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="card card-actions-col">
+                    <div class="card-action" onclick="startFullSystemScan()">
+                        <div class="card-icon accent-blue">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/>
+                            </svg>
+                        </div>
+                        <div class="card-body">
+                            <h3>Scan complet du système</h3>
+                            <p class="text-muted" id="fullScanHint">Sans mot de passe via le service système</p>
+                        </div>
+                        <svg class="card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                    </div>
+                    <div class="card-action" onclick="switchTab('scan')">
+                        <div class="card-icon accent-green">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+                            </svg>
+                        </div>
+                        <div class="card-body">
+                            <h3>Analyser un dossier</h3>
+                            <p class="text-muted">Répertoires rapides ou chemin personnalisé</p>
+                        </div>
+                        <svg class="card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                    </div>
+                    <div class="card-action" onclick="triggerUpdate()">
+                        <div class="card-icon accent-amber">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/>
+                            </svg>
+                        </div>
+                        <div class="card-body">
+                            <h3>Mettre à jour</h3>
+                            <p class="text-muted">Actualiser les signatures maintenant</p>
+                        </div>
+                        <svg class="card-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                    </div>
+                </div>
+
+                <div class="card card-history">
+                    <div class="card-title-row">
+                        <h4>Historique des analyses</h4>
+                        <span class="text-muted" id="historyCount"></span>
+                    </div>
+                    <div id="historyList" class="history-list">
+                        <p class="text-muted">Aucune analyse enregistrée</p>
+                    </div>
+                </div>
+
+                <div class="card card-info" id="cardDbInfo">
+                    <h4>Base de données virale</h4>
+                    <div id="dbInfoContent" class="db-info">
+                        <p class="text-muted">Chargement...</p>
+                    </div>
                 </div>
             </div>
         </section>
@@ -218,22 +291,90 @@
         <section class="tab-panel" id="tab-scan">
             <div class="page-header">
                 <h1>Scanner</h1>
-                <p class="subtitle">Sélectionnez un répertoire à analyser</p>
+                <p class="subtitle">Analyse antivirus de votre système</p>
             </div>
 
-            <div class="full-scan-section">
-                <button class="btn btn-full-scan" id="btnFullScan" onclick="startFullSystemScan()">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-                        <polyline points="9,12 12,15 15,9"/>
+            <!-- Hero -->
+            <div class="scan-hero" id="scanHero" data-state="idle">
+                <div class="scan-ring-wrap">
+                    <div class="scan-radar" id="scanRadar"></div>
+                    <svg class="scan-ring" viewBox="0 0 120 120">
+                        <circle class="scan-ring-track" cx="60" cy="60" r="52"/>
+                        <circle class="scan-ring-fill" id="scanRingFill" cx="60" cy="60" r="52"
+                                stroke-dasharray="326.73" stroke-dashoffset="326.73"/>
                     </svg>
-                    Scan complet du système
-                </button>
-                <small class="text-muted">Analyse /home, /etc, /var, /opt, /usr et /tmp — peut prendre plusieurs minutes</small>
+                    <div class="scan-ring-center">
+                        <div class="scan-ring-icon" id="scanRingIcon">
+                            <svg class="icon-idle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                            <svg class="icon-clean" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="5,12 10,17 19,7"/></svg>
+                            <svg class="icon-infected" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        </div>
+                        <div class="scan-ring-pct" id="scanRingPct">0 %</div>
+                        <div class="scan-ring-sub" id="scanRingSub"></div>
+                    </div>
+                </div>
+
+                <div class="scan-hero-body">
+                    <div class="scan-hero-top">
+                        <h2 id="scanHeroTitle">Prêt à analyser</h2>
+                        <span class="badge" id="scanSourceBadge">Service système</span>
+                    </div>
+                    <p class="scan-hero-sub" id="scanHeroSub">Lancez un scan complet ou choisissez un dossier ci-dessous.</p>
+
+                    <ol class="scan-phases" id="scanPhases">
+                        <li data-phase="prepare"><span class="phase-dot"></span>Préparation</li>
+                        <li data-phase="counting"><span class="phase-dot"></span>Inventaire</li>
+                        <li data-phase="scanning"><span class="phase-dot"></span>Analyse</li>
+                        <li data-phase="done"><span class="phase-dot"></span>Terminé</li>
+                    </ol>
+
+                    <div class="scan-stats">
+                        <div class="stat"><span class="stat-value" id="statScanned">0</span><span class="stat-label">Fichiers analysés</span></div>
+                        <div class="stat"><span class="stat-value" id="statTotal">—</span><span class="stat-label">Fichiers au total</span></div>
+                        <div class="stat stat-threat"><span class="stat-value" id="statThreats">0</span><span class="stat-label">Menaces</span></div>
+                        <div class="stat"><span class="stat-value" id="statElapsed">0 s</span><span class="stat-label">Temps écoulé</span></div>
+                        <div class="stat"><span class="stat-value" id="statEta">—</span><span class="stat-label">Temps restant</span></div>
+                        <div class="stat"><span class="stat-value" id="statSpeed">—</span><span class="stat-label">Fichiers / s</span></div>
+                    </div>
+
+                    <div class="scan-current" id="scanCurrent">
+                        <span class="scan-current-label">Fichier</span>
+                        <span class="scan-current-path" id="scanCurrentPath">—</span>
+                    </div>
+
+                    <div class="scan-hero-actions">
+                        <button class="btn btn-full-scan" id="btnFullScan" onclick="startFullSystemScan()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/>
+                            </svg>
+                            Scan complet du système
+                        </button>
+                        <button class="btn btn-danger" id="btnCancelScan" onclick="cancelScan()" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                            Annuler
+                        </button>
+                        <button class="btn btn-secondary" id="btnToggleDetails" onclick="toggleScanDetails()">Détails</button>
+                        <span class="scan-hero-note" id="scanHeroNote"></span>
+                    </div>
+                </div>
             </div>
 
+            <!-- Résultats -->
+            <div class="scan-results" id="scanResults" hidden>
+                <div class="scan-results-header">
+                    <h4 id="scanResultsTitle">Résultat</h4>
+                    <button class="btn btn-secondary btn-sm" onclick="switchTab('quarantine')" id="btnSeeQuarantine" hidden>Voir la quarantaine</button>
+                </div>
+                <div class="scan-results-grid" id="scanResultsGrid"></div>
+                <div class="threat-list" id="threatList"></div>
+            </div>
+
+            <!-- Cibles rapides -->
             <div class="scan-targets">
-                <h4>Répertoires rapides</h4>
+                <div class="section-title-row">
+                    <h4>Répertoires rapides</h4>
+                    <span class="text-muted" id="targetsHint">Analysés par le service système, sans mot de passe</span>
+                </div>
                 <div class="target-grid">
                     <button class="target-btn" onclick="startScan('/home')" data-path="/home">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -241,7 +382,7 @@
                             <polyline points="9,22 9,12 15,12 15,22"/>
                         </svg>
                         <span>/home</span>
-                        <small>Répertoire personnel</small>
+                        <small>Répertoires personnels</small>
                     </button>
                     <button class="target-btn" onclick="startScan('/etc')" data-path="/etc">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -269,7 +410,7 @@
                             <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
                         </svg>
                         <span>/usr</span>
-                        <small>Programmes utilisateur</small>
+                        <small>Programmes</small>
                     </button>
                     <button class="target-btn" onclick="startScan('/tmp')" data-path="/tmp">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -282,23 +423,31 @@
                 </div>
             </div>
 
+            <!-- Chemin personnalisé -->
             <div class="custom-scan">
                 <h4>Chemin personnalisé</h4>
                 <div class="input-row">
-                    <input type="text" id="customPath" placeholder="/chemin/vers/repertoire" class="input-field">
-                    <button class="btn btn-primary" onclick="startScan(document.getElementById('customPath').value)">
-                        Scanner
+                    <input type="text" id="customPath" placeholder="/chemin/vers/dossier" class="input-field"
+                           onkeydown="if(event.key==='Enter')startScan(this.value)">
+                    <button class="btn btn-secondary" onclick="pickFolder('scan')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                        Parcourir…
                     </button>
+                    <button class="btn btn-primary" onclick="startScan(document.getElementById('customPath').value)">Analyser</button>
                 </div>
             </div>
 
-            <div class="console-box" id="scanConsole" style="display:none;">
+            <!-- Console détaillée -->
+            <div class="console-box" id="scanConsole" hidden>
                 <div class="console-header">
                     <span class="console-title">
-                        <span class="pulse-dot"></span>
-                        Sortie du scan
+                        <span class="pulse-dot" id="scanConsoleDot"></span>
+                        Détails de l'analyse
                     </span>
-                    <button class="btn-icon" onclick="document.getElementById('scanConsole').style.display='none'">✕</button>
+                    <div class="console-actions">
+                        <label class="console-filter"><input type="checkbox" id="chkOnlyThreats" onchange="renderScanConsole()"> Menaces et erreurs uniquement</label>
+                        <button class="btn-icon" onclick="toggleScanDetails(false)">✕</button>
+                    </div>
                 </div>
                 <div class="console-output" id="scanOutput"></div>
             </div>
@@ -308,7 +457,7 @@
         <section class="tab-panel" id="tab-update">
             <div class="page-header">
                 <h1>Mises à jour</h1>
-                <p class="subtitle">Gestion des signatures antivirales</p>
+                <p class="subtitle">Signatures antivirales (freshclam)</p>
             </div>
 
             <div class="update-section">
@@ -319,11 +468,17 @@
                         </svg>
                     </div>
                     <div class="card-body">
-                        <h3>Mettre à jour freshclam</h3>
-                        <p class="text-muted">Télécharger les dernières définitions de virus depuis les serveurs ClamAV.</p>
+                        <h3>Mettre à jour les signatures</h3>
+                        <p class="text-muted">Télécharge les dernières définitions de virus depuis les serveurs ClamAV.</p>
+                        <div class="update-meta">
+                            <span><strong>Dernière mise à jour :</strong> <span id="updLast">—</span></span>
+                            <span><strong>Prochaine recherche automatique :</strong> <span id="updNext">—</span></span>
+                            <span class="text-muted" id="updRule">Automatique tous les jours à 07:00 et 5 minutes après le démarrage.</span>
+                        </div>
                         <button class="btn btn-primary" id="btnUpdate" onclick="triggerUpdate()">
                             Lancer la mise à jour
                         </button>
+                        <span class="scan-hero-note" id="updateNote"></span>
                     </div>
                 </div>
 
@@ -335,11 +490,11 @@
                 </div>
             </div>
 
-            <div class="console-box" id="updateConsole" style="display:none;">
+            <div class="console-box" id="updateConsole" hidden>
                 <div class="console-header">
                     <span class="console-title">
                         <span class="pulse-dot"></span>
-                        Mise à jour en cours...
+                        <span id="updateConsoleTitle">Mise à jour en cours...</span>
                     </span>
                 </div>
                 <div class="console-output" id="updateOutput"></div>
@@ -350,17 +505,23 @@
         <section class="tab-panel" id="tab-logs">
             <div class="page-header">
                 <h1>Journaux</h1>
-                <p class="subtitle">Historique des analyses</p>
+                <p class="subtitle">Historique des analyses et mises à jour</p>
             </div>
 
             <div class="log-actions">
-                <button class="btn btn-secondary" onclick="loadLogs()">Rafraîchir</button>
-                <button class="btn btn-danger" onclick="clearLogs()">Vider les journaux</button>
+                <div class="segmented" id="logScope">
+                    <button class="seg-btn active" data-scope="system" onclick="setLogScope('system')">Service système</button>
+                    <button class="seg-btn" data-scope="user" onclick="setLogScope('user')">Mon compte</button>
+                </div>
+                <div class="log-actions-right">
+                    <button class="btn btn-secondary" onclick="loadLogs()">Rafraîchir</button>
+                    <button class="btn btn-danger" onclick="clearLogs()">Vider</button>
+                </div>
             </div>
 
             <div class="console-box" id="logConsole">
                 <div class="console-header">
-                    <span class="console-title">Historique</span>
+                    <span class="console-title" id="logTitle">Historique</span>
                 </div>
                 <div class="console-output" id="logOutput">
                     <p class="text-muted center">Aucun journal disponible</p>
@@ -372,7 +533,7 @@
         <section class="tab-panel" id="tab-quarantine">
             <div class="page-header">
                 <h1>Quarantaine</h1>
-                <p class="subtitle">Fichiers infectés isolés lors des scans</p>
+                <p class="subtitle">Fichiers infectés isolés lors des analyses</p>
             </div>
 
             <div class="quarantine-actions">
@@ -384,7 +545,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="info-icon">
                     <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
                 </svg>
-                <p>Les fichiers infectés détectés lors des scans sont automatiquement déplacés ici. Vous pouvez les supprimer définitivement ou les restaurer si vous êtes sûr qu'il s'agit de faux positifs.</p>
+                <p>Les fichiers infectés sont automatiquement déplacés ici. Les fichiers isolés par le service système sont marqués <span class="scope-badge scope-system">Système</span>. Vous pouvez les supprimer définitivement ou les restaurer dans votre dossier personnel s'il s'agit de faux positifs.</p>
             </div>
 
             <div id="quarantineList" class="quarantine-list">
@@ -416,7 +577,7 @@
                 </div>
             </div>
 
-            <div class="console-box" id="installConsole" style="display:none;">
+            <div class="console-box" id="installConsole" hidden>
                 <div class="console-header">
                     <span class="console-title">
                         <span class="pulse-dot"></span>
@@ -454,11 +615,11 @@
                         </svg>
                         <div>
                             <h3>ClamAV Antivirus</h3>
-                            <span class="credits-version">Version 1.3.1</span>
+                            <span class="credits-version">Version 1.4.0</span>
                         </div>
                     </div>
                     <p>Interface graphique moderne pour ClamAV sur Linux. Conçue pour simplifier la gestion de votre antivirus : mise à jour des signatures, scans de répertoires, quarantaine automatique et surveillance système via un bouclier dans la barre des tâches.</p>
-                    <p>Développée en Python (GTK3 + WebKit2) avec une interface HTML/CSS/JS entièrement personnalisable.</p>
+                    <p>Un service système (<code>clamav-antivirus-daemon</code>) exécute les scans complets et les mises à jour planifiées sans demander de mot de passe.</p>
                     <div class="credits-dev-card">
                         <div class="credits-dev-info">
                             <h4>Développeur</h4>
@@ -502,7 +663,7 @@
                     <div class="credits-features">
                         <div class="credits-feature">
                             <strong>Mise à jour automatique</strong>
-                            <span>Le service <code>clamav-freshclam</code> tourne en arrière-plan et vérifie régulièrement les nouvelles signatures (toutes les heures par défaut).</span>
+                            <span>Le service <code>clamav-freshclam</code> tourne en arrière-plan ; ClamAV Antivirus force en plus une recherche tous les jours à 07:00 et 5 minutes après chaque démarrage.</span>
                         </div>
                         <div class="credits-feature">
                             <strong>Bases de données</strong>

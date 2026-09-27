@@ -1,0 +1,9 @@
+[Unit]
+Description=ClamAV Antivirus - recherche de mises à jour des signatures
+After=network-online.target clamav-antivirus-daemon.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/clamav-antivirus/clamav-antivirus-daemon.py --request update
+TimeoutStartSec=30min

@@ -1,0 +1,14 @@
+[Unit]
+Description=ClamAV Antivirus - mises à jour tous les jours à 07:00 et 5 minutes après le démarrage
+
+[Timer]
+# Tous les jours à 07:00
+OnCalendar=*-*-* 07:00:00
+# ... et 5 minutes après chaque démarrage de l'ordinateur
+OnBootSec=5min
+# Rattraper une exécution de 07:00 manquée (ordinateur éteint)
+Persistent=true
+Unit=clamav-antivirus-update.service
+
+[Install]
+WantedBy=timers.target

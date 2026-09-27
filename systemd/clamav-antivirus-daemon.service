@@ -1,0 +1,25 @@
+[Unit]
+Description=ClamAV Antivirus - service système (scans complets et mises à jour sans mot de passe)
+Documentation=https://github.com/dukiwi/clamav-antivirus
+After=network.target
+Wants=clamav-antivirus-update.timer
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/clamav-antivirus/clamav-antivirus-daemon.py
+Restart=on-failure
+RestartSec=5
+# /run/clamav-antivirus (socket), /var/lib/clamav-antivirus (état, quarantaine), /var/log/clamav-antivirus
+RuntimeDirectory=clamav-antivirus
+RuntimeDirectoryMode=0755
+StateDirectory=clamav-antivirus
+StateDirectoryMode=0755
+LogsDirectory=clamav-antivirus
+LogsDirectoryMode=0755
+UMask=0022
+# Laisser au daemon le temps de sauvegarder la progression du scan pour la reprise
+KillMode=mixed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

@@ -2,13 +2,13 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # CLAMAV ANTIVIRUS — Build .deb package
 # Usage: ./build-deb.sh
-# Output: clamav-antivirus_1.0.0_all.deb
+# Output: clamav-antivirus_<VERSION>_all.deb
 # ═══════════════════════════════════════════════════════════════════════════
 
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.3.1"
+VERSION="1.4.0"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -28,11 +28,16 @@ mkdir -p "${PKG_DIR}/opt/${APP_NAME}/icons"
 mkdir -p "${PKG_DIR}/usr/share/applications"
 mkdir -p "${PKG_DIR}/usr/share/nemo/actions"
 mkdir -p "${PKG_DIR}/etc/xdg/autostart"
+mkdir -p "${PKG_DIR}/lib/systemd/system"
 
 # ── Copy application files ──
 echo "[2/5] Copying application files..."
 cp "${SCRIPT_DIR}/clamav-antivirus.py"             "${PKG_DIR}/opt/${APP_NAME}/"
+cp "${SCRIPT_DIR}/clamav-antivirus-daemon.py"      "${PKG_DIR}/opt/${APP_NAME}/"
+cp "${SCRIPT_DIR}/clamav_common.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav-scan-nemo.sh"             "${PKG_DIR}/opt/${APP_NAME}/"
+cp "${SCRIPT_DIR}/systemd/"*.service               "${PKG_DIR}/lib/systemd/system/"
+cp "${SCRIPT_DIR}/systemd/"*.timer                 "${PKG_DIR}/lib/systemd/system/"
 cp "${SCRIPT_DIR}/ui/index.html"                    "${PKG_DIR}/opt/${APP_NAME}/ui/"
 cp "${SCRIPT_DIR}/ui/style.css"                     "${PKG_DIR}/opt/${APP_NAME}/ui/"
 cp "${SCRIPT_DIR}/ui/app.js"                        "${PKG_DIR}/opt/${APP_NAME}/ui/"
@@ -41,8 +46,11 @@ cp "${SCRIPT_DIR}/clamav-antivirus.desktop"         "${PKG_DIR}/usr/share/applic
 cp "${SCRIPT_DIR}/clamav-antivirus-nemo.nemo_action" "${PKG_DIR}/usr/share/nemo/actions/"
 cp "${SCRIPT_DIR}/clamav-antivirus-autostart.desktop" "${PKG_DIR}/etc/xdg/autostart/"
 
-# Make scripts executable
+# Normalize permissions (independent of the builder's umask), then mark scripts executable
+find "${PKG_DIR}" -type d -exec chmod 755 {} +
+find "${PKG_DIR}" -type f -exec chmod 644 {} +
 chmod +x "${PKG_DIR}/opt/${APP_NAME}/clamav-antivirus.py"
+chmod +x "${PKG_DIR}/opt/${APP_NAME}/clamav-antivirus-daemon.py"
 chmod +x "${PKG_DIR}/opt/${APP_NAME}/clamav-scan-nemo.sh"
 
 # ── Create DEBIAN/control ──
@@ -53,13 +61,16 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
-Depends: python3 (>= 3.8), python3-gi, gir1.2-webkit2-4.1, gir1.2-appindicator3-0.1, gir1.2-gtk-3.0, policykit-1, clamav, clamav-daemon, clamav-freshclam, zenity
+Depends: python3 (>= 3.8), python3-gi, gir1.2-webkit2-4.1, gir1.2-appindicator3-0.1, gir1.2-gtk-3.0, policykit-1, clamav, clamav-daemon, clamav-freshclam, zenity, systemd
+Recommends: libnotify-bin
 Maintainer: Dukiwi SA <info@dukiwi.ch>
 Homepage: https://dukiwi.ch
 Description: ClamAV Antivirus - Interface graphique ClamAV
  Interface graphique moderne pour ClamAV avec :
- - Gestion des mises à jour des bases virales (freshclam)
- - Scan rapide de répertoires et scan complet du système
+ - Service système : scan complet et mises à jour sans mot de passe
+ - Mises à jour planifiées tous les jours à 07:00 et 5 min après le démarrage
+ - Scan complet automatique après la première installation
+ - Scan rapide de répertoires avec progression détaillée
  - Quarantaine automatique des fichiers infectés
  - Icône bouclier dans la barre des tâches
  - Intégration Nemo (clic droit : Scan with ClamAV Antivirus)
@@ -73,9 +84,29 @@ cat > "${PKG_DIR}/DEBIAN/postinst" << 'EOF'
 #!/bin/bash
 set -e
 
+STATE_DIR=/var/lib/clamav-antivirus
+
 # Enable and start freshclam service
 systemctl enable clamav-freshclam 2>/dev/null || true
 systemctl start clamav-freshclam 2>/dev/null || true
+
+# Service système + planification des mises à jour (07:00 et 5 min après le démarrage)
+mkdir -p "$STATE_DIR"
+FIRST_INSTALL=0
+if [ "$1" = "configure" ] && [ ! -f "$STATE_DIR/state.json" ]; then
+    # Première installation du service : scan complet automatique au démarrage du daemon
+    touch "$STATE_DIR/first-scan-pending"
+    FIRST_INSTALL=1
+fi
+
+systemctl daemon-reload 2>/dev/null || true
+systemctl enable clamav-antivirus-daemon.service 2>/dev/null || true
+systemctl enable clamav-antivirus-update.timer 2>/dev/null || true
+systemctl restart clamav-antivirus-daemon.service 2>/dev/null || true
+systemctl start clamav-antivirus-update.timer 2>/dev/null || true
+
+# Relancer les GUI ouvertes pour charger la nouvelle version (elles redémarrent via le tray/autostart)
+pkill -f "/opt/clamav-antivirus/clamav-antivirus.py" 2>/dev/null || true
 
 # Update desktop database
 if command -v update-desktop-database &> /dev/null; then
@@ -89,8 +120,13 @@ echo ""
 echo "  Lancez-le depuis le menu Applications > Système"
 echo "  ou via: /opt/clamav-antivirus/clamav-antivirus.py"
 echo ""
-echo "  freshclam est activé et mettra à jour les bases"
-echo "  automatiquement en arrière-plan."
+echo "  Service système : clamav-antivirus-daemon (actif)"
+echo "  Mises à jour    : tous les jours à 07:00 et"
+echo "                    5 minutes après le démarrage"
+if [ "$FIRST_INSTALL" = "1" ]; then
+echo "  Scan initial    : un scan complet du système va"
+echo "                    démarrer automatiquement."
+fi
 echo "═══════════════════════════════════════════════════"
 echo ""
 
@@ -103,10 +139,28 @@ cat > "${PKG_DIR}/DEBIAN/prerm" << 'EOF'
 #!/bin/bash
 set -e
 # Kill running instances
-pkill -f "clamav-antivirus.py" 2>/dev/null || true
+pkill -f "/opt/clamav-antivirus/clamav-antivirus.py" 2>/dev/null || true
+if [ "$1" = "remove" ]; then
+    systemctl stop clamav-antivirus-update.timer 2>/dev/null || true
+    systemctl disable clamav-antivirus-update.timer 2>/dev/null || true
+    systemctl stop clamav-antivirus-daemon.service 2>/dev/null || true
+    systemctl disable clamav-antivirus-daemon.service 2>/dev/null || true
+fi
 exit 0
 EOF
 chmod 755 "${PKG_DIR}/DEBIAN/prerm"
+
+# ── Create DEBIAN/postrm (post-removal script) ──
+cat > "${PKG_DIR}/DEBIAN/postrm" << 'EOF'
+#!/bin/bash
+set -e
+systemctl daemon-reload 2>/dev/null || true
+if [ "$1" = "purge" ]; then
+    rm -rf /var/lib/clamav-antivirus /var/log/clamav-antivirus /run/clamav-antivirus
+fi
+exit 0
+EOF
+chmod 755 "${PKG_DIR}/DEBIAN/postrm"
 
 # ── Build the .deb ──
 echo "[4/5] Building .deb package..."
