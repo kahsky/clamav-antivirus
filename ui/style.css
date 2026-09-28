@@ -2904,3 +2904,16 @@ select option:checked { background: var(--accent-dark); color: #ffffff; }
 /* Champs numériques : sans les flèches natives blanches de WebKitGTK (molette et clavier restent actifs) */
 input[type="number"] { -webkit-appearance: textfield; appearance: textfield; }
 input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* Progression de la vérification d'intégrité (un outil par ligne) */
+.integrity-progress { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: rgba(255,255,255,0.02); }
+.integrity-progress-title { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.tool-row { display: grid; grid-template-columns: 90px 1fr 42px minmax(120px, 2fr); align-items: center; gap: 10px; font-size: 12px; padding: 3px 0; }
+.tool-name { font-family: var(--font-mono); color: var(--text-primary); }
+.tool-bar { height: 6px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden; }
+.tool-bar > span { display: block; height: 100%; background: var(--accent-blue); border-radius: 3px; transition: width 0.3s; }
+.tool-done .tool-bar > span { background: var(--accent); }
+.tool-skipped .tool-bar > span { background: rgba(255,255,255,0.12); }
+.tool-pct { font-family: var(--font-mono); color: var(--text-secondary); text-align: right; }
+.tool-detail { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-pending { opacity: 0.6; }

@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.14.8)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.15.0)
 
 ---
 
@@ -125,6 +125,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 - **Failles sans correctif possible expliquées** — une base intégrée (TunnelVision CVE-2024-3661…) affiche sous
   la faille ce qu'elle est (défaut de conception, statut « deferred » d'Ubuntu) et si elle vous concerne (VPN
   configuré ou non) ; la checklist compte les CVE distinctes, pas une fois par paquet.
+- **Progression de l'intégrité visible** — la sortie de chaque outil est lue en continu : sections Lynis, tests
+  chkrootkit, fichiers debsums, phases unhide donnent un pourcentage et l'étape en cours, affichés outil par
+  outil dans le scan (phase intégrité) et dans la carte Intégrité (événement `integrity_progress`).
 - **Moteur résilient** — un lot que clamd refuse (service injoignable, descripteur refusé) est réessayé après
   attente de clamd, puis confié à clamscan ; au cinquième lot en échec, le reste du scan bascule sur clamscan
   au lieu d'échouer. chkrootkit : lignes d'outils système (« RTNETLINK answers… ») ignorées, constat
@@ -266,7 +269,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.14.8_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.14.8_all.deb)
+[Télécharger clamav-antivirus_1.15.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.15.0_all.deb)
 
 ---
 
@@ -297,12 +300,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.14.8_all.deb`
+Résultat : `clamav-antivirus_1.15.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.14.8_all.deb
+sudo dpkg -i clamav-antivirus_1.15.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

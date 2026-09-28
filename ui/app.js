@@ -129,6 +129,7 @@ function onBackendMessage(msg) {
         case 'operationResult': handleOperationResult(data); break;
         case 'scanStarted':     onScanStarted(data); break;
         case 'scanPaused':      onScanPaused(data); break;
+        case 'integrityProgress': onIntegrityProgress(data); break;
         case 'scanProgress':    onScanProgress(data); break;
         case 'scanLine':        onScanLine(data); break;
         case 'scanDone':        onScanDone(data); break;
@@ -339,8 +340,8 @@ function loadSecurityData(type, refresh = false, run = false) {
 
 function onSecurityData(data) {
     const type = data.type;
-    if (type === 'integrity_running') { integrityRunning = true; syncScanButtons(); $('btnIntegrityRun').disabled = true; $('integrityList').innerHTML = `<p class="text-muted">${t('security.integrity.running')}</p>`; return; }
-    if (type === 'integrity') { integrityRunning = !!data.refreshing; syncScanButtons(); }
+    if (type === 'integrity_running') { integrityRunning = true; syncScanButtons(); $('btnIntegrityRun').disabled = true; $('integrityList').innerHTML = `<p class="text-muted">${t('security.integrity.running')}</p>`; renderIntegrityProgress(); return; }
+    if (type === 'integrity') { integrityRunning = !!data.refreshing; if (!integrityRunning) integrityProg = null; syncScanButtons(); renderIntegrityProgress(); }
     if (type === 'suspended') { if (lastStatus) { lastStatus.suspended = data.data; renderSimpleView(); } return; }
     if (data.available === false) { renderSecurityUnavailable(type); return; }
     if (type === 'integrity' && data.after_scan && data.data && scan.running) setHeroNote((data.data.warnings || 0) ? t('scan.note.integrity_warn', { n: data.data.warnings }) : t('scan.note.integrity_ok'));
@@ -1636,6 +1637,7 @@ function applyProgress(p) {
     scan.errors = p.errors || 0;
     scan.file = p.file || '';
     scan.cached = p.cached || 0;
+    if (p.integrity_progress) integrityProg = p.integrity_progress;
     if (p.engine) scan.engine = p.engine;
     if (p.paused != null) scan.paused = !!p.paused;
     if (p.usb) scan.usb = p.usb;
@@ -1729,6 +1731,7 @@ function renderScanHero() {
     const state = scan.running ? 'running' : (scan.result ? scan.result.status : 'idle');
     hero.dataset.state = state;
     hero.dataset.phase = scan.phase;
+    renderIntegrityProgress();
 
     $('scanRingFill').style.strokeDashoffset = RING_CIRC * (1 - pct / 100);
     $('scanRingPct').textContent = scan.running && scan.phase !== 'scanning' && scan.total === 0 ? '…' : `${Math.floor(pct)} %`;
@@ -2334,6 +2337,19 @@ function simulateBackend(data) {
             break;
         case 'get_security_data': {
             const now = new Date().toISOString();
+            if (data.type === 'integrity' && data.run) {          // dev : progression simulée des outils
+                reply('securityData', { type: 'integrity_running' }, 50);
+                const steps = [['lynis', 20, 'Boot and services'], ['lynis', 55, 'Networking'], ['lynis', 90, 'File Permissions'], ['unhide', 50, 'Searching for Hidden processes through comparison'], ['chkrootkit', 40, 'ifpromisc'], ['debsums', 30, '']];
+                const tools = {};
+                steps.forEach(([name, pct, detail], i) => {
+                    setTimeout(() => {
+                        INTEGRITY_TOOLS.forEach(n => { if (INTEGRITY_TOOLS.indexOf(n) < INTEGRITY_TOOLS.indexOf(name)) tools[n] = { state: 'done', percent: 100, warnings: n === 'lynis' ? 1 : 0 }; });
+                        tools[name] = { state: 'running', percent: pct, detail };
+                        reply('integrityProgress', { tools: { ...tools }, current: name });
+                    }, 300 + i * 400);
+                });
+                break;
+            }
             const sim = {
                 checklist: { checked_at: now, score: 78, grade: 'B', ports: [{ proto: 'tcp', addr: '0.0.0.0', port: 22, process: 'sshd', service: 'ssh', exposed: true }, { proto: 'tcp', addr: '127.0.0.1', port: 631, process: 'cupsd', service: 'cups', exposed: false }],
                     items: [{ key: 'firewall', status: 'ok', weight: 15, detail: 'deny/allow' }, { key: 'disk_encryption', status: 'warn', weight: 8, detail: '' }, { key: 'secure_boot', status: 'ok', weight: 5 }, { key: 'apparmor', status: 'ok', weight: 6 }, { key: 'auto_updates', status: 'warn', weight: 6 }, { key: 'security_updates', status: 'fail', weight: 12, detail: '2' }, { key: 'empty_passwords', status: 'ok', weight: 10 }, { key: 'nopasswd_sudo', status: 'ok', weight: 5 }, { key: 'open_ports', status: 'warn', weight: 8, detail: '22/tcp sshd' }, { key: 'signatures', status: 'ok', weight: 8, detail: '0 d' }, { key: 'realtime', status: 'ok', weight: 6 }, { key: 'open_vulns', status: 'warn', weight: 6, detail: '12 unfixed, 2 high/critical' }] },
@@ -2423,6 +2439,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (params.get('learn') === '1') showAwareness();
     if (params.get('backup') === '1') setTimeout(openBackupWizard, 400);   // dev : assistant de sauvegarde
     if (params.get('autoscan') === '1') setTimeout(() => startFullSystemScan(true), 500);   // dev : scan en cours
+    if (params.get('integrity') === '1') setTimeout(() => runIntegrityOnly(), 500);           // dev : intégrité en cours
     if (params.get('lesson')) setTimeout(() => openLesson(params.get('lesson')), 300);   // dev : ouvre une leçon
     if (location.hash && $(`tab-${location.hash.slice(1)}`)) { setViewMode('advanced', false); switchTab(location.hash.slice(1)); }
     sendToBackend({ action: 'check_status' });
@@ -2741,6 +2758,33 @@ function firewallQuickDeny(port, proto) {
 
 // ─── Boutons de scan : désactivés pendant une analyse ou une vérification d'intégrité ──
 let integrityRunning = false;
+let integrityProg = null;                 // progression par outil pendant une vérification d'intégrité
+const INTEGRITY_TOOLS = ['lynis', 'unhide', 'unhide-tcp', 'chkrootkit', 'debsums'];
+
+function onIntegrityProgress(data) {
+    integrityProg = data || null;
+    renderIntegrityProgress();
+}
+
+/** Lignes « outil : étape · pourcentage » dans le scan (phase intégrité) et dans la carte Intégrité. */
+function integrityProgressHtml() {
+    const tools = (integrityProg && integrityProg.tools) || {};
+    return `<div class="integrity-progress-title">${t('scan.integrity.title')}</div>` + INTEGRITY_TOOLS.map(name => {
+        const s = tools[name] || { state: 'pending', percent: 0, detail: '' };
+        const pct = s.state === 'done' || s.state === 'skipped' ? 100 : (s.percent || 0);
+        const label = s.state === 'running' ? (s.detail ? escapeHtml(s.detail) : t('scan.integrity.running'))
+            : s.state === 'done' ? (s.warnings ? t('scan.integrity.done', { n: s.warnings }) : t('scan.integrity.done_clean'))
+            : s.state === 'skipped' ? t('scan.integrity.skipped') : t('scan.integrity.pending');
+        return `<div class="tool-row tool-${s.state}"><span class="tool-name">${escapeHtml(name)}</span><span class="tool-bar"><span style="width:${pct}%"></span></span><span class="tool-pct">${s.state === 'running' ? `${pct} %` : s.state === 'done' ? '✓' : s.state === 'skipped' ? '–' : '…'}</span><span class="tool-detail">${label}</span></div>`;
+    }).join('');
+}
+
+function renderIntegrityProgress() {
+    const active = integrityRunning || (scan.running && scan.phase === 'integrity');
+    const hero = $('integrityProgress');
+    if (hero) { hero.hidden = !active; if (active) hero.innerHTML = integrityProgressHtml(); }
+    if (integrityRunning && $('integrityList')) $('integrityList').innerHTML = integrityProgressHtml();
+}
 
 function syncScanButtons() {
     const busy = !!scan.running;

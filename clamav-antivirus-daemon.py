@@ -2672,7 +2672,64 @@ def parse_lynis_report(path="/var/log/lynis-report.dat", log_path="/var/log/lyni
 
 CHK_RULES_VERSION = 3              # règles de classification intégrées ; un relevé plus ancien est refait au démarrage
 CHK_NOISE = ("RTNETLINK answers", "ip: ", "ifconfig:", "ls: ", "find: ", "grep: ", "netstat:", "ss: ", "Usage:",
-             "/usr/sbin/chkrootkit:", "chkrootkit:")   # messages d'outils système, pas des constats
+             "/usr/sbin/chkrootkit:", "chkrootkit:", "chkproc:", "chkdirs:", "chkutmp:", "eth", "wlan")   # messages d'outils, pas des constats
+CHK_NOISE = tuple(x for x in CHK_NOISE if x not in ("eth", "wlan"))
+LYNIS_SECTIONS = 44                # sections « [+] » d'un audit complet (progression)
+CHK_TESTS = 108                    # « Searching for … » + « Checking `bin'… » d'un passage chkrootkit
+
+
+def _md5sums_entries():
+    """Nombre de fichiers que debsums va vérifier (lignes des *.md5sums), pour la progression."""
+    total = 0
+    try:
+        for n in os.listdir("/var/lib/dpkg/info"):
+            if n.endswith(".md5sums"):
+                with open(os.path.join("/var/lib/dpkg/info", n), "rb") as f:
+                    total += sum(1 for _ in f)
+    except OSError:
+        pass
+    return total or 500000
+
+
+def _stream_tool(name, cmd, cancel_event, tick):
+    """Lance un outil d'intégrité en lisant sa sortie au fil de l'eau ; tick(pourcentage, étape) selon ses repères.
+    Retourne (lignes utiles, code retour). Pour debsums, seules les anomalies sont gardées (une ligne par fichier sinon)."""
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, errors="replace")
+    except OSError as e:
+        return [f"{name}: {e}"], 1
+    totals = {"lynis": LYNIS_SECTIONS, "chkrootkit": CHK_TESTS, "unhide": 3, "unhide-tcp": 2}
+    total = _md5sums_entries() if name == "debsums" else totals.get(name, 1)
+    out, done, detail, last_tick = [], 0, "", 0.0
+    for raw in proc.stdout:
+        if cancel_event is not None and cancel_event.is_set():
+            proc.terminate()
+            break
+        line = raw.rstrip("\n")
+        if name == "debsums":
+            done += 1
+            if line and not line.endswith(" OK"):
+                out.append(line)
+        else:
+            out.append(line)
+            s = line.strip()
+            if name == "lynis" and s.startswith("[+] "):
+                done += 1
+                detail = s[4:].strip()[:60]
+            elif name == "chkrootkit" and (s.startswith("Checking `") or s.startswith("Searching for ")):
+                done += 1
+                detail = (s.split("`", 1)[1].split("'", 1)[0] if s.startswith("Checking `") else s[14:].split("...", 1)[0]).strip()[:60]
+            elif name in ("unhide", "unhide-tcp") and s.startswith("[*]"):
+                done += 1
+                detail = s[3:].strip()[:60]
+            else:
+                continue
+        now = time.time()
+        if now - last_tick >= 0.4:
+            last_tick = now
+            tick(min(97, int(done * 100 / max(1, total))), detail)
+    proc.wait()
+    return out, proc.returncode
 NETMGR_NAMES = {"NetworkManager", "wpa_supplicant", "iwd", "dhclient", "dhcpcd", "avahi-daemon", "systemd-networkd",
                 "dnsmasq", "libvirtd", "dockerd", "tcpdump", "dumpcap", "wireshark", "nmap", "arp-scan", "lldpd",
                 "connmand", "hostapd", "NetworkManager-dispatcher"}
@@ -2691,6 +2748,19 @@ def parse_chkrootkit(out):
                 or s.startswith(CHK_NOISE):
             prev_blank = False
             continue
+        m = re.match(r"^(?:Checking `[^']*'\.\.\.|Searching for .*?\.\.\.)\s*(.*)$", s)
+        if m:                                       # mode verbeux : le résultat du test suit sur la même ligne
+            rest = m.group(1).strip().lower()
+            if not rest or rest.startswith(("not infected", "not found", "not tested", "nothing", "ok", "warning", "no ")) \
+                    or "nothing detected" in rest or "nothing deleted" in rest:
+                prev_blank = False
+                continue                            # test sans constat (un WARNING détaillé suit sur ses propres lignes)
+            if cur:                                 # résultat non anodin (ex. « Checking `ls'... INFECTED ») : constat entier
+                findings.append("\n".join(cur))
+                cur = []
+            cur.append(s)
+            prev_blank = False
+            continue
         # Se rattache au constat en cours : chemin ou ligne de tableau, ou en-tête terminé par « : » (liste annoncée)
         attach = s.startswith(("/", "!")) or (bool(cur) and cur[0].rstrip().endswith(":"))
         if cur and (s.startswith(("WARNING", "INFECTED", "Possible", "Checking")) or prev_blank or not attach):
@@ -2700,7 +2770,7 @@ def parse_chkrootkit(out):
         prev_blank = False
     if cur:
         findings.append("\n".join(cur))
-    return [f for f in findings if not f.startswith("Checking")][:80]
+    return findings[:80]
 
 
 # Noms cachés légitimes dans /usr/lib et /lib (chkrootkit signale tout nom commençant par un point)
@@ -2846,27 +2916,38 @@ def integrity_ack_key(tool, text):
     return f"{tool}:{hashlib.sha1(re.sub(r'\s+', ' ', (text or '').strip()).encode()).hexdigest()[:16]}"
 
 
-def run_integrity_checks(collect_verified=False, cancel_event=None):
+def run_integrity_checks(collect_verified=False, cancel_event=None, progress=None):
     """Lynis (audit de durcissement), unhide (processus et ports cachés), chkrootkit, debsums et fichiers de
     l'application. Avec collect_verified, retourne aussi l'ensemble (hashes) des fichiers système vérifiés
-    par debsums, que l'antivirus peut ignorer."""
+    par debsums, que l'antivirus peut ignorer. `progress(outil, pourcentage, étape, état, avertissements)`
+    est appelé au fil de l'eau (sortie des outils lue en continu) pour l'affichage."""
     result = {"checked_at": now_iso(), "tools": {}, "app": app_integrity(), "warnings": 0, "verified_files": 0}
     verified = set()
-    tools = {"lynis": ["lynis", "audit", "system", "--quick", "--no-colors", "--quiet"],
+    tools = {"lynis": ["lynis", "audit", "system", "--quick", "--no-colors"],
              "unhide": ["unhide", "quick"],
              "unhide-tcp": ["unhide-tcp"],
-             "chkrootkit": ["chkrootkit", "-q"],
-             "debsums": ["debsums", "-s"]}
+             "chkrootkit": ["chkrootkit"],
+             "debsums": ["debsums"]}
+
+    def report(name, percent, detail="", state="running", warnings=None):
+        if progress is not None:
+            try:
+                progress(name, percent, detail, state, warnings)
+            except Exception as e:  # noqa: BLE001
+                log(f"Progression intégrité : {e}")
+
     for name, cmd in tools.items():
         entry = {"installed": shutil.which(cmd[0]) is not None, "ran": False, "warnings": [], "rc": None}
         if cancel_event is not None and cancel_event.is_set():
             result["tools"][name] = entry
             continue
+        if not (entry["installed"] and os.geteuid() == 0):
+            report(name, 100, "", "skipped")
         if entry["installed"] and os.geteuid() == 0:
-            r = run_quiet(cmd, timeout=1800)
+            report(name, 0, "", "running")
+            out, rc = _stream_tool(name, cmd, cancel_event, lambda pct, det, _n=name: report(_n, pct, det))
             entry["ran"] = True
-            entry["rc"] = r.returncode
-            out = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+            entry["rc"] = rc
             lines = [ln.strip() for ln in out if ln.strip()]
             if name == "lynis":
                 rep = parse_lynis_report()
@@ -2879,11 +2960,12 @@ def run_integrity_checks(collect_verified=False, cancel_event=None):
                 lines = chk["warnings"]
                 entry["benign"], entry["notes"], entry["rules"] = chk["benign"], chk["notes"], CHK_RULES_VERSION
             elif name == "debsums":
-                lines = [ln for ln in lines if ln and not ln.startswith("debsums:") or "FAILED" in ln or "REPLACED" in ln][:80]
+                lines = [ln for ln in lines if "FAILED" in ln or "REPLACED" in ln or "missing file" in ln][:80]
                 if collect_verified:
-                    verified = debsums_verified_paths(out)
+                    verified = debsums_verified_paths(lines)
                     result["verified_files"] = len(verified)
             entry["warnings"] = lines[:80]
+            report(name, 100, "", "done", len(entry["warnings"]))
         result["tools"][name] = entry
         result["warnings"] += len(entry["warnings"])
     result["warnings"] += len(result["app"]["modified"]) + len(result["app"]["missing"])
@@ -2929,6 +3011,8 @@ class Daemon:
         self.last_daily = 0
         self.timeshift_enabling = False
         self.hardening_running = False
+        self.integrity_progress = None         # {"tools": {outil: {percent, detail, state, warnings}}, "current", "started_at"}
+        self.last_integrity_emit = 0.0
         self.current_network = None            # réseau courant {key, name, type, device}, None hors ligne
         self.network_lock = threading.Lock()
         self.last_integrity = 0
@@ -2965,7 +3049,22 @@ class Daemon:
         self.broadcast({"event": "line", "kind": kind, "text": text})
 
     def emit_progress(self, job):
-        self.broadcast({"event": "progress", **job.public()})
+        payload = job.public()
+        if job.phase == "integrity" and self.integrity_progress:
+            payload["integrity_progress"] = self.integrity_progress
+        self.broadcast({"event": "progress", **payload})
+
+    def integrity_progress_cb(self, name, percent, detail, state, warnings):
+        """Callback des outils d'intégrité : état par outil diffusé (au plus toutes les 0,4 s, sauf changement d'état)."""
+        if self.integrity_progress is None:
+            self.integrity_progress = {"tools": {}, "current": None, "started_at": now_iso()}
+        prev = self.integrity_progress["tools"].get(name) or {}
+        self.integrity_progress["tools"][name] = {"percent": percent, "detail": detail, "state": state, "warnings": warnings}
+        self.integrity_progress["current"] = name if state == "running" else self.integrity_progress.get("current")
+        now = time.time()
+        if state != prev.get("state") or now - self.last_integrity_emit >= 0.4:
+            self.last_integrity_emit = now
+            self.broadcast({"event": "integrity_progress", **self.integrity_progress})
 
     def publish_alert(self, alert):
         pid = alert.get("pid") or 0
@@ -3241,7 +3340,10 @@ class Daemon:
                 job.phase = "integrity"
                 self.emit_progress(job)
                 self.emit_line("info", "▶ integrity (Lynis, unhide, chkrootkit, debsums)")
-                result, skip = run_integrity_checks(collect_verified=True, cancel_event=job.cancel_event)
+                self.integrity_progress = None
+                result, skip = run_integrity_checks(collect_verified=True, cancel_event=job.cancel_event,
+                                                    progress=self.integrity_progress_cb)
+                self.integrity_progress = None
                 if not job.cancel_event.is_set():
                     self._store_integrity(result, after_scan=True)
                     job.integrity_warnings = result.get("warnings", 0)
@@ -4322,10 +4424,12 @@ class Daemon:
         self.integrity_running = True
         try:
             self.broadcast({"event": "integrity_running"})
-            self._store_integrity(run_integrity_checks(), after_scan=after_scan)
+            self.integrity_progress = None
+            self._store_integrity(run_integrity_checks(progress=self.integrity_progress_cb), after_scan=after_scan)
             return True
         finally:
             self.integrity_running = False
+            self.integrity_progress = None
 
     def check_weekly_integrity(self):
         if not self.settings.get("integrity_weekly"):
@@ -4680,6 +4784,8 @@ class Daemon:
         with self.queue_lock:
             job = self.current.public() if self.current else None
             queue = [j.public() for j in self.queue]
+        if job and job.get("phase") == "integrity" and self.integrity_progress:
+            job["integrity_progress"] = self.integrity_progress
         prog = self.load_progress()
         resumable = None
         if prog.get("in_progress") and not job:

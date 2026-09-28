@@ -1349,6 +1349,8 @@ class ClamAVAntivirusApp:
             self.send_to_js("backupTimeshift", ev.get("timeshift") or {})
         elif et == "timeshift_enable":
             self.timeshift_enable_result(ev.get("result") or {})
+        elif et == "integrity_progress":
+            self.send_to_js("integrityProgress", {k: v for k, v in ev.items() if k != "event"})
         elif et == "network_changed":
             T = self.T
             net = ev.get("network") or {}
