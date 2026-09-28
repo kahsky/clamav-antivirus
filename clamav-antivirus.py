@@ -1807,6 +1807,27 @@ class ClamAVAntivirusApp:
         save_state({"disclaimer_accepted": DISCLAIMER_VERSION, "disclaimer_date": now_iso()})
         self.send_status()
 
+    # ── Télémétrie : consentement explicite à la première utilisation ──
+    def act_telemetry_preview(self, _data):
+        """Charge utile exacte que le service enverrait (sans envoi), pour la montrer avant de décider."""
+        def worker():
+            resp = daemon_request("telemetry_preview", timeout=30)
+            GLib.idle_add(self.send_to_js, "telemetryPreview",
+                          {"available": bool(resp.get("ok")), "payload": resp.get("payload"), "url": resp.get("url")})
+        threading.Thread(target=worker, daemon=True).start()
+
+    def act_telemetry_consent(self, data):
+        """Réponse à la question posée en plein écran : oui/non, mémorisée pour ne plus la poser."""
+        accepted = bool(data.get("accepted"))
+        save_state({"telemetry_answered": now_iso(), "telemetry_consent": accepted})
+
+        def done(resp):
+            if not resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+            self.send_status()
+            return False
+        self.run_admin("set_settings", {"settings": {"telemetry": accepted}}, done)
+
     # ── « C'est moi » : programmes / entrées approuvés ─────────────────
     def trust_program(self, exe, comm=""):
         exe = (exe or "").replace(" (deleted)", "").strip()
@@ -2848,6 +2869,7 @@ class ClamAVAntivirusApp:
             "user_settings": user_settings(),
             "view_mode": user_settings()["view_mode"],
             "disclaimer_accepted": int(state.get("disclaimer_accepted") or 0) >= DISCLAIMER_VERSION,
+            "telemetry_answered": bool(state.get("telemetry_answered")),
             "upload_gb": (ds or {}).get("upload_gb", 0),
             "overall": (ds or {}).get("overall"),
             "read_lessons": load_state().get("read_lessons") or [],

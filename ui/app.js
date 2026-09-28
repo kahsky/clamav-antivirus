@@ -130,6 +130,7 @@ function onBackendMessage(msg) {
         case 'scanStarted':     onScanStarted(data); break;
         case 'scanPaused':      onScanPaused(data); break;
         case 'integrityProgress': onIntegrityProgress(data); break;
+        case 'telemetryPreview': onTelemetryPreview(data); break;
         case 'scanProgress':    onScanProgress(data); break;
         case 'scanLine':        onScanLine(data); break;
         case 'scanDone':        onScanDone(data); break;
@@ -309,6 +310,49 @@ function renderLegal() {
     const html = legalHtml();
     if ($('legalText')) $('legalText').innerHTML = html;
     if ($('legalTextCredits')) $('legalTextCredits').innerHTML = html;
+}
+
+// ─── Consentement télémétrie : pleine page, réponse obligatoire, exemple réel des données ────
+let telemetryConsentOpen = false;
+
+function openTelemetryConsent() {
+    if (telemetryConsentOpen || !$('telemetryModal')) return;
+    telemetryConsentOpen = true;
+    $('telemetryExample').textContent = t('telemetry.example_loading');
+    $('telemetryModal').classList.add('open');
+    sendToBackend({ action: 'telemetry_preview' });
+}
+
+function onTelemetryPreview(data) {
+    const pre = $('telemetryExample');
+    if (!pre) return;
+    if (data && data.available && data.payload) {
+        const p = { ...data.payload };
+        if (p.install_id) p.install_id = String(p.install_id).slice(0, 8) + '…';
+        pre.textContent = JSON.stringify(p, null, 2);
+        if ($('telemetryUrl')) $('telemetryUrl').textContent = data.url || '';
+    } else {
+        pre.textContent = TELEMETRY_EXAMPLE_FALLBACK;
+    }
+}
+
+const TELEMETRY_EXAMPLE_FALLBACK = JSON.stringify({
+    install_id: '5f0f79d2…', version: '1.17.0', os: 'Linux Mint 22.3', kernel: '7.0.0-34-generic', arch: 'x86_64',
+    settings: { family_mode: false, firewall_profile: 'home', auto_response: true, connection_monitor: true, auto_harden: false, scan_cache_days: 30 },
+    checklist: { score: 92, grade: 'A', fail: [], warn: ['open_vulns'] },
+    alerts_7d: { connection: 3, burst: 1 },
+    trusted_programs: ['/home/~/.local/bin/mon-script'],
+    vulns: { unfixed: 1102, fix_available: 2, kernel_pending: 3565, not_applicable: 651 },
+    scan: { duration: 1014, files: 28188, cached: 240000, engine: 'clamd', infected: 0, status: 'clean' },
+    benign_findings: { 'chkrootkit:debug': 2, 'lynis:time_synced': 1 },
+    lynis_index: 65, timeshift: true, policy: false,
+}, null, 2);
+
+function answerTelemetry(accepted) {
+    sendToBackend({ action: 'telemetry_consent', accepted: !!accepted });
+    $('telemetryModal').classList.remove('open');
+    telemetryConsentOpen = false;
+    showToast(t(accepted ? 'telemetry.thanks' : 'telemetry.declined'), 'info');
 }
 
 function openLegal() {
@@ -1149,6 +1193,7 @@ function updateDashboardStatus(data) {
     if (data.app_update && !secData.app_update) secData.app_update = data.app_update;
     if (data.disclaimer_accepted === false && legalAccepted) { legalAccepted = false; openLegal(); }
     else if (data.disclaimer_accepted === true) legalAccepted = true;
+    if (data.disclaimer_accepted === true && data.telemetry_answered === false) openTelemetryConsent();   // première fois, jamais répondu
     renderAdmin();
     renderSecurityBadge();
     updateStatusUI(data.color, data.message);
@@ -2472,6 +2517,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (params.get('backup') === '1') setTimeout(openBackupWizard, 400);   // dev : assistant de sauvegarde
     if (params.get('autoscan') === '1') setTimeout(() => startFullSystemScan(true), 500);   // dev : scan en cours
     if (params.get('integrity') === '1') setTimeout(() => runIntegrityOnly(), 500);           // dev : intégrité en cours
+    if (params.get('consent') === '1') setTimeout(() => { openTelemetryConsent(); onTelemetryPreview({ available: false }); }, 400);
     if (params.get('modal') === '1') setTimeout(() => appConfirm({ title: t('quarantine.delete_title'), message: t('quarantine.confirm_delete', { name: 'eicar.com' }), ok: t('quarantine.delete'), danger: true }), 500);
     if (params.get('lesson')) setTimeout(() => openLesson(params.get('lesson')), 300);   // dev : ouvre une leçon
     if (location.hash && $(`tab-${location.hash.slice(1)}`)) { setViewMode('advanced', false); switchTab(location.hash.slice(1)); }

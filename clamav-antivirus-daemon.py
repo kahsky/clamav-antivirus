@@ -4662,6 +4662,18 @@ class Daemon:
                 return False
         except ValueError:
             pass
+        payload = self.build_telemetry_payload()
+        try:
+            http_get(TELEMETRY_URL, timeout=30, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+            self.state.update(telemetry_sent=now_iso())
+            self.write_log("telemetry sent (opt-in)")
+            return True
+        except Exception as e:  # noqa: BLE001
+            log(f"Télémétrie : {e}")
+            return False
+
+    def build_telemetry_payload(self):
+        """Exactement ce qui serait envoyé (aussi montré à l'utilisateur avant qu'il ne décide)."""
         install_id = self.state.get("install_id")
         if not install_id:
             install_id = uuid.uuid4().hex
@@ -4703,14 +4715,7 @@ class Daemon:
             payload.update(self.telemetry_extra())
         except Exception as e:  # noqa: BLE001
             log(f"Télémétrie (champs) : {e}")
-        try:
-            http_get(TELEMETRY_URL, timeout=30, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
-            self.state.update(telemetry_sent=now_iso())
-            self.write_log("telemetry sent (opt-in)")
-            return True
-        except Exception as e:  # noqa: BLE001
-            log(f"Télémétrie : {e}")
-            return False
+        return payload
 
     def apply_acknowledged(self, pers):
         """Applique les entrées de persistance approuvées par l'utilisateur et recalcule les compteurs."""
@@ -5389,6 +5394,14 @@ class Daemon:
             self.write_log(f"✘ untrusted program: {exe}")
             self.broadcast({"event": "trusted", "programs": programs, "acknowledged": self.state.get("acknowledged_persistence") or []})
             return {"ok": True, "programs": programs}
+
+        if cmd == "telemetry_preview":
+            # Aperçu de la charge utile telle qu'elle serait envoyée (rien n'est transmis)
+            try:
+                payload = self.build_telemetry_payload()
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "error": "internal", "detail": str(e)[:200]}
+            return {"ok": True, "payload": payload, "url": TELEMETRY_URL}
 
         if cmd == "forget_network":
             # Le réseau redevient inconnu : Public d'office à la prochaine connexion (tout de suite si c'est le réseau courant)

@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.16.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.17.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -1438,6 +1438,41 @@
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- AVERTISSEMENT JURIDIQUE (premier lancement)                        -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="modal-overlay consent-overlay" id="telemetryModal">
+        <div class="modal consent-modal" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
+            <div class="modal-header"><h2 data-i18n="telemetry.title">Aider à améliorer ClamAV Antivirus GUI ?</h2></div>
+            <div class="modal-body consent-body">
+                <p class="consent-lead" data-i18n="telemetry.lead">Une fois par semaine, l'application peut envoyer à Dukiwi un petit relevé anonyme de son fonctionnement. C'est vous qui décidez, et vous pouvez changer d'avis à tout moment dans Paramètres.</p>
+                <div class="consent-grid">
+                    <div class="consent-col">
+                        <h3 data-i18n="telemetry.why_title">À quoi ça sert</h3>
+                        <ul>
+                            <li data-i18n="telemetry.why_1">Réduire les faux positifs : un programme approuvé par plusieurs personnes rejoint la liste blanche signée, et plus personne n'est dérangé pour lui.</li>
+                            <li data-i18n="telemetry.why_2">Repérer les contrôles qui posent problème à beaucoup de monde pour les rendre plus simples.</li>
+                            <li data-i18n="telemetry.why_3">Mesurer si les analyses sont assez rapides et si les mises à jour sont bien installées.</li>
+                        </ul>
+                    </div>
+                    <div class="consent-col">
+                        <h3 data-i18n="telemetry.not_title">Ce qui n'est jamais envoyé</h3>
+                        <ul>
+                            <li data-i18n="telemetry.not_1">Votre nom, le nom de l'ordinateur, vos adresses e-mail ou IP en clair.</li>
+                            <li data-i18n="telemetry.not_2">Le contenu ou le nom de vos documents : les chemins sont anonymisés (/home/~/).</li>
+                            <li data-i18n="telemetry.not_3">Votre historique de navigation, vos mots de passe, vos fichiers en quarantaine.</li>
+                        </ul>
+                    </div>
+                </div>
+                <details class="consent-example" open>
+                    <summary data-i18n="telemetry.example_title">Exemple exact de ce qui serait envoyé depuis cet ordinateur</summary>
+                    <pre id="telemetryExample" class="consent-pre"></pre>
+                    <p class="text-muted consent-note"><span data-i18n="telemetry.example_note">Identifiant aléatoire propre à cette installation, sans lien avec vous. Destination :</span> <code id="telemetryUrl">https://www.dukiwi.com/repo/api/telemetry.php</code></p>
+                </details>
+            </div>
+            <div class="modal-actions consent-actions">
+                <button class="btn btn-secondary" onclick="answerTelemetry(false)" data-i18n="telemetry.decline">Non merci</button>
+                <button class="btn btn-primary" onclick="answerTelemetry(true)" data-i18n="telemetry.accept">Oui, envoyer ce relevé anonyme</button>
+            </div>
+        </div>
+    </div>
     <div class="modal-overlay legal-overlay" id="legalModal">
         <div class="modal legal-modal" onclick="event.stopPropagation()">
             <div class="modal-header">
