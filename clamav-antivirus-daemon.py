@@ -3818,6 +3818,7 @@ class Daemon:
             "infected": job.infected, "duration": round(duration),
             "status": status, "source": "daemon", "auto": job.auto,
             "usb": {k: job.usb.get(k) for k in ("label", "model", "size", "devnode")} if job.usb else None,
+            "cached": job.cached, "skipped": job.skipped, "engine": job.engine,
         }
         self.state.update(last_scan=entry["date"], last_scan_path=job.path,
                           last_scan_infected=job.infected, last_scan_files=job.total,
@@ -4610,6 +4611,47 @@ class Daemon:
             + (" (signée)" if policy.get("_signed") else ""))
         self.write_log(f"policy applied: {policy.get('name', '')}")
 
+    def telemetry_extra(self):
+        """Champs de télémétrie qui alimentent les règles intégrées et la mesure des performances (sans identifiant) :
+        avertissements d'intégrité approuvés, classifications bénignes, dernier scan, durcissement, paquets à failles hautes."""
+        integ = self.state.get("integrity") or {}
+        tools = integ.get("tools") or {}
+        acked, benign = [], {}
+        for name, t in tools.items():
+            for w in (t.get("ignored") or [])[:10]:
+                acked.append({"tool": name, "text": anonymize_path(str(w).splitlines()[0])[:160]})
+            for b in t.get("benign") or []:
+                for n in b.get("notes") or []:
+                    key = f"{name}:{n.get('reason', '?')}"
+                    benign[key] = benign.get(key, 0) + 1
+        vulns = self.state.get("vulns") or {}
+        high = {}
+        for it in vulns.get("items") or []:
+            if it.get("status") == "unfixed" and it.get("priority") in ("critical", "high"):
+                high[it.get("package") or "?"] = high.get(it.get("package") or "?", 0) + 1
+        history = self.state.get("history") or []
+        last = next((h for h in history if not h.get("usb")), None) or {}
+        cutoff = (datetime.now().timestamp() - 30 * 86400)
+        usb30 = 0
+        for h in history:
+            try:
+                if h.get("usb") and datetime.fromisoformat(h.get("date", "")).timestamp() >= cutoff:
+                    usb30 += 1
+            except ValueError:
+                pass
+        hard = self.state.get("hardening") or {}
+        return {
+            "acknowledged_integrity": acked[:30],
+            "benign_findings": benign,
+            "integrity_tools": {n: len(t.get("warnings") or []) for n, t in tools.items()},
+            "lynis_index": (integ.get("lynis") or {}).get("index"),
+            "hardening": {"applied": sorted(hard.get("applied") or {})[:40], "failed": len(hard.get("failed") or {})},
+            "vulns_high": dict(sorted(high.items(), key=lambda kv: -kv[1])[:20]),
+            "scan": {k: last.get(k) for k in ("duration", "files", "cached", "skipped", "engine", "infected", "status", "auto")} if last else None,
+            "usb_scans_30d": usb30,
+            "known_networks": len(self.state.get("network_profiles") or {}),
+        }
+
     def send_telemetry(self):
         """Télémétrie anonyme, opt-in, une fois par semaine : version, système, score, faux positifs approuvés (chemins anonymisés)."""
         if not self.settings.get("telemetry"):
@@ -4644,7 +4686,8 @@ class Daemon:
         vulns = (self.state.get("vulns") or {}).get("counts") or {}
         payload = {
             "install_id": install_id, "version": VERSION, "os": pretty, "kernel": os.uname().release, "arch": os.uname().machine,
-            "settings": {k: self.settings.get(k) for k in ("family_mode", "firewall_profile", "backup_check", "auto_response", "connection_monitor")},
+            "settings": {k: self.settings.get(k) for k in ("family_mode", "firewall_profile", "backup_check", "auto_response", "connection_monitor",
+                                                             "auto_harden", "scan_cache_days", "integrity_weekly", "weekly_scan")},
             "checklist": {"score": checklist.get("score"), "grade": checklist.get("grade"),
                           "fail": [i["key"] for i in checklist.get("items", []) if i.get("status") == "fail"],
                           "warn": [i["key"] for i in checklist.get("items", []) if i.get("status") == "warn"]},
@@ -4656,6 +4699,10 @@ class Daemon:
             "timeshift": bool((self.state.get("timeshift") or {}).get("schedule")),
             "policy": bool(self.policy),
         }
+        try:
+            payload.update(self.telemetry_extra())
+        except Exception as e:  # noqa: BLE001
+            log(f"Télémétrie (champs) : {e}")
         try:
             http_get(TELEMETRY_URL, timeout=30, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
             self.state.update(telemetry_sent=now_iso())
