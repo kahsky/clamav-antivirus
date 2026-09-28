@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.13.0)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.14.0)
 
 ---
 
@@ -86,6 +86,15 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   précédentes retenues pour « Annuler »), celles à lire avant d'appliquer (umask, SSH, TMPDIR) restent
   manuelles, les autres sont expliquées (faux positifs, sans objet sur un poste de travail). Lynis est relancé
   après chaque application ; réglage « appliquer automatiquement après chaque audit » dans les paramètres.
+- **Moteur d'analyse rapide** — le service analyse par clamd (base de signatures en mémoire, démarré au besoin)
+  avec plusieurs `clamdscan --fdpass` en parallèle (jusqu'à 8 lots de 100 fichiers, 3 pour une clé USB), repli
+  `clamscan --file-list` si clamd manque. **Cache des fichiers sains** : l'empreinte (taille, mtime, ctime,
+  inode) de chaque fichier analysé sain est gardée dans `scan-cache.db` (SQLite) ; un fichier inchangé n'est
+  pas relu pendant `scan_cache_days` jours (30 par défaut, réglable, case « Tout ré-analyser » sur le scan).
+  **Clés USB** : un fichier caché `.clamav` (JSON signé HMAC avec un secret propre à l'installation, jamais sur
+  la clé) liste les fichiers sains ; à la prochaine insertion, seuls les fichiers nouveaux ou modifiés sont
+  lus. **Clé pendant un scan** : le scan en cours est mis en pause (workers suspendus), la clé est analysée
+  tout de suite, puis le scan reprend.
 - **Profil mémorisé par réseau** — le service identifie le réseau courant (connexion NetworkManager qui porte la
   route par défaut, sinon adresse MAC de la passerelle) et mémorise le profil choisi pour chaque réseau. Un réseau
   inconnu passe toujours en Public (popup « Nouveau réseau », bouton « Changer » vers l'onglet Pare-feu) ; un
@@ -239,7 +248,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.13.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.13.0_all.deb)
+[Télécharger clamav-antivirus_1.14.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.14.0_all.deb)
 
 ---
 
@@ -270,12 +279,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.13.0_all.deb`
+Résultat : `clamav-antivirus_1.14.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.13.0_all.deb
+sudo dpkg -i clamav-antivirus_1.14.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

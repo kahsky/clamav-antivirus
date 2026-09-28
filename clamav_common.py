@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.13.0"
+VERSION = "1.14.0"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -25,6 +25,8 @@ SYSTEM_STATE_FILE      = os.path.join(SYSTEM_STATE_DIR, "state.json")
 SYSTEM_QUARANTINE_DIR  = os.path.join(SYSTEM_STATE_DIR, "quarantine")
 SYSTEM_PROGRESS_FILE   = os.path.join(SYSTEM_STATE_DIR, "scan_progress.json")
 SYSTEM_FILELIST_CACHE  = os.path.join(SYSTEM_STATE_DIR, "scan_filelist.txt")
+SYSTEM_SCAN_CACHE_DB   = os.path.join(SYSTEM_STATE_DIR, "scan-cache.db")     # fichiers sains déjà vérifiés (empreintes)
+SYSTEM_SECRET_FILE     = os.path.join(SYSTEM_STATE_DIR, "secret")            # HMAC des manifestes .clamav (jamais sur la clé)
 FIRST_SCAN_FLAG        = os.path.join(SYSTEM_STATE_DIR, "first-scan-pending")
 SYSTEM_LOG_FILE        = os.path.join(SYSTEM_LOG_DIR, "scan.log")
 SYSTEM_SETTINGS_FILE   = os.path.join(SYSTEM_STATE_DIR, "settings.json")
@@ -84,6 +86,8 @@ DEFAULT_SETTINGS = {
     "weekly_scan": False,
     "weekly_scan_day": 6,
     "weekly_scan_hour": 12,
+    # Cache de scan : un fichier sain et inchangé (taille, dates, inode) n'est pas relu pendant N jours (0 = désactivé)
+    "scan_cache_days": 30,
     # Mode famille : réglages et actions sensibles réservés à un administrateur authentifié
     "family_mode": False,
     # Réponse automatique : suspendre (SIGSTOP) un programme jugé dangereux, puis demander
@@ -116,6 +120,7 @@ SETTINGS_LIMITS = {
     "usb_auto_scan_max_gib": (1, 100000),
     "update_hour": (0, 23), "update_minute": (0, 59),
     "weekly_scan_day": (0, 6), "weekly_scan_hour": (0, 23),
+    "scan_cache_days": (0, 365),
     "integrity_day": (0, 6), "integrity_hour": (0, 23),
 }
 
@@ -181,11 +186,14 @@ NOISE_PREFIXES = ("traverse_to:", "LibClamAV", "Scanning ")
 NOISE_SUFFIXES = (": Empty file", ": No such file or directory", ": Excluded", ": Symbolic link")
 
 
-def find_command(path, exclude=SCAN_EXCLUDE):
-    """Commande find listant les fichiers réguliers à scanner sous `path`."""
+def find_command(path, exclude=SCAN_EXCLUDE, stat=False):
+    """Commande find listant les fichiers réguliers à scanner sous `path`. Avec `stat`, chaque ligne porte aussi
+    l'empreinte (taille, mtime, ctime, inode) séparée par des tabulations, pour le cache des fichiers sains."""
     cmd = ['find', path, '-type', 'f']
     for excl in exclude:
         cmd += ['!', '-path', excl]
+    if stat:
+        cmd += ['-printf', '%p\t%s\t%T@\t%C@\t%i\n']
     return cmd
 
 

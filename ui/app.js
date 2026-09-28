@@ -128,6 +128,7 @@ function onBackendMessage(msg) {
         case 'dbInfo':          renderDbInfo(data.files); break;
         case 'operationResult': handleOperationResult(data); break;
         case 'scanStarted':     onScanStarted(data); break;
+        case 'scanPaused':      onScanPaused(data); break;
         case 'scanProgress':    onScanProgress(data); break;
         case 'scanLine':        onScanLine(data); break;
         case 'scanDone':        onScanDone(data); break;
@@ -1040,9 +1041,10 @@ function onSettingsData(data) {
     if ($('setBackupCheck')) $('setBackupCheck').checked = sys.backup_check !== false;
     if ($('setTelemetry')) $('setTelemetry').checked = !!sys.telemetry;
     if ($('setAutoHarden')) $('setAutoHarden').checked = !!sys.auto_harden;
+    if ($('setScanCacheDays')) $('setScanCacheDays').value = sys.scan_cache_days ?? 30;
     if ($('telemetryLast')) $('telemetryLast').textContent = data.telemetry_sent ? t('settings.telemetry.last', { rel: formatRelative(data.telemetry_sent) }) : '';
     const locked = new Set(data.locked || []);
-    const map = { setUploadMonitor: 'upload_monitor', setUploadGb: 'upload_alert_gb', setUploadHours: 'upload_window_hours', setBurstMonitor: 'burst_monitor', setBurstInfo: 'burst_info_threshold', setBurstDanger: 'burst_danger_threshold', setBurstWindow: 'burst_window_sec', setUsbAuto: 'usb_auto_scan', setUsbMax: 'usb_auto_scan_max_gib', setUpdateTime: 'update_hour', setFamilyMode: 'family_mode', setAutoResponse: 'auto_response', setConnectionMonitor: 'connection_monitor', setGeoip: 'geoip_lookup', setGeoipKey: 'geoip_api_key', setIntegrityWeekly: 'integrity_weekly', setIntegrityDay: 'integrity_day', setIntegrityHour: 'integrity_hour', setAppUpdateCheck: 'app_update_check', setAppUpdateAuto: 'app_update_auto', setWeekly: 'weekly_scan', setWeeklyDay: 'weekly_scan_day', setWeeklyHour: 'weekly_scan_hour', setBackupCheck: 'backup_check', setTelemetry: 'telemetry', setAutoHarden: 'auto_harden' };
+    const map = { setUploadMonitor: 'upload_monitor', setUploadGb: 'upload_alert_gb', setUploadHours: 'upload_window_hours', setBurstMonitor: 'burst_monitor', setBurstInfo: 'burst_info_threshold', setBurstDanger: 'burst_danger_threshold', setBurstWindow: 'burst_window_sec', setUsbAuto: 'usb_auto_scan', setUsbMax: 'usb_auto_scan_max_gib', setUpdateTime: 'update_hour', setFamilyMode: 'family_mode', setAutoResponse: 'auto_response', setConnectionMonitor: 'connection_monitor', setGeoip: 'geoip_lookup', setGeoipKey: 'geoip_api_key', setIntegrityWeekly: 'integrity_weekly', setIntegrityDay: 'integrity_day', setIntegrityHour: 'integrity_hour', setAppUpdateCheck: 'app_update_check', setAppUpdateAuto: 'app_update_auto', setWeekly: 'weekly_scan', setWeeklyDay: 'weekly_scan_day', setWeeklyHour: 'weekly_scan_hour', setBackupCheck: 'backup_check', setTelemetry: 'telemetry', setAutoHarden: 'auto_harden', setScanCacheDays: 'scan_cache_days' };
     Object.entries(map).forEach(([id, key]) => { const el = $(id); if (!el) return; const row = el.closest('.setting-row'); if (locked.has(key)) { el.disabled = true; if (row) { row.classList.add('locked'); row.title = t('settings.locked_note'); } } else if (row) { row.classList.remove('locked'); row.title = ''; } });
     const banner = $('policyBanner');
     if (banner) { banner.hidden = !data.policy; if (data.policy) banner.textContent = t('settings.policy.banner', { name: data.policy.name || '—', signed: data.policy.signed ? t('settings.policy.signed') : '', n: (data.locked || []).length }) + (data.allowlist && data.allowlist.version ? ' · ' + t('settings.allowlist', { version: data.allowlist.version, n: data.allowlist.patterns || 0 }) : ''); }
@@ -1086,6 +1088,7 @@ function saveSettings() {
         backup_check: $('setBackupCheck') ? $('setBackupCheck').checked : true,
         telemetry: $('setTelemetry') ? $('setTelemetry').checked : false,
         auto_harden: $('setAutoHarden') ? $('setAutoHarden').checked : false,
+        scan_cache_days: $('setScanCacheDays') ? Math.max(0, Math.min(365, parseInt($('setScanCacheDays').value, 10) || 0)) : 30,
         integrity_day: parseInt($('setIntegrityDay').value, 10),
         integrity_hour: parseInt($('setIntegrityHour').value, 10) || 0,
         app_update_check: $('setAppUpdateCheck').checked,
@@ -1504,6 +1507,16 @@ function renderAlerts(available = true) {
 
 // ─── Scan : démarrage / annulation ──────────────────────────────────────────
 
+function scanNoCache() { return !!($('scanNoCache') && $('scanNoCache').checked); }
+
+function onScanPaused(job) {
+    scan.paused = true;
+    if (job && job.path) scan.path = job.path;
+    setHeroNote(t('scan.note.paused_usb'));
+    appendConsoleLine('info', t('scan.note.paused_usb'));
+    renderScanHero();
+}
+
 function startFullSystemScan(withIntegrity = false) {
     scan.integrity = !!withIntegrity;
     if (scan.running) { showToast(t('toast.scan_running'), 'info'); if (viewMode === 'advanced') switchTab('scan'); return; }
@@ -1512,7 +1525,7 @@ function startFullSystemScan(withIntegrity = false) {
     prepareScanUI('/');
     const d = (lastStatus && lastStatus.daemon) || {};
     if (!d.available) setHeroNote(t('scan.note.service_off'));
-    sendToBackend({ action: 'scan', path: '/', integrity: !!withIntegrity });
+    sendToBackend({ action: 'scan', path: '/', integrity: !!withIntegrity, nocache: scanNoCache() });
 }
 
 function startScan(path) {
@@ -1522,7 +1535,7 @@ function startScan(path) {
     switchTab('scan');
     prepareScanUI(path);
     document.querySelectorAll('.target-btn').forEach(btn => btn.classList.toggle('scanning', btn.dataset.path === path));
-    sendToBackend({ action: 'scan', path });
+    sendToBackend({ action: 'scan', path, nocache: scanNoCache() });
 }
 
 function resumeScan() {
@@ -1586,6 +1599,7 @@ function onScanStarted(data) {
     scan.needsPassword = !!data.needs_password;
     if (data.started_at) scan.startedAt = data.started_at;
     if (data.job) applyProgress(data.job);
+    if (data.resumed) { scan.paused = false; appendConsoleLine('info', t('scan.note.resumed')); }
     if (scan.needsPassword) setHeroNote(t('scan.note.auth'));
     else if (scan.usb) setHeroNote(t('scan.note.usb', { name: scan.usb.label || scan.usb.model || scan.usb.devnode || 'USB' }));
     else if (scan.auto) setHeroNote(t('scan.note.auto'));
@@ -1605,6 +1619,9 @@ function applyProgress(p) {
     scan.denied = p.denied || 0;
     scan.errors = p.errors || 0;
     scan.file = p.file || '';
+    scan.cached = p.cached || 0;
+    if (p.engine) scan.engine = p.engine;
+    if (p.paused != null) scan.paused = !!p.paused;
     if (p.usb) scan.usb = p.usb;
     if (p.started_at) scan.startedAt = p.started_at;
     if (Array.isArray(p.threats) && p.threats.length > scan.threats.length) scan.threats = p.threats.slice();
@@ -1642,6 +1659,7 @@ function onScanDone(data) {
     scan.result = data;
     const summary = data.summary || {};
     if (summary.files) scan.total = summary.files;
+    if (summary.cached) scan.cached = summary.cached;
     if (summary.infected != null) scan.infected = summary.infected;
     if (Array.isArray(summary.threats) && summary.threats.length) scan.threats = summary.threats;
     if (data.status === 'clean' || data.status === 'infected') scan.scanned = scan.total;
@@ -1734,6 +1752,7 @@ function renderScanHero() {
 
     $('statScanned').textContent = formatNumber(scan.scanned);
     $('statTotal').textContent = scan.total ? formatNumber(scan.total) : (scan.phase === 'counting' ? formatNumber(scan.found) : '—');
+    if ($('statCached')) $('statCached').textContent = scan.cached ? formatNumber(scan.cached) : '—';
     $('statThreats').textContent = formatNumber(scan.infected);
     $('statThreats').parentElement.classList.toggle('has-threats', scan.infected > 0);
     updateTimeStats();

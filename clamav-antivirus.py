@@ -1282,7 +1282,9 @@ class ClamAVAntivirusApp:
                                              "message": self.T("msg.daemon_lost")})
             self.send_status()
         elif et == "job_started":
-            self._daemon_job_started(ev.get("job") or {})
+            self._daemon_job_started(ev.get("job") or {}, resumed=bool(ev.get("resumed")))
+        elif et == "job_paused":
+            self.send_to_js("scanPaused", ev.get("job") or {})
         elif et == "job_queued":
             if ev.get("waiting"):
                 self.send_to_js("jobQueued", ev.get("job") or {})
@@ -1392,14 +1394,14 @@ class ClamAVAntivirusApp:
             self.send_status()
         return False
 
-    def _daemon_job_started(self, job):
+    def _daemon_job_started(self, job, resumed=False):
         self.daemon_job = job
         if job.get("kind") == "scan":
             self.scan_source = "daemon"
             self.tray.set_job(self.T("tray.scanning", path=job.get("path")))
             self.send_to_js("scanStarted", {"source": "daemon", "path": job.get("path"),
                                             "resume": job.get("resume"), "auto": job.get("auto"),
-                                            "usb": job.get("usb"),
+                                            "usb": job.get("usb"), "resumed": resumed,
                                             "started_at": job.get("started_at"), "job": job})
             if job.get("usb"):
                 self.show_usb_progress(job)
@@ -1421,7 +1423,8 @@ class ClamAVAntivirusApp:
                                          "usb": ev.get("usb")})
             if not ev.get("usb"):
                 self.notify_scan_result(status, message, ev.get("summary", {}), integrity=bool(ev.get("integrity")),
-                                        integrity_warnings=ev.get("integrity_warnings"), skipped=ev.get("skipped") or 0)
+                                        integrity_warnings=ev.get("integrity_warnings"), skipped=ev.get("skipped") or 0,
+                                        cached=(ev.get("summary") or {}).get("cached") or 0)
         else:
             self.updating = False
             ok = status == "success"
@@ -1436,7 +1439,7 @@ class ClamAVAntivirusApp:
         self.send_status()
         self.tray.update_status()
 
-    def notify_scan_result(self, status, message, summary, integrity=False, integrity_warnings=None, skipped=0):
+    def notify_scan_result(self, status, message, summary, integrity=False, integrity_warnings=None, skipped=0, cached=0):
         T = self.T
         path = (summary or {}).get("path") or ""
         if status == "clean" and not self.popups_enabled("scan"):
@@ -1445,6 +1448,8 @@ class ClamAVAntivirusApp:
             message += "\n" + (T("popup.scan.integrity_warn", n=integrity_warnings) if integrity_warnings else T("popup.scan.integrity_ok"))
         if skipped:
             message += "\n" + T("scan.note.skipped", n=skipped)
+        if cached:
+            message += "\n" + T("scan.note.cached", n=cached)
         if status == "clean":
             self.popup("success", T("popup.integrity_ok.title") if integrity else T("popup.scan.clean_title"), message, timeout=12,
                        meta=path, on_activate=lambda: self.show_tab("scan"))

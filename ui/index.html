@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.13.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.14.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -500,6 +500,7 @@
                     <div class="scan-stats">
                         <div class="stat"><span class="stat-value" id="statScanned">0</span><span class="stat-label" data-i18n="scan.stat.scanned">Fichiers analysés</span></div>
                         <div class="stat"><span class="stat-value" id="statTotal">—</span><span class="stat-label" data-i18n="scan.stat.total">Fichiers au total</span></div>
+                        <div class="stat"><span class="stat-value" id="statCached">—</span><span class="stat-label" data-i18n="scan.stat.cached">Déjà vérifiés</span></div>
                         <div class="stat stat-threat"><span class="stat-value" id="statThreats">0</span><span class="stat-label" data-i18n="scan.stat.threats">Menaces</span></div>
                         <div class="stat"><span class="stat-value" id="statElapsed">0 s</span><span class="stat-label" data-i18n="scan.stat.elapsed">Temps écoulé</span></div>
                         <div class="stat"><span class="stat-value" id="statEta">—</span><span class="stat-label" data-i18n="scan.stat.eta">Temps restant</span></div>
@@ -522,6 +523,7 @@
                         <button class="btn btn-secondary" id="btnIntegrityOnly" onclick="runIntegrityOnly()" data-i18n-title="scan.integrity_only_hint" title="Lynis, unhide, chkrootkit, debsums et fichiers de l'application, sans analyse antivirus">
                             <span data-i18n="scan.btn.integrity_only">Intégrité uniquement</span>
                         </button>
+                        <label class="scan-option"><input type="checkbox" id="scanNoCache"><span data-i18n="scan.nocache">Tout ré-analyser (ignorer les fichiers déjà vérifiés)</span></label>
                         <button class="btn btn-danger" id="btnCancelScan" onclick="cancelScan()" hidden>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
                             <span data-i18n="scan.btn.cancel">Annuler</span>
@@ -1187,6 +1189,8 @@
                     <label class="setting-row"><span data-i18n="settings.schedule.weekly_day">Jour</span>
                         <select id="setWeeklyDay" class="lang-select"><option value="0" data-i18n="day.mon">Lundi</option><option value="1" data-i18n="day.tue">Mardi</option><option value="2" data-i18n="day.wed">Mercredi</option><option value="3" data-i18n="day.thu">Jeudi</option><option value="4" data-i18n="day.fri">Vendredi</option><option value="5" data-i18n="day.sat">Samedi</option><option value="6" data-i18n="day.sun">Dimanche</option></select></label>
                     <label class="setting-row"><span data-i18n="settings.schedule.weekly_hour">Heure</span><input type="number" id="setWeeklyHour" class="input-field input-sm" min="0" max="23"></label>
+                    <label class="setting-row"><span data-i18n="settings.scan_cache_days">Ne pas relire un fichier inchangé déjà vérifié pendant (jours, 0 = désactivé)</span><input type="number" id="setScanCacheDays" class="input-field input-sm" min="0" max="365"></label>
+                    <p class="text-muted setting-note" data-i18n="settings.scan_cache_days.note">Le service mémorise l'empreinte (taille, dates, inode) de chaque fichier sain ; sur une clé USB, un fichier caché .clamav signé par cette installation joue le même rôle. Un fichier modifié est toujours relu. L'analyse passe par clamd (base en mémoire, plusieurs fichiers en parallèle).</p>
                     <p class="text-muted" data-i18n="settings.schedule.note">Les mises à jour sont aussi recherchées 5 minutes après chaque démarrage.</p>
                 </div>
 

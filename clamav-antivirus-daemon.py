@@ -34,6 +34,7 @@ Usage :
 import ctypes
 import grp
 import hashlib
+import hmac
 import ipaddress
 import fnmatch
 import glob
@@ -44,6 +45,7 @@ import re
 import shutil
 import signal
 import socket
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -62,7 +64,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import clamav_harden as harden  # noqa: E402
 from clamav_common import (  # noqa: E402
     VERSION, SYSTEM_STATE_DIR, SYSTEM_LOG_DIR, DAEMON_SOCKET,
-    SYSTEM_STATE_FILE, SYSTEM_QUARANTINE_DIR, SYSTEM_PROGRESS_FILE,
+    SYSTEM_STATE_FILE, SYSTEM_QUARANTINE_DIR, SYSTEM_PROGRESS_FILE, SYSTEM_SCAN_CACHE_DB, SYSTEM_SECRET_FILE,
     SYSTEM_FILELIST_CACHE, FIRST_SCAN_FLAG, SYSTEM_LOG_FILE, USB_MOUNT_ROOT,
     SYSTEM_SETTINGS_FILE, DEFAULT_SETTINGS, DAEMON_ALLOWED_ROOTS,
     BURST_PID_COOLDOWN_SEC, BURST_GLOBAL_COOLDOWN, BURST_IGNORE_PREFIXES, BURST_IGNORE_PARTS,
@@ -105,6 +107,11 @@ USER_AGENT = f"clamav-antivirus/{VERSION}"
 LOG_MAX_BYTES = 5 * 1024 * 1024
 PROGRESS_INTERVAL = 0.25      # secondes entre deux événements de progression
 PROGRESS_SAVE_INTERVAL = 2.0  # secondes entre deux sauvegardes du fichier de reprise
+CLAMD_CONF = "/etc/clamav/clamd.conf"
+USB_MANIFEST = ".clamav"       # manifeste caché à la racine d'un support amovible déjà analysé
+SCAN_BATCH = 100               # fichiers par appel clamdscan (un worker = une connexion clamd)
+SCAN_WORKERS_MAX = 8
+MANIFEST_MAX_FILES = 200000
 HISTORY_MAX = 20
 ALERTS_MAX = 30
 SYSTEM_STATUS_MIN_INTERVAL = 300   # secondes entre deux relevés apt à la demande
@@ -272,11 +279,224 @@ class Settings:
 # Jobs
 # ═══════════════════════════════════════════════════════════════════════════
 
+# ── Moteur : clamd (base en mémoire, multi-thread) ───────────────────────
+def clamd_socket_path():
+    try:
+        with open(CLAMD_CONF, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                ln = ln.strip()
+                if ln.startswith("LocalSocket ") or ln.startswith("LocalSocket\t"):
+                    return ln.split(None, 1)[1].strip()
+    except OSError:
+        pass
+    return "/var/run/clamav/clamd.ctl"
+
+
+def clamd_ping(timeout=5):
+    """clamd répond-il sur son socket ? (PING → PONG)"""
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(clamd_socket_path())
+        s.sendall(b"zPING\0")
+        data = s.recv(64)
+        s.close()
+        return b"PONG" in data
+    except OSError:
+        return False
+
+
+def ensure_clamd(wait=90):
+    """clamd garde la base de signatures en mémoire et analyse plusieurs fichiers en parallèle : c'est le moteur
+    rapide. Démarré si nécessaire (clamscan recharge la base à chaque lancement)."""
+    if clamd_ping():
+        return True
+    if os.geteuid() != 0 or not shutil.which("clamdscan"):
+        return False
+    run_quiet(["systemctl", "start", "clamav-daemon"], timeout=30)
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        if clamd_ping():
+            return True
+        time.sleep(2)
+    return False
+
+
+_DB_VERSION = {"v": "", "at": 0.0}
+
+
+def signature_db_version():
+    """Version de la base quotidienne (pour dater les manifestes), lue au plus toutes les 10 min."""
+    if time.time() - _DB_VERSION["at"] < 600:
+        return _DB_VERSION["v"]
+    v = ""
+    r = run_quiet(["clamscan", "--version"], timeout=30)
+    m = re.search(r"/(\d+)/", r.stdout or "")
+    if m:
+        v = m.group(1)
+    else:
+        for name in ("daily.cld", "daily.cvd"):
+            p = f"/var/lib/clamav/{name}"
+            if os.path.exists(p):
+                v = str(int(os.path.getmtime(p)))
+                break
+    _DB_VERSION.update(v=v, at=time.time())
+    return v
+
+
+def parse_find_line(line):
+    """Ligne « chemin\ttaille\tmtime\tctime\tinode » (find -printf) → (chemin, taille, mtime_µs, ctime_µs, inode)."""
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) < 5:
+        return parts[0], 0, 0, 0, 0
+
+    def micro(x):
+        if "." not in x:                      # déjà en microsecondes (liste de travail relue)
+            return int(x)
+        s, _, f = x.partition(".")
+        return int(s) * 1000000 + int((f + "000000")[:6])
+    try:
+        return parts[0], int(parts[1]), micro(parts[2]), micro(parts[3]), int(parts[4])
+    except ValueError:
+        return parts[0], 0, 0, 0, 0
+
+
+class ScanCache:
+    """Fichiers déjà vérifiés sains : empreinte (taille, mtime, ctime, inode) → pas relus tant qu'ils n'ont pas
+    changé, pendant `days` jours. SQLite dans /var/lib/clamav-antivirus/scan-cache.db (des millions d'entrées)."""
+
+    def __init__(self, path, days):
+        self.days = int(days or 0)
+        self.db = sqlite3.connect(path, check_same_thread=False, timeout=30)
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA synchronous=OFF")
+        self.db.execute("CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, "
+                        "ctime INTEGER, ino INTEGER, scanned_at INTEGER)")
+        self.lock = threading.Lock()
+
+    def lookup(self, entries):
+        """Chemins de `entries` (tuples find) connus sains, inchangés et assez récents."""
+        if not self.days or not entries:
+            return set()
+        since = int(time.time()) - self.days * 86400
+        out = set()
+        with self.lock:
+            for i in range(0, len(entries), 500):
+                chunk = entries[i:i + 500]
+                marks = ",".join("?" * len(chunk))
+                rows = self.db.execute(f"SELECT path,size,mtime,ctime,ino,scanned_at FROM files WHERE path IN ({marks})",
+                                       [e[0] for e in chunk]).fetchall()
+                known = {r[0]: r for r in rows}
+                for e in chunk:
+                    r = known.get(e[0])
+                    if r and r[5] >= since and (r[1], r[2], r[3], r[4]) == (e[1], e[2], e[3], e[4]):
+                        out.add(e[0])
+        return out
+
+    def record(self, entries):
+        if not entries:
+            return
+        now = int(time.time())
+        with self.lock:
+            self.db.executemany("INSERT OR REPLACE INTO files(path,size,mtime,ctime,ino,scanned_at) VALUES (?,?,?,?,?,?)",
+                                [(e[0], e[1], e[2], e[3], e[4], now) for e in entries])
+            self.db.commit()
+
+    def purge(self, keep_days=90):
+        with self.lock:
+            self.db.execute("DELETE FROM files WHERE scanned_at < ?", (int(time.time()) - keep_days * 86400,))
+            self.db.commit()
+
+    def count(self):
+        with self.lock:
+            return self.db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+
+    def close(self):
+        with self.lock:
+            try:
+                self.db.commit()
+                self.db.close()
+            except sqlite3.Error:
+                pass
+
+
+# ── Manifeste .clamav d'un support amovible ───────────────────────────────
+def usb_secret():
+    """Secret HMAC de l'installation (jamais copié sur la clé) : un manifeste forgé par la clé est ignoré."""
+    try:
+        with open(SYSTEM_SECRET_FILE, "rb") as f:
+            s = f.read()
+        if len(s) >= 32:
+            return s
+    except OSError:
+        pass
+    s = os.urandom(32)
+    try:
+        fd = os.open(SYSTEM_SECRET_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.write(fd, s)
+        os.close(fd)
+    except OSError:
+        pass
+    return s
+
+
+def manifest_sign(data):
+    body = json.dumps({k: v for k, v in data.items() if k != "hmac"}, sort_keys=True, separators=(",", ":")).encode()
+    return hmac.new(usb_secret(), body, hashlib.sha256).hexdigest()
+
+
+def usb_manifest_read(mountpoint):
+    """Manifeste .clamav d'un support déjà analysé ; None s'il manque, s'il est illisible ou s'il n'est pas signé
+    par cette installation."""
+    path = os.path.join(mountpoint, USB_MANIFEST)
+    try:
+        if os.path.getsize(path) > 64 * 2 ** 20:
+            return None
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("format") != 1 or not isinstance(data.get("files"), dict):
+        return None
+    if not hmac.compare_digest(str(data.get("hmac") or ""), manifest_sign(data)):
+        return None
+    return data
+
+
+def manifest_fresh(manifest, days):
+    try:
+        age = time.time() - datetime.fromisoformat(manifest.get("scanned_at", "")).timestamp()
+    except (TypeError, ValueError):
+        return False
+    return days > 0 and age < days * 86400
+
+
+def usb_manifest_write(mountpoint, files, db_version, infected):
+    """Écrit .clamav (caché) à la racine : fichiers sains {chemin relatif: [taille, mtime_µs]}, signés."""
+    data = {"format": 1, "app": "clamav-antivirus", "version": VERSION, "scanned_at": now_iso(), "db": db_version,
+            "files": files, "infected": sorted(infected)[:1000]}
+    data["hmac"] = manifest_sign(data)
+    path = os.path.join(mountpoint, USB_MANIFEST)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, separators=(",", ":"))
+        os.replace(tmp, path)
+        return True
+    except OSError as e:
+        log(f"Manifeste USB non écrit ({mountpoint}) : {e}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
 class Job:
     _counter = 0
     _counter_lock = threading.Lock()
 
-    def __init__(self, kind, path=None, resume=False, auto=False, requested_by=None, usb=None, integrity=False):
+    def __init__(self, kind, path=None, resume=False, auto=False, requested_by=None, usb=None, integrity=False, use_cache=True):
         with Job._counter_lock:
             Job._counter += 1
             self.id = Job._counter
@@ -287,6 +507,15 @@ class Job:
         self.usb = usb              # dict décrivant le support USB analysé, ou None
         self.integrity = integrity  # analyse complète : vérification d'intégrité (rootkits, paquets) AVANT le scan
         self.skipped = 0            # fichiers système vérifiés par debsums, ignorés par l'antivirus
+        self.cached = 0             # fichiers inchangés déjà vérifiés sains (cache ou manifeste .clamav), non relus
+        self.use_cache = use_cache
+        self.engine = ""            # clamd | clamscan
+        self.paused = False         # mis en pause pour analyser une clé USB, reprise ensuite
+        self.pause_event = threading.Event()
+        self.procs = []             # workers clamdscan en cours
+        self.count_lock = threading.Lock()
+        self.manifest_keep = {}     # support amovible : fichiers sains {relatif: [taille, mtime]}
+        self.usb_infected = set()
         self.integrity_warnings = None
         self.requested_by = requested_by
         self.created_at = time.time()
@@ -317,6 +546,9 @@ class Job:
             "usb": self.usb,
             "integrity": self.integrity,
             "skipped": self.skipped,
+            "cached": self.cached,
+            "engine": self.engine,
+            "paused": self.paused,
             "integrity_warnings": self.integrity_warnings,
             "phase": self.phase,
             "scanned": self.scanned,
@@ -332,15 +564,38 @@ class Job:
             "source": "daemon",
         }
 
+    def _signal_procs(self, sig):
+        with self.proc_lock:
+            for p in [self.proc] + list(self.procs):
+                if p and p.poll() is None:
+                    try:
+                        os.kill(p.pid, sig)
+                    except OSError:
+                        pass
+
+    def pause(self):
+        """Clé USB insérée : le scan en cours s'arrête (workers suspendus), reprend après l'analyse de la clé."""
+        self.paused = True
+        self.pause_event.set()
+        self._signal_procs(signal.SIGSTOP)
+
+    def unpause(self):
+        self.paused = False
+        self.pause_event.clear()
+        self._signal_procs(signal.SIGCONT)
+
     def cancel(self, by_user=False):
         self.cancelled_by_user = self.cancelled_by_user or by_user
         self.cancel_event.set()
+        if self.paused:
+            self.unpause()
         with self.proc_lock:
-            if self.proc and self.proc.poll() is None:
-                try:
-                    self.proc.terminate()
-                except OSError:
-                    pass
+            for p in [self.proc] + list(self.procs):
+                if p and p.poll() is None:
+                    try:
+                        p.terminate()
+                    except OSError:
+                        pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2609,16 +2864,44 @@ class Daemon:
             finally:
                 with self.queue_lock:
                     self.current = None
-                if job.usb:
-                    if job.usb.get("private_mount"):
-                        self.usb.unmount(job.usb["devnode"])
-                    status, key, params = job.result or ("error", "msg.scan.internal", {})
-                    self.broadcast({
-                        "event": "usb_done", "usb": job.usb, "status": status,
-                        "msg_key": key, "msg_params": params, "infected": job.infected,
-                        "files": job.total, "threats": job.threats[-50:],
-                        "removed": bool(job.usb.get("removed")),
-                    })
+                self._after_job(job)
+
+    def _after_job(self, job):
+        """Support amovible : démontage du montage privé et événement usb_done (popup de résultat)."""
+        if job.usb:
+            if job.usb.get("private_mount"):
+                self.usb.unmount(job.usb["devnode"])
+            status, key, params = job.result or ("error", "msg.scan.internal", {})
+            self.broadcast({
+                "event": "usb_done", "usb": job.usb, "status": status,
+                "msg_key": key, "msg_params": params, "infected": job.infected,
+                "files": job.total + job.cached, "cached": job.cached, "threats": job.threats[-50:],
+                "removed": bool(job.usb.get("removed")),
+            })
+
+    def _run_priority(self, job, paused):
+        """Clé USB pendant un scan : le scan est mis en pause, la clé est analysée tout de suite, puis reprise."""
+        paused.pause()
+        self.write_log(f"⏸ paused {paused.path} for USB {job.usb.get('label') or job.usb.get('devnode')}")
+        self.emit_line("info", f"⏸ paused for USB {job.usb.get('label') or job.usb.get('devnode')}")
+        self.broadcast({"event": "job_paused", "job": paused.public()})
+        try:
+            job.started_at = time.time()
+            job.phase = "prepare"
+            self.broadcast({"event": "job_started", "job": job.public()})
+            self.run_scan(job)
+        except Exception as e:  # noqa: BLE001
+            log(f"Erreur job USB : {e}")
+            self.finish(job, "error", "msg.scan.internal", {"error": str(e)})
+        finally:
+            try:
+                self._after_job(job)
+            except Exception as e:  # noqa: BLE001
+                log(f"Fin du job USB : {e}")
+            paused.unpause()
+            self.write_log(f"▶ resumed {paused.path}")
+            self.emit_line("info", "▶ resumed")
+            self.broadcast({"event": "job_started", "job": paused.public(), "resumed": True})
 
     def finish(self, job, status, key, params=None, summary=None):
         job.phase = "done"
@@ -2657,30 +2940,67 @@ class Daemon:
         except Exception:
             return {}
 
-    def _count_files(self, job, cache, skip=None):
-        """Phase inventaire : find → fichier cache, en streaming (peu de mémoire).
-        `skip` : hashes des fichiers système vérifiés par debsums, exclus de l'analyse antivirus."""
+    def _count_files(self, job, cache, skip=None, scache=None, manifest=None):
+        """Phase inventaire : find (avec empreintes) → fichier cache, en streaming.
+        `skip` : hashes des fichiers système vérifiés par debsums. `scache` : cache des fichiers sains (disque) ;
+        `manifest` : manifeste .clamav du support amovible. Les fichiers inchangés déjà vérifiés ne sont pas relus."""
         job.phase = "counting"
         job.found = 0
+        job.cached = 0
         self.emit_progress(job)
-        cmd = find_command(job.path, exclude=[]) if job.usb else find_command(job.path)
+        cmd = find_command(job.path, exclude=[], stat=True) if job.usb else find_command(job.path, stat=True)
         with job.proc_lock:
             job.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL, text=True, bufsize=1)
         last_emit = time.time()
+        batch = []
+        mf_files = (manifest or {}).get("files") or {}
+        root = job.path.rstrip("/") + "/"
+
+        def flush(out):
+            nonlocal batch
+            if not batch:
+                return
+            keep, batch = batch, []
+            clean = set()
+            if scache is not None and job.use_cache:
+                try:
+                    clean = scache.lookup(keep)
+                except Exception as e:  # noqa: BLE001
+                    log(f"Cache de scan : {e}")
+            for e in keep:
+                if e[0] in clean:
+                    job.cached += 1
+                    continue
+                out.write("\t".join(str(x) for x in e) + "\n")
+                job.found += 1
+
         with open(cache, "w") as out:
             for line in job.proc.stdout:
                 if job.cancel_event.is_set():
                     break
-                if line.strip():
-                    if skip and hash(line.rstrip("\n")) in skip:
-                        job.skipped += 1
+                if not line.strip():
+                    continue
+                e = parse_find_line(line)
+                if skip and hash(e[0]) in skip:
+                    job.skipped += 1
+                    continue
+                if job.usb:
+                    rel = e[0][len(root):] if e[0].startswith(root) else os.path.relpath(e[0], job.path)
+                    if rel in (USB_MANIFEST, USB_MANIFEST + ".tmp"):
+                        continue                                  # le manifeste lui-même
+                    m = mf_files.get(rel)
+                    if m and len(m) >= 2 and m[0] == e[1] and m[1] == e[2]:
+                        job.cached += 1                           # inchangé depuis la dernière analyse
+                        job.manifest_keep[rel] = [e[1], e[2]]
                         continue
-                    out.write(line)
-                    job.found += 1
-                    if time.time() - last_emit >= PROGRESS_INTERVAL:
-                        self.emit_progress(job)
-                        last_emit = time.time()
+                batch.append(e)
+                if len(batch) >= 500:
+                    flush(out)
+                if time.time() - last_emit >= PROGRESS_INTERVAL:
+                    self.emit_progress(job)
+                    last_emit = time.time()
+            flush(out)
         job.proc.wait()
         return job.found
 
@@ -2697,7 +3017,7 @@ class Daemon:
         with open(SYSTEM_FILELIST_CACHE) as f:
             for i, line in enumerate(f):
                 total += 1
-                if idx is None and last_file and line.rstrip("\n") == last_file:
+                if idx is None and last_file and line.split("\t", 1)[0] == last_file:
                     idx = i + 1
         job.total = total
         job.infected = int(prog.get("infected", 0) or 0)
@@ -2708,6 +3028,18 @@ class Daemon:
         start_idx = 0
         resumed = False
         cache = SYSTEM_FILELIST_CACHE + (".usb" if job.usb else "")
+        days = int(self.settings.get("scan_cache_days") or 0)
+        scache = None
+        manifest = None
+        if job.usb:
+            manifest = usb_manifest_read(job.path) if job.use_cache else None
+            if manifest and not manifest_fresh(manifest, days):
+                manifest = None
+        else:
+            try:
+                scache = ScanCache(SYSTEM_SCAN_CACHE_DB, days)
+            except Exception as e:  # noqa: BLE001
+                log(f"Cache de scan indisponible : {e}")
 
         if job.resume and not job.usb:
             idx = self._resume_offset(job)
@@ -2719,7 +3051,8 @@ class Daemon:
         skip = None
         if not resumed:
             label = "usb " if job.usb else ("auto " if job.auto else "")
-            self.write_log(f"▶ scan {label}{job.path}")
+            self.write_log(f"▶ scan {label}{job.path}" + ("" if job.use_cache else " (cache ignored)")
+                           + (" (manifest)" if manifest else ""))
             self.emit_line("info", f"▶ {job.path}")
             if job.integrity and not job.usb:
                 # Analyse complète : intégrité d'abord (rootkits, paquets, fichiers de l'application) ;
@@ -2733,12 +3066,13 @@ class Daemon:
                     job.integrity_warnings = result.get("warnings", 0)
                     self.write_log(f"integrity: {result.get('warnings', 0)} warning(s), {len(skip)} verified system files")
                     self.emit_line("info", f"✓ integrity: {result.get('warnings', 0)} warning(s), {len(skip)} verified files skipped")
-            total = self._count_files(job, cache, skip)
+            total = self._count_files(job, cache, skip, scache=scache, manifest=manifest)
             skip = None
             if job.cancel_event.is_set():
                 if job.cancelled_by_user:
                     self._forget_auto(job)
                 self._save_progress(job, in_progress=False)
+                self._close_cache(scache)
                 self.finish(job, "cancelled", "msg.scan.cancelled_counting", {}, self._summary(job))
                 return
             job.total = total
@@ -2753,7 +3087,15 @@ class Daemon:
         if job.total == 0:
             self._save_progress(job, in_progress=False)
             self._record_scan(job, "clean")
-            self.finish(job, "clean", "msg.scan.nofiles", {}, self._summary(job))
+            if job.usb:
+                self._write_usb_manifest(job)
+            self._close_cache(scache)
+            if job.cached:
+                key, params = "msg.scan.clean_cached", {"files": job.cached, "cached": job.cached}
+            else:
+                key, params = "msg.scan.nofiles", {}
+            self.write_log(f"■ done: nothing to scan ({job.cached} cached)")
+            self.finish(job, "clean", key, params, self._summary(job))
             return
 
         # Liste des fichiers restants (copie en streaming)
@@ -2765,18 +3107,252 @@ class Daemon:
 
         job.phase = "scanning"
         self.emit_progress(job)
-        self.emit_line("info", f"▶ clamscan × {job.total}")
-
-        # Priorité basse : scan automatique en tâche de fond, scan manuel un peu moins
-        if job.auto:
-            prefix = ["nice", "-n", "19", "ionice", "-c", "3"]
+        use_clamd = shutil.which("clamdscan") is not None and (clamd_ping() if TEST_MODE else ensure_clamd())
+        job.engine = "clamd" if use_clamd else "clamscan"
+        self.emit_line("info", f"▶ {job.engine} × {job.total}"
+                       + (f" · {job.cached} unchanged (already verified)" if job.cached else "")
+                       + (f" · {job.skipped} verified by debsums" if job.skipped else ""))
+        if use_clamd:
+            rc = self._scan_with_clamd(job, tmp_list, scache)
         else:
-            prefix = ["nice", "-n", "5", "ionice", "-c", "2", "-n", "7"]
+            rc = self._scan_with_clamscan(job, tmp_list, scache)
+
+        if job.cancel_event.is_set():
+            if job.cancelled_by_user:
+                self._forget_auto(job)
+            self._save_progress(job, in_progress=True)
+            self._close_cache(scache)
+            self.write_log(f"■ interrupted {job.scanned}/{job.total}")
+            self.finish(job, "cancelled", "msg.scan.cancelled",
+                        {"scanned": job.scanned, "total": job.total}, self._summary(job))
+            return
+
+        job.scanned = job.total
+        job.current_file = ""
+        self._save_progress(job, in_progress=False)
+        for p in (tmp_list, tmp_list + ".paths"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+        if rc not in (0, 1, 2):
+            self._record_scan(job, "error")
+            self._close_cache(scache)
+            self.finish(job, "error", "msg.scan.failed", {"code": rc}, self._summary(job))
+            return
+
+        status = "infected" if job.infected > 0 else "clean"
+        self._record_scan(job, status)
+        if job.usb:
+            self._write_usb_manifest(job)
+        if scache is not None:
+            try:
+                scache.purge(max(90, days * 3))
+            except Exception:  # noqa: BLE001
+                pass
+        self._close_cache(scache)
+        if job.infected:
+            key, params = "msg.scan.infected", {"count": job.infected}
+        elif job.cached:
+            key, params = "msg.scan.clean_cached", {"files": job.total + job.cached, "cached": job.cached}
+        else:
+            key, params = "msg.scan.clean", {"files": job.total}
+        self.write_log(f"■ done: {job.infected} infected / {job.total} files ({job.engine}, {job.cached} cached, "
+                       f"{round(time.time() - (job.started_at or time.time()))} s)")
+        self.finish(job, status, key, params, self._summary(job))
+
+    @staticmethod
+    def _close_cache(scache):
+        if scache is not None:
+            try:
+                scache.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _write_usb_manifest(self, job):
+        """Manifeste .clamav à la racine du support : fichiers sains (empreintes) pour un scan rapide la prochaine fois."""
+        files = dict(job.manifest_keep)
+        if len(files) > MANIFEST_MAX_FILES:
+            self.write_log(f"usb manifest skipped ({len(files)} files)")
+            return
+        ok = usb_manifest_write(job.path, files, signature_db_version(), job.usb_infected)
+        self.write_log(f"usb manifest {'written' if ok else 'not written'}: {len(files)} clean file(s)")
+
+    def _record_clean(self, job, clean, scache):
+        """Fichiers sains d'un lot : cache disque (empreinte relevée à l'inventaire) ou manifeste du support."""
+        if not clean:
+            return
+        if job.usb:
+            root = job.path.rstrip("/") + "/"
+            with job.count_lock:
+                for e in clean:
+                    rel = e[0][len(root):] if e[0].startswith(root) else os.path.relpath(e[0], job.path)
+                    job.manifest_keep[rel] = [e[1], e[2]]
+        elif scache is not None:
+            try:
+                scache.record(clean)
+            except Exception as e:  # noqa: BLE001
+                log(f"Cache de scan : {e}")
+
+    def _scan_line(self, job, line, by_path, clean):
+        """Une ligne de clamdscan : « chemin: OK », « chemin: Signature FOUND », « chemin: … ERROR »."""
+        if line.endswith(": OK"):
+            path = line[:-4]
+            with job.count_lock:
+                job.scanned += 1
+                job.current_file = path
+            e = by_path.get(path)
+            if e:
+                clean.append(e)
+            return True
+        if line.endswith(" FOUND"):
+            path, _, sig = line[:-6].rpartition(": ")
+            with job.count_lock:
+                job.scanned += 1
+                job.infected += 1
+                job.current_file = path
+                job.threats.append({"path": path, "signature": sig, "time": now_iso()})
+                if job.usb:
+                    job.usb_infected.add(os.path.relpath(path, job.path))
+            self.write_log(line)
+            self.emit_line("found", line)
+            return True
+        if line.endswith(" ERROR"):
+            path, _, msg = line[:-6].rpartition(": ")
+            denied = "denied" in msg.lower() or "permission" in msg.lower()
+            with job.count_lock:
+                if path in by_path:
+                    job.scanned += 1
+                    job.current_file = path
+                if denied:
+                    job.denied += 1
+                else:
+                    job.errors += 1
+            self.write_log(line)
+            self.emit_line("denied" if denied else "error", line)
+            return True
+        if " moved to " in line:
+            self.emit_line("info", line)
+            return False
+        if not is_noise_line(line):
+            self.emit_line(classify_line(line), line)
+        return False
+
+    def _scan_with_clamd(self, job, tmp_list, scache):
+        """clamd garde la base en mémoire : plusieurs clamdscan --fdpass en parallèle, chacun sur un lot de fichiers
+        (le descripteur est transmis à clamd, qui lit les fichiers avec les droits du service)."""
+        cpu = os.cpu_count() or 2
+        workers = max(2, min(SCAN_WORKERS_MAX, cpu // 2))
+        if job.usb:
+            workers = min(workers, 3)              # le débit d'une clé vient du support, pas du CPU
+        prefix = ["nice", "-n", "15", "ionice", "-c", "2", "-n", "7"] if job.auto else ["nice", "-n", "5", "ionice", "-c", "2", "-n", "4"]
+        if not shutil.which("ionice"):
+            prefix = prefix[:2]
+        src = open(tmp_list)
+        src_lock = threading.Lock()
+        state = {"rc": 0, "fatal": False, "last_emit": time.time(), "last_save": time.time()}
+        emit_lock = threading.Lock()
+
+        def next_batch():
+            with src_lock:
+                batch = []
+                for line in src:
+                    if line.strip():
+                        batch.append(parse_find_line(line))
+                        if len(batch) >= SCAN_BATCH:
+                            break
+                return batch
+
+        def tick():
+            now = time.time()
+            with emit_lock:
+                if now - state["last_emit"] >= PROGRESS_INTERVAL:
+                    state["last_emit"] = now
+                    self.emit_progress(job)
+                if now - state["last_save"] >= PROGRESS_SAVE_INTERVAL:
+                    state["last_save"] = now
+                    self._save_progress(job, in_progress=True)
+
+        def worker(idx):
+            list_path = f"{tmp_list}.w{idx}"
+            while not job.cancel_event.is_set() and not state["fatal"]:
+                while job.pause_event.is_set() and not job.cancel_event.is_set():
+                    time.sleep(0.5)
+                batch = next_batch()
+                if not batch:
+                    break
+                by_path = {e[0]: e for e in batch}
+                with open(list_path, "w") as f:
+                    f.write("".join(e[0] + "\n" for e in batch))
+                cmd = prefix + ["clamdscan", "--fdpass", "--no-summary", "--stdout",
+                                f"--move={SYSTEM_QUARANTINE_DIR}", f"--file-list={list_path}"]
+                try:
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                except OSError as e:
+                    log(f"clamdscan : {e}")
+                    state["fatal"] = True
+                    break
+                with job.proc_lock:
+                    job.procs.append(proc)
+                clean, seen = [], 0
+                for raw in proc.stdout:
+                    line = raw.rstrip("\n")
+                    if line and self._scan_line(job, line, by_path, clean):
+                        seen += 1
+                        tick()
+                proc.wait()
+                with job.proc_lock:
+                    if proc in job.procs:
+                        job.procs.remove(proc)
+                if proc.returncode == 2 and seen == 0:
+                    state["fatal"] = True                  # clamd injoignable : aucun fichier traité
+                elif proc.returncode not in (0, 1):
+                    state["rc"] = proc.returncode
+                self._record_clean(job, clean, scache)
+            try:
+                os.remove(list_path)
+            except OSError:
+                pass
+
+        threads = [threading.Thread(target=worker, args=(i,), daemon=True, name=f"scan-{i}") for i in range(workers)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        src.close()
+        if state["fatal"] and not job.cancel_event.is_set():
+            self.write_log("clamd engine failed (no file processed)")
+            return 3
+        return 1 if job.infected else state["rc"]
+
+    def _scan_with_clamscan(self, job, tmp_list, scache):
+        """Repli sans clamd : un seul clamscan sur la liste (base chargée une fois), mono-thread."""
+        paths_list = tmp_list + ".paths"
+        with open(tmp_list) as src, open(paths_list, "w") as dst:
+            for line in src:
+                if line.strip():
+                    dst.write(line.split("\t", 1)[0] + "\n")
+        prefix = ["nice", "-n", "15", "ionice", "-c", "2", "-n", "7"] if job.auto else ["nice", "-n", "5", "ionice", "-c", "2", "-n", "4"]
+        if not shutil.which("ionice"):
+            prefix = prefix[:2]
         cmd = prefix + ["clamscan", "--verbose", "--suppress-ok-results",
-                        f"--move={SYSTEM_QUARANTINE_DIR}", f"--file-list={tmp_list}"]
+                        f"--move={SYSTEM_QUARANTINE_DIR}", f"--file-list={paths_list}"]
         with job.proc_lock:
             job.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, text=True, bufsize=1)
+        entries = open(tmp_list)            # lecture en parallèle de la liste : empreinte du fichier courant
+        cur, cur_dirty, clean = None, False, []
+
+        def advance_to(path):
+            for _ in range(5000):
+                line = entries.readline()
+                if not line:
+                    return None
+                e = parse_find_line(line)
+                if e[0] == path:
+                    return e
+            return None
 
         last_emit = last_save = time.time()
         for raw in job.proc.stdout:
@@ -2785,23 +3361,35 @@ class Daemon:
                 continue
             counted = False
             if line.startswith("Scanning "):
+                if cur and not cur_dirty:
+                    clean.append(cur)
+                    if len(clean) >= 500:
+                        self._record_clean(job, clean, scache)
+                        clean = []
                 job.current_file = line[9:]
+                cur, cur_dirty = advance_to(line[9:]), False
                 counted = True
             elif line.endswith((": Empty file", ": No such file or directory", ": Excluded")):
                 job.current_file = line.rsplit(": ", 1)[0]
+                cur_dirty = True
                 counted = True
             elif line.endswith(" FOUND"):
+                cur_dirty = True
                 job.infected += 1
                 path, _, sig = line[:-6].rpartition(": ")
                 job.threats.append({"path": path, "signature": sig, "time": now_iso()})
+                if job.usb:
+                    job.usb_infected.add(os.path.relpath(path, job.path))
                 self.write_log(line)
                 self.emit_line("found", line)
             elif not is_noise_line(line):
                 kind = classify_line(line)
                 if kind == "denied":
                     job.denied += 1
+                    cur_dirty = True
                 elif kind == "error":
                     job.errors += 1
+                    cur_dirty = True
                 if kind in ("error", "summary", "denied"):
                     self.write_log(line)
                 self.emit_line(kind, line)
@@ -2815,39 +3403,12 @@ class Daemon:
                 if now - last_save >= PROGRESS_SAVE_INTERVAL:
                     self._save_progress(job, in_progress=True)
                     last_save = now
-
         rc = job.proc.wait()
-
-        if job.cancel_event.is_set():
-            if job.cancelled_by_user:
-                self._forget_auto(job)
-            self._save_progress(job, in_progress=True)
-            self.write_log(f"■ interrupted {job.scanned}/{job.total}")
-            self.finish(job, "cancelled", "msg.scan.cancelled",
-                        {"scanned": job.scanned, "total": job.total}, self._summary(job))
-            return
-
-        job.scanned = job.total
-        job.current_file = ""
-        self._save_progress(job, in_progress=False)
-        try:
-            os.remove(tmp_list)
-        except OSError:
-            pass
-
-        if rc not in (0, 1, 2):
-            self._record_scan(job, "error")
-            self.finish(job, "error", "msg.scan.failed", {"code": rc}, self._summary(job))
-            return
-
-        status = "infected" if job.infected > 0 else "clean"
-        self._record_scan(job, status)
-        if job.infected:
-            key, params = "msg.scan.infected", {"count": job.infected}
-        else:
-            key, params = "msg.scan.clean", {"files": job.total}
-        self.write_log(f"■ done: {job.infected} infected / {job.total} files")
-        self.finish(job, status, key, params, self._summary(job))
+        if cur and not cur_dirty and rc in (0, 1):
+            clean.append(cur)
+        self._record_clean(job, clean, scache)
+        entries.close()
+        return rc
 
     def _forget_auto(self, job):
         """L'utilisateur a annulé un scan automatique : ne pas le relancer tout seul."""
@@ -2864,6 +3425,7 @@ class Daemon:
             "duration": time.time() - (job.started_at or time.time()),
             "threats": job.threats[-50:], "auto": job.auto, "usb": job.usb,
             "skipped": job.skipped, "integrity_warnings": job.integrity_warnings,
+            "cached": job.cached, "engine": job.engine,
         }
 
     def _record_scan(self, job, status):
@@ -2895,7 +3457,17 @@ class Daemon:
             self.broadcast({"event": "usb_error", "usb": info, "error": str(e)})
             return
         usb = dict(info, private_mount=True, mountpoint=mountpoint)
-        self.enqueue(Job("scan", path=mountpoint, usb=usb, requested_by="system"))
+        self._start_usb_job(Job("scan", path=mountpoint, usb=usb, requested_by="system"))
+
+    def _start_usb_job(self, job):
+        """Une clé passe devant : si un scan (disque) est en cours, il est mis en pause le temps de la clé."""
+        with self.queue_lock:
+            cur = self.current
+        if cur and cur.kind == "scan" and not cur.usb and not cur.paused \
+                and cur.phase in ("counting", "scanning", "integrity") and not cur.cancel_event.is_set():
+            threading.Thread(target=self._run_priority, args=(job, cur), daemon=True, name="usb-priority").start()
+        else:
+            self.enqueue(job)
 
     # ── Mise à jour des signatures ───────────────────────────────────────
     def run_update(self, job):
@@ -4216,7 +4788,7 @@ class Daemon:
                 usb = dict(usb, private_mount=False, mountpoint=os.path.normpath(path))
             job = self.enqueue(Job("scan", path=os.path.normpath(path),
                                    resume=bool(req.get("resume")), requested_by=uid, usb=usb,
-                                   integrity=bool(req.get("integrity"))))
+                                   integrity=bool(req.get("integrity")), use_cache=not bool(req.get("nocache"))))
             return {"ok": True, "job_id": job.id, "queued": False}
 
         if cmd == "update":
@@ -4468,6 +5040,12 @@ class Daemon:
             event = req.get("payload") or {}
             if event.get("event") == "alert":
                 self.publish_alert(event["alert"])
+            elif event.get("event") == "usb_priority":
+                # Simule une clé insérée pendant un scan : dossier déjà monté, analysé en priorité
+                path = os.path.normpath(str(event.get("path") or ""))
+                usb = {"devnode": "test", "label": event.get("label") or "TEST", "model": "", "size": 0, "fstype": "vfat",
+                       "private_mount": False, "mountpoint": path}
+                self._start_usb_job(Job("scan", path=path, usb=usb, requested_by="system"))
             else:
                 self.broadcast(event)
             return {"ok": True}
