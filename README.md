@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.12.3)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.13.0)
 
 ---
 
@@ -86,6 +86,11 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   précédentes retenues pour « Annuler »), celles à lire avant d'appliquer (umask, SSH, TMPDIR) restent
   manuelles, les autres sont expliquées (faux positifs, sans objet sur un poste de travail). Lynis est relancé
   après chaque application ; réglage « appliquer automatiquement après chaque audit » dans les paramètres.
+- **Profil mémorisé par réseau** — le service identifie le réseau courant (connexion NetworkManager qui porte la
+  route par défaut, sinon adresse MAC de la passerelle) et mémorise le profil choisi pour chaque réseau. Un réseau
+  inconnu passe toujours en Public (popup « Nouveau réseau », bouton « Changer » vers l'onglet Pare-feu) ; un
+  réseau connu retrouve son profil à chaque connexion ; « Oublier » un réseau le ramène à Public. À la première
+  mise à jour, le réseau courant hérite du profil déjà choisi.
 - **Règles UFW réellement appliquées** — le service appelle `ufw --force rule allow …` : sans le mot-clé `rule`
   explicite, ufw ne reconnaît pas une règle placée après `--force` (« Invalid syntax »), ce qui faisait échouer
   les profils réseau et les règles ajoutées depuis l'application ; le message d'erreur d'ufw est désormais
@@ -234,7 +239,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.12.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.12.3_all.deb)
+[Télécharger clamav-antivirus_1.13.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.13.0_all.deb)
 
 ---
 
@@ -265,12 +270,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.12.3_all.deb`
+Résultat : `clamav-antivirus_1.13.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.12.3_all.deb
+sudo dpkg -i clamav-antivirus_1.13.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

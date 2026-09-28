@@ -50,7 +50,8 @@ USER_DEFAULTS = {
     "popups": {"info": True, "upload": True, "scan": True, "update": True, "security": True, "tip": True},
 }
 DISCLAIMER_VERSION = 1
-SECURITY_COMMANDS = ("firewall_set", "firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "ssh_set", "firewall_profile")
+SECURITY_COMMANDS = ("firewall_set", "firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "ssh_set", "firewall_profile",
+                     "forget_network")
 UNLOCK_HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clamav-antivirus-unlock")
 OVERALL_ICON = {"green": "shield-green", "yellow": "shield-yellow", "blue": "shield-blue", "red": "shield-red"}
 
@@ -1346,6 +1347,21 @@ class ClamAVAntivirusApp:
             self.send_to_js("backupTimeshift", ev.get("timeshift") or {})
         elif et == "timeshift_enable":
             self.timeshift_enable_result(ev.get("result") or {})
+        elif et == "network_changed":
+            T = self.T
+            net = ev.get("network") or {}
+            name = net.get("name") or "?"
+            if ev.get("new"):
+                self.popup("info", T("popup.network.new_title", name=name), T("popup.network.new_body"), timeout=45,
+                           buttons=[(T("popup.network.change"), "primary", lambda: self.show_tab("firewall")),
+                                    (T("popup.network.keep"), None, lambda: None)],
+                           on_activate=lambda: self.show_tab("firewall"))
+            elif ev.get("changed") and self.popups_enabled("info"):
+                self.popup("info", T("popup.network.known_title", name=name),
+                           T("popup.network.known_body", profile=T(f"firewall.profile.{ev.get('profile') or 'public'}")),
+                           timeout=12, on_activate=lambda: self.show_tab("firewall"))
+            self.act_get_security({"refresh": False})
+            self.send_status()
         elif et == "hardening_done":
             T = self.T
             index = ev.get("index") if ev.get("index") is not None else "?"
@@ -2548,7 +2564,8 @@ class ClamAVAntivirusApp:
                              n=resp.get("rules", 0))
             else:
                 key = {"firewall_set": "msg.firewall_enabled" if params.get("enabled") else "msg.firewall_disabled",
-                       "ssh_set": "msg.ssh_enabled" if params.get("enabled") else "msg.ssh_disabled"}.get(cmd, "msg.security_applied")
+                       "ssh_set": "msg.ssh_enabled" if params.get("enabled") else "msg.ssh_disabled",
+                       "forget_network": "msg.network_forgotten"}.get(cmd, "msg.security_applied")
                 msg = self.T(key)
             self.send_to_js("operationResult", {"status": "success", "op": "security", "message": msg})
         else:

@@ -2863,3 +2863,8 @@ body.mode-simple { position: relative; }
 .alert-sample .integrity-warning .path-note code { font-family: var(--font-mono); font-size: 11px; }
 .path-note-icon { display: inline-block; width: 16px; font-weight: 700; color: var(--accent); }
 .path-note.unknown .path-note-icon { color: var(--accent-amber); }
+
+/* Réseaux connus (profil mémorisé par réseau) */
+.known-network { display: flex; align-items: center; gap: 10px; font-size: 12px; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 4px 0; flex-wrap: wrap; }
+.known-network.current { border-color: rgba(34,197,94,0.35); }
+.known-network-name { font-weight: 600; flex: 1; min-width: 120px; }

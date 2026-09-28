@@ -807,7 +807,7 @@ function onSecurityStatus(data) {
     if (data.available === false) { securityStatus = null; renderSecurity(false); renderFirewallProfile(null); return; }
     securityStatus = data.security || null;
     renderSecurity(true);
-    renderFirewallProfile(securityStatus ? securityStatus.ufw : null);
+    renderFirewallProfile(securityStatus ? securityStatus.ufw : null, securityStatus ? securityStatus.network : null);
     renderSimpleView();
 }
 
@@ -818,8 +818,29 @@ function setFirewallProfile(profile) {
     showToast(t('firewall.profile.applying', { profile: t(`firewall.profile.${profile}`) }), 'info');
 }
 
-function renderFirewallProfile(ufw) {
+function forgetNetwork(key) { sendToBackend({ action: 'security_action', cmd: 'forget_network', key }); }
+
+/** Réseau courant et réseaux connus (profil mémorisé par réseau ; inconnu = Public d'office). */
+function renderFirewallNetwork(network, cur) {
+    const curEl = $('fwNetworkCurrent'), knownEl = $('fwNetworkKnown');
+    if (!curEl || !knownEl) return;
+    const net = network && network.current;
+    const typeLabel = n => t(`firewall.network.type.${n.type}`) !== `firewall.network.type.${n.type}` ? t(`firewall.network.type.${n.type}`) : (n.type || '');
+    curEl.textContent = net ? t('firewall.network.current', { name: net.name, type: typeLabel(net), profile: t(`firewall.profile.${cur || 'public'}`) }) : t('firewall.network.none');
+    const known = (network && network.known) || [];
+    knownEl.innerHTML = `<p class="text-muted setting-note">${t('firewall.network.hint')}</p>` + (known.length ? `<h5 class="sub-title">${t('firewall.network.known')}</h5>` + known.map(n => `
+        <div class="known-network${net && net.key === n.key ? ' current' : ''}">
+            <span class="scope-badge scope-user">${escapeHtml(typeLabel(n))}</span>
+            <span class="known-network-name">${escapeHtml(n.name || n.key)}</span>
+            <span class="scope-badge ${n.profile === 'public' ? 'scope-system' : 'scope-phased'}">${t(`firewall.profile.${n.profile || 'public'}`)}</span>
+            <span class="text-muted">${n.last_seen ? formatRelative(n.last_seen) : ''}</span>
+            <button class="btn btn-secondary btn-sm" onclick="forgetNetwork('${escapeJs(n.key)}')">${t('firewall.network.forget')}</button>
+        </div>`).join('') : '');
+}
+
+function renderFirewallProfile(ufw, network) {
     const cur = (ufw && ufw.profile) || '';
+    renderFirewallNetwork(network, cur);
     document.querySelectorAll('.profile-btn').forEach(b => { b.classList.toggle('active', b.dataset.profile === cur); b.disabled = !ufw || !ufw.installed; });
     if ($('fwProfileCurrent')) $('fwProfileCurrent').textContent = cur ? t('firewall.profile.current', { profile: t(`firewall.profile.${cur}`) }) : t('firewall.profile.none');
     const profiles = (ufw && ufw.profiles) || {};
@@ -2208,6 +2229,7 @@ function simulateBackend(data) {
             break;
         case 'get_security':
             reply('securityStatus', { available: true, security: { checked_at: new Date().toISOString(),
+                network: { current: { key: 'nm:e6f7', name: 'WIFI-Maison', type: 'wifi', device: 'wlo1' }, known: [{ key: 'nm:e6f7', name: 'WIFI-Maison', type: 'wifi', profile: 'home', last_seen: new Date().toISOString() }, { key: 'nm:a1b2', name: 'Hotel-Guest', type: 'wifi', profile: 'public', last_seen: new Date(Date.now() - 5 * 86400e3).toISOString() }, { key: 'gw:3c:52', name: '10.0.0.1', type: 'ethernet', profile: 'enterprise', last_seen: new Date(Date.now() - 20 * 86400e3).toISOString() }] },
                 ufw: { installed: true, active: true, enabled: true, default_incoming: 'deny', default_outgoing: 'allow', error: '', profile: 'home',
                        profiles: { home: { services: ['cups', 'mdns'], nets: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fe80::/10'] }, public: { services: [], nets: [] }, enterprise: { services: ['cups'], nets: ['192.168.1.0/24', 'fe80::/10'] } }, rules: [
                     { number: 1, to: '22/tcp', action: 'ALLOW IN', from: 'Anywhere', v6: false, comment: 'SSH' },

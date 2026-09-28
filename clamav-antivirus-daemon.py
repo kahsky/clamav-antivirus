@@ -960,6 +960,40 @@ def profile_rules(profile):
     return rules
 VALID_ACTION = ("allow", "deny", "reject", "limit")
 VALID_POLICY = ("allow", "deny", "reject")
+NETWORK_SKIP_TYPES = ("loopback", "vpn", "wireguard", "tun", "tap", "bridge", "dummy", "ip-tunnel")
+
+
+def network_identity():
+    """Réseau courant : {key, name, type, device}. Clé stable = connexion NetworkManager qui porte la route par défaut
+    (uuid), sinon adresse MAC de la passerelle. None hors ligne."""
+    r = run_quiet(["ip", "-j", "route", "show", "default"], timeout=10)
+    try:
+        routes = json.loads(r.stdout or "[]")
+    except ValueError:
+        routes = []
+    routes = [x for x in routes if x.get("dev")]
+    if not routes:
+        return None
+    routes.sort(key=lambda x: x.get("metric", 0))
+    dev, gw = routes[0]["dev"], routes[0].get("gateway", "")
+    if shutil.which("nmcli"):
+        r = run_quiet(["nmcli", "-t", "-f", "UUID,NAME,TYPE,DEVICE", "connection", "show", "--active"], timeout=10)
+        for ln in (r.stdout or "").splitlines():
+            parts = [x.replace("\\:", ":") for x in re.split(r"(?<!\\):", ln.strip())]
+            if len(parts) < 4 or parts[3] != dev or parts[2] in NETWORK_SKIP_TYPES:
+                continue
+            kind = "wifi" if "wireless" in parts[2] else "ethernet" if "ethernet" in parts[2] else "other"
+            return {"key": f"nm:{parts[0]}", "name": parts[1] or dev, "type": kind, "device": dev}
+    mac = ""
+    if gw:
+        r = run_quiet(["ip", "-j", "neigh", "show", gw], timeout=10)
+        try:
+            mac = next((x.get("lladdr", "") for x in json.loads(r.stdout or "[]") if x.get("lladdr")), "")
+        except ValueError:
+            pass
+    return {"key": f"gw:{mac or gw or dev}", "name": gw or dev, "type": "ethernet", "device": dev}
+
+
 UFW_RULE_COMMANDS = ("allow", "deny", "reject", "limit", "insert", "prepend")
 
 
@@ -2459,6 +2493,8 @@ class Daemon:
         self.last_daily = 0
         self.timeshift_enabling = False
         self.hardening_running = False
+        self.current_network = None            # réseau courant {key, name, type, device}, None hors ligne
+        self.network_lock = threading.Lock()
         self.last_integrity = 0
         self.integrity_running = False
         self.daily_running = False
@@ -3066,6 +3102,7 @@ class Daemon:
             try:
                 self.security["ufw"]["profile"] = self.settings.get("firewall_profile") or ""
                 self.security["ufw"]["profiles"] = {p: {"services": profile_services(p), "nets": profile_nets(p)} for p in FIREWALL_PROFILES}
+                self.security["network"] = self.network_info()
             except Exception as e:  # noqa: BLE001
                 log(f"Profil pare-feu : {e}")
             self.last_security = time.time()
@@ -3073,6 +3110,77 @@ class Daemon:
         if broadcast:
             self.broadcast({"event": "security_status", "security": result})
         return result
+
+    # ── Réseau courant et profil mémorisé par réseau ──────────────────────
+    def network_loop(self):
+        """Surveille le réseau courant (route par défaut, connexion NetworkManager) toutes les 10 s."""
+        time.sleep(8)
+        while not self.shutdown.is_set():
+            try:
+                self.check_network()
+            except Exception as e:  # noqa: BLE001
+                log(f"Réseau : {e}")
+            self.shutdown.wait(10)
+
+    def network_info(self):
+        known = self.state.get("network_profiles") or {}
+        return {"current": self.current_network,
+                "known": sorted(({"key": k, **v} for k, v in known.items()), key=lambda x: x.get("last_seen") or "", reverse=True)[:30]}
+
+    def remember_network_profile(self, profile):
+        """Le profil choisi par l'utilisateur est mémorisé pour le réseau courant."""
+        net = self.current_network
+        if not net:
+            return
+        known = dict(self.state.get("network_profiles") or {})
+        entry = dict(known.get(net["key"]) or {"first_seen": now_iso()})
+        entry.update({"profile": profile, "name": net["name"], "type": net["type"], "last_seen": now_iso()})
+        known[net["key"]] = entry
+        self.state.update(network_profiles=known)
+
+    def check_network(self, force=False):
+        """Réseau connu : son profil mémorisé est appliqué. Réseau inconnu : Public d'office, mémorisé, et l'utilisateur
+        est prévenu (popup avec « Changer »). Première fois après mise à jour : le réseau courant hérite du profil déjà choisi."""
+        net = network_identity()
+        with self.network_lock:
+            prev_key = (self.current_network or {}).get("key")
+            if net and net["key"] == prev_key and not force:
+                return
+            self.current_network = net
+            if not net:
+                if prev_key:
+                    self.write_log("network: offline")
+                return
+            known = dict(self.state.get("network_profiles") or {})
+            current_profile = self.settings.get("firewall_profile") or ""
+            migrate = not self.state.get("network_profiles_init")      # première fois (mise à jour) : héritage du profil choisi
+            entry = known.get(net["key"])
+            new = entry is None
+            if new:
+                inherit = bool(migrate and current_profile)
+                profile = current_profile if inherit else "public"
+                entry = {"profile": profile, "name": net["name"], "type": net["type"], "first_seen": now_iso()}
+                new = not inherit                                          # héritage silencieux, sinon popup « nouveau réseau »
+            else:
+                profile = entry.get("profile") or "public"
+            if migrate:
+                self.state.update(network_profiles_init=True)
+            entry.update({"name": net["name"], "type": net["type"], "last_seen": now_iso()})
+            known[net["key"]] = entry
+            self.state.update(network_profiles=known)
+            changed = profile != current_profile
+            if changed or new:
+                if os.geteuid() == 0 and not TEST_MODE:
+                    ok, text = self.apply_firewall_profile(profile)
+                    if not ok:
+                        self.write_log(f"network {net['name']}: profile {profile} failed: {text[:120]}")
+                self.settings.update({"firewall_profile": profile})
+            self.write_log(f"network {net['name']} [{net['type']}] ({net['key']}): profile {profile}"
+                           + (" — new network → public" if new else ""))
+        if changed or new or force:
+            self.refresh_security(force=True)
+            self.refresh_overall()
+        self.broadcast({"event": "network_changed", "network": net, "profile": profile, "new": new, "changed": changed})
 
     def apply_firewall_profile(self, profile):
         """Retire les anciennes règles du profil, applique les politiques, ajoute les règles du profil, active UFW."""
@@ -3702,7 +3810,7 @@ class Daemon:
                    "install_phased", "install_package"):
             return True
         if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence", "acknowledge_integrity",
-                   "system_upgrade", "harden_apply"):
+                   "system_upgrade", "harden_apply", "forget_network"):
             return bool(self.settings.get("family_mode"))
         return False
 
@@ -4180,6 +4288,7 @@ class Daemon:
             ok, text = self.apply_firewall_profile(profile)
             if ok:
                 self.settings.update({"firewall_profile": profile})
+                self.remember_network_profile(profile)
             self.refresh_security(force=True)
             self.refresh_overall()
             return {"ok": ok, "error": "" if ok else "command_failed", "detail": text, "profile": profile,
@@ -4243,6 +4352,21 @@ class Daemon:
             self.write_log(f"✘ untrusted program: {exe}")
             self.broadcast({"event": "trusted", "programs": programs, "acknowledged": self.state.get("acknowledged_persistence") or []})
             return {"ok": True, "programs": programs}
+
+        if cmd == "forget_network":
+            # Le réseau redevient inconnu : Public d'office à la prochaine connexion (tout de suite si c'est le réseau courant)
+            key = str(req.get("key") or "")
+            known = dict(self.state.get("network_profiles") or {})
+            if key not in known:
+                return {"ok": False, "error": "not_found"}
+            known.pop(key)
+            self.state.update(network_profiles=known)
+            self.write_log(f"network forgotten: {key}")
+            if self.current_network and self.current_network.get("key") == key:
+                self.check_network(force=True)
+            else:
+                self.refresh_security(force=True)
+            return {"ok": True}
 
         if cmd == "acknowledge_integrity":
             # « C'est normal » : un avertissement d'intégrité (chkrootkit, debsums, unhide, Lynis) approuvé ne compte plus
@@ -4447,6 +4571,7 @@ class Daemon:
 
         threading.Thread(target=self.worker, daemon=True, name="worker").start()
         threading.Thread(target=self.maintenance_loop, daemon=True, name="maintenance").start()
+        threading.Thread(target=self.network_loop, daemon=True, name="network").start()
         self.monitor.start()
         self.network.start()
         self.connections.start()
