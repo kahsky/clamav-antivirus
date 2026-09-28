@@ -2583,9 +2583,10 @@ function renderHibpEmails(results, err) {
     const rows = Object.entries(results).map(([email, r]) => {
         if (r.error) return `<div class="package-item"><span class="package-name">${escapeHtml(email)}</span><span class="alert-meta">${escapeHtml(r.error === 'no_key' ? t('security.leaks.no_key') : t('security.leaks.error', { error: r.error }))}</span></div>`;
         const b = r.breaches || [];
+        const src = b.length && b[0].source === 'xposedornot' ? ` · ${t('security.leaks.source', { source: 'XposedOrNot' })}` : (b.length ? ` · ${t('security.leaks.source', { source: 'Have I Been Pwned' })}` : '');
         if (!b.length) return `<div class="package-item"><span class="scope-badge scope-user">✓</span><span class="package-name">${escapeHtml(email)}</span><span class="alert-meta">${t('security.leaks.email_ok')}</span></div>`;
         return `<div class="package-item security hibp-breach"><span class="scope-badge scope-danger">${b.length}</span><span class="package-name">${escapeHtml(email)}</span>
-            <span class="alert-meta">${escapeHtml(t('security.leaks.email_found', { n: b.length, date: b[0].date || '', name: b[0].title || b[0].name || '' }))}</span>
+            <span class="alert-meta">${escapeHtml(t('security.leaks.email_found', { n: b.length, date: b[0].date || '', name: b[0].title || b[0].name || '' }) + src)}</span>
             <details class="alert-sample"><summary>${t('popup.btn.details')}</summary>${b.slice(0, 15).map(x => `<div>${escapeHtml(x.date || '')} · <strong>${escapeHtml(x.title || x.name || '')}</strong>${x.domain ? ` (${escapeHtml(x.domain)})` : ''} — ${escapeHtml((x.data || []).join(', '))}</div>`).join('')}</details></div>`;
     });
     el.innerHTML = rows.join('') + (err && err !== 'no_key' ? `<p class="text-muted">${escapeHtml(t('security.leaks.error', { error: err }))}</p>` : '');

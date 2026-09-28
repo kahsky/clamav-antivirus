@@ -2185,7 +2185,7 @@ class ClamAVAntivirusApp:
         def worker():
             results, err_all = {}, ""
             for email in emails:
-                breaches, err = extras.check_email(email, api_key=key, proxy_url="" if key else extras.DUKIWI_HIBP_PROXY)
+                breaches, err = extras.check_email(email, api_key=key)   # sans clé : base gratuite XposedOrNot (Dukiwi n'a pas de clé HIBP)
                 results[email] = {"breaches": breaches, "error": err, "checked": now_iso()}
                 if err and err != "":
                     err_all = err

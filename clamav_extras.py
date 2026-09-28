@@ -26,6 +26,7 @@ USER_AGENT = "ClamAV-Antivirus-GUI (Dukiwi SA; +https://www.dukiwi.com)"
 HIBP_RANGE_URL = "https://api.pwnedpasswords.com/range/"
 HIBP_ACCOUNT_URL = "https://haveibeenpwned.com/api/v3/breachedaccount/"
 DUKIWI_HIBP_PROXY = "https://www.dukiwi.com/repo/api/hibp.php"
+XON_ANALYTICS_URL = "https://api.xposedornot.com/v1/breach-analytics?email="   # source gratuite, sans clé (repli)
 VAULT_CIPHER = os.path.expanduser("~/.coffre")
 VAULT_MOUNT = os.path.expanduser("~/Coffre")
 APPIMAGE_DIRS = ["~", "~/Downloads", "~/Téléchargements", "~/Applications", "~/Apps", "~/.local/bin", "~/bin", "~/Desktop", "~/Bureau"]
@@ -63,8 +64,35 @@ def check_password(password):
     return 0, ""
 
 
+def check_email_xon(email):
+    """Repli gratuit sans clé : XposedOrNot (breach-analytics). Retourne (breaches, error)."""
+    try:
+        status, body = _http(XON_ANALYTICS_URL + urllib.parse.quote(email), timeout=30)
+        data = json.loads(body.decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return [], ""
+        if e.code == 429:
+            return [], "rate_limited"
+        return [], f"http_{e.code}"
+    except Exception as e:  # noqa: BLE001
+        return [], f"network: {e}"[:120]
+    if not isinstance(data, dict) or data.get("Error"):
+        return [], ""
+    out = []
+    for b in ((data.get("ExposedBreaches") or {}).get("breaches_details") or []):
+        year = str(b.get("xposed_date") or "")
+        out.append({"name": b.get("breach", ""), "title": b.get("breach", ""), "domain": b.get("domain", ""),
+                    "date": year, "added": "", "count": b.get("xposed_records", 0),
+                    "data": [x.strip() for x in str(b.get("xposed_data") or "").split(";") if x.strip()][:8],
+                    "verified": True, "source": "xposedornot"})
+    out.sort(key=lambda b: b.get("date", ""), reverse=True)
+    return out, ""
+
+
 def check_email(email, api_key="", proxy_url=""):
-    """Fuites connues pour une adresse : API HIBP (clé personnelle) ou relais Dukiwi. Retourne (breaches, error)."""
+    """Fuites connues pour une adresse : API HIBP (clé personnelle), sinon relais Dukiwi, sinon XposedOrNot (gratuit).
+    Retourne (breaches, error)."""
     email = (email or "").strip().lower()
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[a-z]{2,}", email):
         return [], "invalid_email"
@@ -75,7 +103,7 @@ def check_email(email, api_key="", proxy_url=""):
         elif proxy_url:
             status, body = _http(proxy_url + "?email=" + urllib.parse.quote(email))
         else:
-            return [], "no_key"
+            return check_email_xon(email)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return [], ""                       # aucune fuite connue
@@ -83,8 +111,12 @@ def check_email(email, api_key="", proxy_url=""):
             return [], "bad_key"
         if e.code == 429:
             return [], "rate_limited"
+        if not api_key:                         # relais sans clé (503) ou indisponible : repli gratuit
+            return check_email_xon(email)
         return [], f"http_{e.code}"
     except Exception as e:  # noqa: BLE001
+        if not api_key:
+            return check_email_xon(email)
         return [], f"network: {e}"[:120]
     try:
         data = json.loads(body.decode("utf-8", "replace") or "[]")

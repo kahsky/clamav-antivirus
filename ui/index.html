@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.11.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.11.2 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -835,7 +835,7 @@
                     <p class="text-muted alerts-intro" data-i18n="security.leaks.intro">Vérifiez si vos adresses e-mail apparaissent dans des fuites de données connues, et testez un mot de passe sans jamais l'envoyer (seuls 5 caractères de son empreinte SHA-1 quittent l'ordinateur).</p>
                     <label class="setting-col"><span data-i18n="security.leaks.emails">Adresses e-mail à surveiller (une par ligne)</span><textarea id="hibpEmails" class="input-field input-area" rows="2" spellcheck="false"></textarea></label>
                     <label class="setting-row"><span data-i18n="security.leaks.key">Clé API HIBP (optionnelle)</span><input type="password" id="hibpKey" class="input-field input-sm input-key" autocomplete="off" placeholder="—"></label>
-                    <p class="text-muted setting-note" data-i18n="security.leaks.key_hint">Sans clé, la vérification des adresses passe par le relais Dukiwi s'il est disponible. La clé est stockée dans votre profil seulement.</p>
+                    <p class="text-muted setting-note" data-i18n="security.leaks.key_hint">Sans clé, la vérification utilise la base gratuite XposedOrNot ; seule l'adresse lui est transmise. Une clé HIBP personnelle (abonnement chez haveibeenpwned.com) donne la base Have I Been Pwned, plus complète ; elle est stockée dans votre profil seulement.</p>
                     <div class="log-actions-right">
                         <span class="text-muted" id="hibpLast"></span>
                         <button class="btn btn-secondary btn-sm" onclick="hibpSave()" data-i18n="security.leaks.save">Enregistrer</button>

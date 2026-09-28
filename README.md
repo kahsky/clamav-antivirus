@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.11.1)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.11.2)
 
 ---
 
@@ -85,9 +85,10 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 - **Bilan de la semaine** — popup hebdomadaire (et bouton dans l'onglet Sécurité) : analyses, menaces,
   alertes, score et sa variation, sauvegarde, conseils lus.
 - **Fuites de données** — test d'un mot de passe via Have I Been Pwned en k-anonymity (5 caractères
-  du SHA-1, jamais le mot de passe) ; surveillance d'adresses e-mail avec une clé API HIBP personnelle ou
-  le relais Dukiwi (`repo/api/hibp.php`, clé côté serveur), revérification hebdomadaire et popup à
-  chaque nouvelle fuite.
+  du SHA-1, jamais le mot de passe) ; surveillance d'adresses e-mail via la base gratuite XposedOrNot, ou Have I Been Pwned avec
+  une clé API personnelle ; revérification hebdomadaire et popup à chaque nouvelle fuite. Seule l'adresse
+  est transmise au service consulté. (Le relais `repo/api/hibp.php` reste disponible si Dukiwi obtient
+  une clé un jour.)
 - **Applications hors dépôts** — inventaire Flatpak (permissions larges, source hors Flathub), Snap
   (confinement classic, plugs sensibles) et AppImage (sans bac à sable), avec « Faire confiance ».
 - **Coffre chiffré** — dossier gocryptfs (`~/.coffre` chiffré, monté sur `~/Coffre`), création,
@@ -204,7 +205,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.11.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.11.1_all.deb)
+[Télécharger clamav-antivirus_1.11.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.11.2_all.deb)
 
 ---
 
@@ -235,12 +236,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.11.1_all.deb`
+Résultat : `clamav-antivirus_1.11.2_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.11.1_all.deb
+sudo dpkg -i clamav-antivirus_1.11.2_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
