@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.11.5"
+VERSION = "1.12.0"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -99,6 +99,8 @@ DEFAULT_SETTINGS = {
     "firewall_profile": "",
     # Télémétrie anonyme (opt-in) : version, système, score, faux positifs approuvés, sans identifiant personnel
     "telemetry": False,
+    # Durcissement automatique : recommandations Lynis sans risque appliquées après chaque audit
+    "auto_harden": False,
     # Vérification d'intégrité hebdomadaire (Lynis, unhide, chkrootkit, debsums, fichiers de l'app)
     "integrity_weekly": True,
     "integrity_day": 6,

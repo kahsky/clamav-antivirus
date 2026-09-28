@@ -426,21 +426,21 @@ function renderVulns(refreshing = false) {
     const c = v.counts || {};
     const bp = v.by_priority || {};
     $('vulnSummary').innerHTML = [
-        ['unfixed', c.unfixed || 0, 'danger'], ['pro_only', c.pro_only || 0, 'warn'], ['fix_available', c.fix_available || 0, 'info'],
+        ['unfixed', c.unfixed || 0, 'danger'], ['pro_only', c.pro_only || 0, 'warn'], ['fix_available', c.fix_available || 0, 'info'], ['kernel_pending', c.kernel_pending || 0, 'info'],
     ].map(([k, n, cls]) => `<div class="stat ${n && cls === 'danger' ? 'has-threats' : n && cls === 'warn' ? 'has-warning' : ''}"><span class="stat-value">${formatNumber(n)}</span><span class="stat-label">${t(`security.vulns.${k === 'pro_only' ? 'pro' : k}`)}</span></div>`).join('')
         + ['critical', 'high', 'medium', 'low'].map(pr => `<div class="stat"><span class="stat-value">${formatNumber(bp[pr] || 0)}</span><span class="stat-label">${t(`priority.${pr}`)}</span></div>`).join('')
         + `<div class="stat"><span class="stat-value">${formatNumber(v.sources || 0)}</span><span class="stat-label">${t('security.vulns.sources')}</span></div>`;
     const maxRank = vulnPrio === 'all' ? 99 : vulnPrio === 'medium' ? 2 : 1;
     const items = (v.items || []).filter(i => i.status === vulnFilter && !i.dormant && (VULN_PRIO_RANK[i.priority] ?? 5) <= maxRank);
     const hidden = (v.items || []).filter(i => i.status === vulnFilter && !i.dormant).length - items.length;
-    const dormantNote = $('vulnDormantNote');
-    if (dormantNote) {
-        const nd = c.dormant || 0;
-        dormantNote.hidden = !nd;
-        if (nd) dormantNote.textContent = t('security.vulns.dormant_note', { n: formatNumber(nd), sources: (v.dormant_kernels || []).join(', '), running: (v.running_kernel && v.running_kernel.release) || '' });
-    }
     if ($('vulnPrio')) $('vulnPrio').value = vulnPrio;
     if ($('vulnHidden')) $('vulnHidden').textContent = hidden > 0 ? t('security.vulns.hidden', { n: hidden }) : '';
+    const kernelNote = $('vulnKernelNote');
+    if (kernelNote) {
+        const nk = c.kernel_pending || 0;
+        kernelNote.hidden = !nk;
+        if (nk) kernelNote.textContent = t('security.vulns.kernel_note', { n: formatNumber(nk), src: (v.running_kernel && v.running_kernel.source) || '', release: (v.running_kernel && v.running_kernel.release) || '' });
+    }
     const hweNote = $('vulnHweNote');
     if (hweNote) {
         const n = c.kernel_hwe_fixed || 0;
@@ -488,6 +488,65 @@ function renderIntegrity(running = false) {
     const appSt = !app.available ? 'unknown' : (app.modified || []).length || (app.missing || []).length ? 'fail' : 'ok';
     html += `<div class="check-item check-${appSt}"><span class="check-icon">${appSt === 'ok' ? '✓' : appSt === 'fail' ? '✕' : '?'}</span><div class="check-text"><span class="check-title">${t('security.integrity.app')}</span><span class="check-detail">${!app.available ? t('security.integrity.app_no_manifest') : appSt === 'ok' ? t('security.integrity.app_ok', { n: app.count, signed: app.signed ? (app.verified ? t('security.integrity.signed_ok') : t('security.integrity.signed_bad')) : t('security.integrity.unsigned') }) : t('security.integrity.app_modified', { n: (app.modified || []).length + (app.missing || []).length })}</span>${(app.modified || []).concat(app.missing || []).length ? `<details class="alert-sample"><summary>${t('popup.btn.details')}</summary>${(app.modified || []).map(f => `<div>${escapeHtml(f)}</div>`).join('')}${(app.missing || []).map(f => `<div>${escapeHtml(f)} (${t('security.integrity.missing')})</div>`).join('')}</details>` : ''}</div></div>`;
     $('integrityList').innerHTML = html;
+    renderHardening();
+}
+
+
+// ─── Durcissement (Lynis) : recommandations applicables d'un clic ──────────
+
+function hardenKind(test, catalog) { return (catalog[test] || {}).kind || 'other'; }
+
+function renderHardening() {
+    const el = $('hardeningList');
+    if (!el) return;
+    const it = secData.integrity || {};
+    const ly = it.lynis || null;
+    const h = it.hardening || {};
+    const catalog = h.catalog || {}, applied = h.applied || {}, failed = h.failed || {};
+    const items = (ly && ly.items) || [];
+    $('hardeningIndex').textContent = ly && ly.index != null ? t('security.hardening.index', { index: ly.index }) : '';
+    const pendingSafe = items.filter(i => hardenKind(i.test, catalog) === 'apply' && !(catalog[i.test] || {}).caution && !applied[i.test]);
+    $('btnHardenAll').hidden = !pendingSafe.length;
+    $('btnHardenAll').disabled = !!h.running;
+    if (!items.length) { el.innerHTML = `<p class="text-muted">${t(it.checked_at ? 'security.hardening.none' : 'security.integrity.none_yet')}</p>`; return; }
+    const applicable = items.filter(i => ['apply', 'gui'].includes(hardenKind(i.test, catalog))).length;
+    const nApplied = items.filter(i => applied[i.test]).length;
+    const order = { apply: 0, gui: 1, manual: 2, other: 3, skip: 4 };
+    let html = `<div class="text-muted">${t('security.hardening.summary', { n: items.length, applicable, applied: nApplied })}${h.running ? ` · ${t('security.hardening.running')}` : ''}</div>`;
+    html += items.slice().sort((a, b) => (applied[a.test] ? 1 : 0) - (applied[b.test] ? 1 : 0)
+        || order[hardenKind(a.test, catalog)] - order[hardenKind(b.test, catalog)] || a.test.localeCompare(b.test)).map(i => {
+        const kind = hardenKind(i.test, catalog), meta = catalog[i.test] || {};
+        const done = applied[i.test], err = failed[i.test];
+        const titleKey = `harden.${i.test}.title`, descKey = `harden.${i.test}.desc`;
+        const title = t(titleKey) !== titleKey ? t(titleKey) : i.text;
+        const desc = t(descKey) !== descKey ? t(descKey) : '';
+        const actionable = kind === 'apply' || kind === 'gui';
+        const st = done ? 'ok' : actionable ? 'warn' : 'na';
+        const icon = done ? '✓' : actionable ? '!' : kind === 'skip' ? '–' : 'i';
+        let btn = '';
+        if (kind === 'apply' && !h.running) {
+            btn = done ? (meta.no_revert ? '' : `<button class="btn btn-secondary btn-sm" onclick="hardenRevert('${escapeJs(i.test)}')">${t('security.hardening.revert')}</button>`)
+                       : `<button class="btn btn-primary btn-sm" onclick="hardenApply(['${escapeJs(i.test)}'])">${t('security.hardening.apply')}</button>`;
+        } else if (kind === 'gui') {
+            btn = `<button class="btn btn-secondary btn-sm" onclick="hardenGui('${escapeJs(meta.action || '')}')">${t('security.fix')}</button>`;
+        }
+        return `<div class="check-item check-${st}"><span class="check-icon">${icon}</span><div class="check-text">
+            <span class="check-title">${escapeHtml(title)} <span class="harden-id">${escapeHtml(i.test)}</span>${meta.caution ? ` <span class="scope-badge scope-phased">${t('security.hardening.caution')}</span>` : ''}${!actionable ? ` <span class="scope-badge scope-user">${t(`security.hardening.kind.${kind}`)}</span>` : ''}</span>
+            ${desc ? `<span class="check-detail">${escapeHtml(desc)}</span>` : ''}
+            <span class="check-detail text-muted">${t('security.hardening.lynis_says', { text: escapeHtml(i.text || '') })}${i.details ? ` — ${escapeHtml(i.details)}` : ''}</span>
+            ${done ? `<span class="check-detail">${t('security.hardening.applied', { rel: formatRelative(done.at), detail: escapeHtml(done.detail || '') })}</span>` : ''}
+            ${err ? `<span class="check-detail harden-error">${t('security.hardening.failed', { detail: escapeHtml(err.detail || '') })}</span>` : ''}
+        </div>${btn}</div>`;
+    }).join('');
+    el.innerHTML = html;
+}
+
+function hardenApply(tests) { sendToBackend({ action: 'harden_apply', tests }); }
+function hardenApplyAll() { sendToBackend({ action: 'harden_apply', all: true }); }
+function hardenRevert(test) { sendToBackend({ action: 'harden_revert', tests: [test] }); }
+function hardenGui(action) {
+    if (action === 'firewall') switchTab('firewall');
+    else if (action) sendToBackend({ action });
 }
 
 function renderAppUpdate() {
@@ -917,9 +976,10 @@ function onSettingsData(data) {
     $('setIntegrityWeekly').checked = sys.integrity_weekly !== false;
     if ($('setBackupCheck')) $('setBackupCheck').checked = sys.backup_check !== false;
     if ($('setTelemetry')) $('setTelemetry').checked = !!sys.telemetry;
+    if ($('setAutoHarden')) $('setAutoHarden').checked = !!sys.auto_harden;
     if ($('telemetryLast')) $('telemetryLast').textContent = data.telemetry_sent ? t('settings.telemetry.last', { rel: formatRelative(data.telemetry_sent) }) : '';
     const locked = new Set(data.locked || []);
-    const map = { setUploadMonitor: 'upload_monitor', setUploadGb: 'upload_alert_gb', setUploadHours: 'upload_window_hours', setBurstMonitor: 'burst_monitor', setBurstInfo: 'burst_info_threshold', setBurstDanger: 'burst_danger_threshold', setBurstWindow: 'burst_window_sec', setUsbAuto: 'usb_auto_scan', setUsbMax: 'usb_auto_scan_max_gib', setUpdateTime: 'update_hour', setFamilyMode: 'family_mode', setAutoResponse: 'auto_response', setConnectionMonitor: 'connection_monitor', setGeoip: 'geoip_lookup', setGeoipKey: 'geoip_api_key', setIntegrityWeekly: 'integrity_weekly', setIntegrityDay: 'integrity_day', setIntegrityHour: 'integrity_hour', setAppUpdateCheck: 'app_update_check', setAppUpdateAuto: 'app_update_auto', setWeekly: 'weekly_scan', setWeeklyDay: 'weekly_scan_day', setWeeklyHour: 'weekly_scan_hour', setBackupCheck: 'backup_check', setTelemetry: 'telemetry' };
+    const map = { setUploadMonitor: 'upload_monitor', setUploadGb: 'upload_alert_gb', setUploadHours: 'upload_window_hours', setBurstMonitor: 'burst_monitor', setBurstInfo: 'burst_info_threshold', setBurstDanger: 'burst_danger_threshold', setBurstWindow: 'burst_window_sec', setUsbAuto: 'usb_auto_scan', setUsbMax: 'usb_auto_scan_max_gib', setUpdateTime: 'update_hour', setFamilyMode: 'family_mode', setAutoResponse: 'auto_response', setConnectionMonitor: 'connection_monitor', setGeoip: 'geoip_lookup', setGeoipKey: 'geoip_api_key', setIntegrityWeekly: 'integrity_weekly', setIntegrityDay: 'integrity_day', setIntegrityHour: 'integrity_hour', setAppUpdateCheck: 'app_update_check', setAppUpdateAuto: 'app_update_auto', setWeekly: 'weekly_scan', setWeeklyDay: 'weekly_scan_day', setWeeklyHour: 'weekly_scan_hour', setBackupCheck: 'backup_check', setTelemetry: 'telemetry', setAutoHarden: 'auto_harden' };
     Object.entries(map).forEach(([id, key]) => { const el = $(id); if (!el) return; const row = el.closest('.setting-row'); if (locked.has(key)) { el.disabled = true; if (row) { row.classList.add('locked'); row.title = t('settings.locked_note'); } } else if (row) { row.classList.remove('locked'); row.title = ''; } });
     const banner = $('policyBanner');
     if (banner) { banner.hidden = !data.policy; if (data.policy) banner.textContent = t('settings.policy.banner', { name: data.policy.name || '—', signed: data.policy.signed ? t('settings.policy.signed') : '', n: (data.locked || []).length }) + (data.allowlist && data.allowlist.version ? ' · ' + t('settings.allowlist', { version: data.allowlist.version, n: data.allowlist.patterns || 0 }) : ''); }
@@ -962,6 +1022,7 @@ function saveSettings() {
         integrity_weekly: $('setIntegrityWeekly').checked,
         backup_check: $('setBackupCheck') ? $('setBackupCheck').checked : true,
         telemetry: $('setTelemetry') ? $('setTelemetry').checked : false,
+        auto_harden: $('setAutoHarden') ? $('setAutoHarden').checked : false,
         integrity_day: parseInt($('setIntegrityDay').value, 10),
         integrity_hour: parseInt($('setIntegrityHour').value, 10) || 0,
         app_update_check: $('setAppUpdateCheck').checked,
@@ -2137,6 +2198,9 @@ function simulateBackend(data) {
         case 'timeshift_enable': case 'timeshift_disable':
             reply('operationResult', { status: 'success', message: t(data.action === 'timeshift_enable' ? 'msg.timeshift_enabled' : 'msg.timeshift_disabled') });
             break;
+        case 'harden_apply': case 'harden_revert':
+            reply('operationResult', { status: 'info', message: t('msg.harden_started', { n: (data.tests || []).length || 3 }) });
+            break;
         case 'auto_updates_enable':
             reply('operationResult', { status: 'success', message: t('msg.auto_updates_enabled', { list: [t('msg.auto_updates.system'), t('check.auto_updates.spices'), t('check.auto_updates.flatpak')].join(', ') }) });
             break;
@@ -2171,9 +2235,11 @@ function simulateBackend(data) {
             const sim = {
                 checklist: { checked_at: now, score: 78, grade: 'B', ports: [{ proto: 'tcp', addr: '0.0.0.0', port: 22, process: 'sshd', service: 'ssh', exposed: true }, { proto: 'tcp', addr: '127.0.0.1', port: 631, process: 'cupsd', service: 'cups', exposed: false }],
                     items: [{ key: 'firewall', status: 'ok', weight: 15, detail: 'deny/allow' }, { key: 'disk_encryption', status: 'warn', weight: 8, detail: '' }, { key: 'secure_boot', status: 'ok', weight: 5 }, { key: 'apparmor', status: 'ok', weight: 6 }, { key: 'auto_updates', status: 'warn', weight: 6 }, { key: 'security_updates', status: 'fail', weight: 12, detail: '2' }, { key: 'empty_passwords', status: 'ok', weight: 10 }, { key: 'nopasswd_sudo', status: 'ok', weight: 5 }, { key: 'open_ports', status: 'warn', weight: 8, detail: '22/tcp sshd' }, { key: 'signatures', status: 'ok', weight: 8, detail: '0 d' }, { key: 'realtime', status: 'ok', weight: 6 }, { key: 'open_vulns', status: 'warn', weight: 6, detail: '12 unfixed, 2 high/critical' }] },
-                vulns: { checked_at: now, ok: true, sources: 1480, counts: { unfixed: 12, pro_only: 3, fix_available: 5 }, by_priority: { high: 2, medium: 9, low: 9 }, flatpak: [{ id: 'org.gimp.GIMP', version: '3.2.7', name: 'GIMP' }], snap: [],
-                    items: [{ id: 'UBUNTU-CVE-2026-32741', cve: 'CVE-2026-32741', package: 'libheif', installed: '1.17.6-1ubuntu4', fixed: '', status: 'unfixed', priority: 'high', cvss: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H', summary: 'Heap buffer overflow when decoding crafted HEIF images', url: 'https://ubuntu.com/security/CVE-2026-32741' }, { id: 'x', cve: 'CVE-2026-54369', package: 'acl', installed: '2.3.2-1build1.1', fixed: '', status: 'unfixed', priority: 'medium', cvss: '', summary: 'Race condition in setfacl', url: '#' }, { id: 'y', cve: 'CVE-2026-63072', package: 'openssl', installed: '3.0.13-0ubuntu3.13', fixed: '3.0.13-0ubuntu3.15', status: 'fix_available', priority: 'medium', cvss: '', summary: 'Heap Buffer Overflow in CMS Key Unwrapping', url: '#' }, { id: 'z', cve: 'CVE-2025-1234', package: 'libxml2', installed: '2.9.14', fixed: '2.9.14+esm1', status: 'pro_only', priority: 'low', cvss: '', summary: 'Use-after-free in xmlXPath', url: '#' }] },
-                integrity: { checked_at: now, warnings: 1, tools: { lynis: { installed: true, ran: true, warnings: ['Warning: The file properties have changed: /usr/bin/ss'] }, chkrootkit: { installed: false, warnings: [] }, debsums: { installed: true, ran: true, warnings: [] } }, app: { available: true, signed: true, verified: true, modified: [], missing: [], count: 27 } },
+                vulns: { checked_at: now, ok: true, sources: 1480, counts: { unfixed: 12, pro_only: 3, fix_available: 5, kernel_pending: 3569 }, running_kernel: { release: '7.0.0-34-generic', source: 'linux-hwe-7.0' }, by_priority: { high: 2, medium: 9, low: 9 }, flatpak: [{ id: 'org.gimp.GIMP', version: '3.2.7', name: 'GIMP' }], snap: [],
+                    items: [{ id: 'UBUNTU-CVE-2026-32741', cve: 'CVE-2026-32741', package: 'libheif', installed: '1.17.6-1ubuntu4', fixed: '', status: 'unfixed', priority: 'high', cvss: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H', summary: 'Heap buffer overflow when decoding crafted HEIF images', url: 'https://ubuntu.com/security/CVE-2026-32741' }, { id: 'x', cve: 'CVE-2026-54369', package: 'acl', installed: '2.3.2-1build1.1', fixed: '', status: 'unfixed', priority: 'medium', cvss: '', summary: 'Race condition in setfacl', url: '#' }, { id: 'y', cve: 'CVE-2026-63072', package: 'openssl', installed: '3.0.13-0ubuntu3.13', fixed: '3.0.13-0ubuntu3.15', status: 'fix_available', priority: 'medium', cvss: '', summary: 'Heap Buffer Overflow in CMS Key Unwrapping', url: '#' }, { id: 'z', cve: 'CVE-2025-1234', package: 'libxml2', installed: '2.9.14', fixed: '2.9.14+esm1', status: 'pro_only', priority: 'low', cvss: '', summary: 'Use-after-free in xmlXPath', url: '#' }, { id: 'k', cve: 'CVE-2026-64564', package: 'linux-hwe-7.0', installed: '7.0.0-34.34~24.04.1', fixed: '', status: 'kernel_pending', priority: 'critical', cvss: '', summary: 'net: use-after-free in tcp_read_sock', url: '#' }] },
+                integrity: { checked_at: now, warnings: 1, lynis: { index: 64, warnings: [], suggestions: 8, items: [{ test: 'KRNL-6000', text: 'One or more sysctl values differ from the scan profile and could be tweaked', details: 'fs.suid_dumpable 2→0, kernel.kptr_restrict 1→2, kernel.sysrq 176→0' }, { test: 'KRNL-5820', text: 'If not required, consider explicit disabling of core dump in /etc/security/limits.conf file', details: '' }, { test: 'AUTH-9328', text: 'Default umask in /etc/login.defs could be more strict like 027', details: '' }, { test: 'BANN-7126', text: 'Add a legal banner to /etc/issue, to warn unauthorized users', details: '' }, { test: 'PKGS-7410', text: 'Remove any unneeded kernel packages', details: '13 kernels' }, { test: 'PKGS-7420', text: 'Consider using a tool to automatically apply upgrades', details: '' }, { test: 'USB-1000', text: 'Disable drivers like USB storage when not used, to prevent unauthorized storage or data theft', details: '' }, { test: 'LOGG-2190', text: 'Check what deleted files are still in use and why.', details: '' }] },
+                    hardening: { applied: { 'BANN-7126': { at: new Date(Date.now() - 3600e3).toISOString(), detail: 'bannières légales dans /etc/issue et /etc/issue.net' }, 'BANN-7130': { at: new Date(Date.now() - 3600e3).toISOString(), detail: '' } }, failed: { 'KRNL-5820': { at: now, detail: 'sysctl: permission denied' } }, running: false, catalog: { 'KRNL-6000': { kind: 'apply' }, 'KRNL-5820': { kind: 'apply' }, 'AUTH-9328': { kind: 'apply', caution: true }, 'BANN-7126': { kind: 'apply' }, 'PKGS-7410': { kind: 'apply', no_revert: true }, 'PKGS-7420': { kind: 'gui', action: 'auto_updates_enable' }, 'USB-1000': { kind: 'skip' }, 'LOGG-2190': { kind: 'manual' } } },
+                    tools: { lynis: { installed: true, ran: true, warnings: ['Warning: The file properties have changed: /usr/bin/ss'] }, chkrootkit: { installed: false, warnings: [] }, debsums: { installed: true, ran: true, warnings: [] } }, app: { available: true, signed: true, verified: true, modified: [], missing: [], count: 27 } },
                 persistence: { checked_at: now, counts: { items: 5, untrusted: 1, extensions: 2, ext_outside_store: 1 }, items: [{ kind: 'autostart', path: '/home/user/.config/autostart/Conky.desktop', name: 'Conky', exec: 'conky -d', user: 'user', trusted: false, owner: '' }, { kind: 'cron', path: '/etc/cron.daily/apt-compat', name: 'apt-compat', exec: '', trusted: true, owner: 'apt' }], extensions: [{ browser: 'chrome', user: 'user', id: 'abcd', name: 'uBlock Origin', version: '1.60', from_store: true, enabled: true }, { browser: 'chrome', user: 'user', id: 'efgh', name: 'Mystery Helper', version: '0.1', from_store: false, enabled: true }] },
                 connections: { checked_at: now, blocklist_size: 1234, processes: [{ pid: 5099, comm: 'chrome', exe: '/opt/google/chrome/chrome', user: 'user', trusted: true, remotes: { '140.82.112.26': { ip: '140.82.112.26', ports: ['443'], flagged: false, country: 'US', org: 'GitHub' } } }, { pid: 777, comm: 'miner', exe: '/tmp/miner', user: 'user', trusted: false, remotes: { '185.220.101.1': { ip: '185.220.101.1', ports: ['4444'], flagged: true, country: 'DE', org: 'Hetzner' } } }] },
                 app_update: { checked_at: now, current: '1.7.0', available: true, verified: true, downloaded: true, version: '1.8.0', size: 102400, date: now, error: '' },
@@ -2536,7 +2602,7 @@ const CHECK_FIX = {
     persistence: () => { switchTab('system'); setTimeout(() => { const el = $('persistenceList'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150); },
     ld_preload: () => loadSecurityData('integrity', false, true),
     kernel_hwe: null,
-    hardening: () => loadSecurityData('integrity', false, true),
+    hardening: () => { switchTab('security'); setTimeout(() => { const el = $('cardHardening'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150); },
 };
 
 // Libellé du bouton quand l'application règle elle-même (sinon « Régler » / « Comment faire »)

@@ -1346,6 +1346,15 @@ class ClamAVAntivirusApp:
             self.send_to_js("backupTimeshift", ev.get("timeshift") or {})
         elif et == "timeshift_enable":
             self.timeshift_enable_result(ev.get("result") or {})
+        elif et == "hardening_done":
+            T = self.T
+            index = ev.get("index") if ev.get("index") is not None else "?"
+            msg = T("msg.harden_reverted" if ev.get("revert") else "msg.harden_done",
+                    ok=ev.get("ok", 0), failed=ev.get("failed", 0), index=index)
+            self.send_to_js("operationResult", {"status": "success" if not ev.get("failed") else "error", "op": "security", "message": msg})
+            if ev.get("auto") and ev.get("ok") and self.popups_enabled("info"):
+                self.popup("success", T("popup.harden.title"), T("popup.harden.body", ok=ev.get("ok", 0), index=index),
+                           timeout=20, on_activate=lambda: self.show_tab("security"))
             self.tray.update_status()
         elif et == "trusted":
             self.send_to_js("trustedList", {"programs": ev.get("programs") or [], "acknowledged": ev.get("acknowledged") or [],
@@ -1546,7 +1555,8 @@ class ClamAVAntivirusApp:
                "sha256_mismatch": "msg.update_bad_hash", "not_suspended": "msg.process_gone",
                "nothing_phased": "msg.nothing_phased", "nothing_to_upgrade": "msg.nothing_to_upgrade",
                "busy_upgrade": "msg.system_upgrading", "busy_timeshift": "msg.timeshift_checking",
-               "auto_updates_unavailable": "msg.auto_updates_unavailable"}.get(err)
+               "auto_updates_unavailable": "msg.auto_updates_unavailable", "busy_hardening": "msg.harden_busy",
+               "nothing_to_harden": "msg.harden_nothing"}.get(err)
         if key:
             return self.T(key, path=resp.get("path", ""))
         return err or self.T("msg.daemon_unavailable")
@@ -2674,6 +2684,24 @@ class ClamAVAntivirusApp:
             return False
 
         threading.Thread(target=worker, daemon=True).start()
+
+    # ── Durcissement (recommandations Lynis) ──
+    def act_harden_apply(self, data):
+        """Application par le service en tâche de fond ; le résultat arrive par l'événement hardening_done."""
+        params = {"tests": [str(t) for t in (data.get("tests") or [])], "all": bool(data.get("all"))}
+        self.run_admin("harden_apply", params, self._harden_started)
+
+    def act_harden_revert(self, data):
+        self.run_admin("harden_revert", {"tests": [str(t) for t in (data.get("tests") or [])]}, self._harden_started)
+
+    def _harden_started(self, resp):
+        if resp.get("ok"):
+            self.send_to_js("operationResult", {"status": "info", "op": "security",
+                                                "message": self.T("msg.harden_started", n=len(resp.get("tests") or []))})
+            self.act_get_security_data({"type": "integrity"})
+        else:
+            self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
+        return False
 
     def act_open_update_manager(self, _data):
         for cmd in (["mintupdate"], ["update-manager"], ["gnome-software", "--mode=updates"]):

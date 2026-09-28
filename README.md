@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.11.5)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.12.0)
 
 ---
 
@@ -79,6 +79,15 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   UFW renforcée. Les règles du profil sont taguées `cav-profile` et remplacées à chaque changement ; les
   règles personnelles restent, et en Public l'application signale celles ouvertes à tout Internet.
   Passer en Public ne demande rien ; Maison et Entreprise demandent l'authentification administrateur.
+- **Durcissement Lynis applicable d'un clic** — la carte « Durcissement (Lynis) » de l'onglet Sécurité liste
+  chaque suggestion de l'audit avec une explication en clair : les recommandations sans risque (paramètres
+  sysctl, core dumps, bannières légales, protocoles inutiles, outils d'audit, anciens noyaux, permissions…)
+  s'appliquent d'un clic ou toutes ensemble (`clamav_harden.py` : fichiers `90-clamav-antivirus-*`, valeurs
+  précédentes retenues pour « Annuler »), celles à lire avant d'appliquer (umask, SSH, TMPDIR) restent
+  manuelles, les autres sont expliquées (faux positifs, sans objet sur un poste de travail). Lynis est relancé
+  après chaque application ; réglage « appliquer automatiquement après chaque audit » dans les paramètres.
+- **Failles** — les noyaux installés mais non démarrés ne sont plus interrogés sur OSV (ni comptés, ni
+  affichés) ; les réponses OSV sont paginées, un noyau dépassant les 1000 fiches d'une page.
 - **Activer Timeshift en un clic** — bouton dans l'onglet Sauvegardes et dans l'assistant de la vue
   simple, sans mot de passe : le service écrit la configuration recommandée (instantanés du système sur le
   disque principal, quotidiens 5, hebdomadaires 3, mensuels 2, mode btrfs si la racine est un sous-volume
@@ -214,7 +223,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.11.5_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.11.5_all.deb)
+[Télécharger clamav-antivirus_1.12.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.12.0_all.deb)
 
 ---
 
@@ -245,12 +254,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.11.5_all.deb`
+Résultat : `clamav-antivirus_1.12.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.11.5_all.deb
+sudo dpkg -i clamav-antivirus_1.12.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

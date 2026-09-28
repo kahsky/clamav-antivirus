@@ -8,7 +8,7 @@
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.11.5"
+VERSION="1.12.0"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -40,6 +40,7 @@ cp "${SCRIPT_DIR}/clamav-antivirus-daemon.py"      "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_common.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_backup.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_extras.py"                "${PKG_DIR}/opt/${APP_NAME}/"
+cp "${SCRIPT_DIR}/clamav_harden.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav-scan-nemo.sh"             "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/systemd/"*.service               "${PKG_DIR}/lib/systemd/system/"
 cp "${SCRIPT_DIR}/systemd/"*.timer                 "${PKG_DIR}/lib/systemd/system/"

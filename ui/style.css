@@ -2846,3 +2846,9 @@ body.mode-simple { position: relative; }
 .tab-panel > .card, .tab-panel > .cards-grid, .tab-panel > .settings-grid, .tab-panel > .backup-progress-card { margin-bottom: 20px; }
 .tab-panel > .card:last-child, .tab-panel > .cards-grid:last-child { margin-bottom: 0; }
 .cards-grid > .card { margin-bottom: 0; }
+
+/* Durcissement (Lynis) */
+.harden-id { font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--text-muted); }
+.harden-error { color: var(--accent-red); }
+.check-item.check-na { opacity: 0.85; }
+.cve-item.vuln-kernel_pending { border-color: rgba(59,130,246,0.3); }

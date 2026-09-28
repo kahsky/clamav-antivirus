@@ -59,6 +59,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import clamav_harden as harden  # noqa: E402
 from clamav_common import (  # noqa: E402
     VERSION, SYSTEM_STATE_DIR, SYSTEM_LOG_DIR, DAEMON_SOCKET,
     SYSTEM_STATE_FILE, SYSTEM_QUARANTINE_DIR, SYSTEM_PROGRESS_FILE,
@@ -1414,21 +1415,30 @@ def running_kernel_source(sources):
     return src.replace("linux-signed", "linux") if src else "", release
 
 
-def osv_query(sources, ecosystem):
-    """Interroge OSV par lots ; retourne {source: [ids]}."""
-    names = sorted(sources)
+def osv_query(sources, ecosystem, skip=()):
+    """Interroge OSV par lots, avec pagination (un noyau dépasse les 1000 fiches d'une page) ; {source: [ids]}."""
+    names = sorted(n for n in sources if n not in skip)
     found = {}
     for i in range(0, len(names), 1000):
         chunk = names[i:i + 1000]
-        payload = {"queries": [{"package": {"name": n, "ecosystem": ecosystem}, "version": sources[n]["version"]} for n in chunk]}
-        data = http_get(OSV_BATCH_URL, timeout=120, data=json.dumps(payload).encode(),
-                        headers={"Content-Type": "application/json"})
-        results = json.loads(data).get("results", [])
-        for name, res in zip(chunk, results):
-            ids = [v["id"] for v in (res or {}).get("vulns", []) if v.get("id")]
-            if ids:
-                found[name] = ids
-    return found
+        pending = [(n, {"package": {"name": n, "ecosystem": ecosystem}, "version": sources[n]["version"]}) for n in chunk]
+        for _page in range(8):
+            payload = {"queries": [q for _, q in pending]}
+            data = http_get(OSV_BATCH_URL, timeout=120, data=json.dumps(payload).encode(),
+                            headers={"Content-Type": "application/json"})
+            results = json.loads(data).get("results", [])
+            nxt = []
+            for (name, q), res in zip(pending, results):
+                ids = [v["id"] for v in (res or {}).get("vulns", []) if v.get("id")]
+                if ids:
+                    found.setdefault(name, []).extend(ids)
+                token = (res or {}).get("next_page_token")
+                if token:
+                    nxt.append((name, dict(q, page_token=token)))
+            pending = nxt
+            if not pending:
+                break
+    return {n: sorted(set(ids)) for n, ids in found.items()}
 
 
 def osv_details(ids, cache, ecosystem, max_workers=8):
@@ -1485,14 +1495,14 @@ def collect_vulnerabilities(previous=None):
     """Failles connues affectant les paquets installés : sans correctif, correctif Pro, ou correctif disponible."""
     ecosystem = ubuntu_osv_ecosystem()
     result = {"checked_at": now_iso(), "ok": True, "error": "", "ecosystem": ecosystem,
-              "sources": 0, "items": [], "counts": {"unfixed": 0, "pro_only": 0, "fix_available": 0, "kernel_hwe_fixed": 0, "dormant": 0},
+              "sources": 0, "items": [], "counts": {"unfixed": 0, "pro_only": 0, "fix_available": 0, "kernel_pending": 0, "kernel_hwe_fixed": 0, "dormant": 0},
               "running_kernel": {}, "dormant_kernels": [],
               "by_priority": {}, "flatpak": [], "snap": [], "cache": {}}
     try:
         sources = installed_sources()
         result["sources"] = len(sources)
         # Noyaux installés mais non démarrés (ex. linux 6.8 GA alors que linux-hwe-7.0 tourne) : leurs failles
-        # ne concernent pas le système en cours ; comptées à part.
+        # ne concernent pas le système en cours ; ils ne sont ni interrogés, ni comptés, ni affichés.
         running_src, release = running_kernel_source(sources)
         def kernel_family(name):              # linux-signed-hwe-7.0 et linux-hwe-7.0 : même noyau
             return "linux" + name[len("linux-signed"):] if name.startswith("linux-signed") else name
@@ -1501,7 +1511,7 @@ def collect_vulnerabilities(previous=None):
         dormant = {n for n in kernel_sources if running_src and kernel_family(n) != kernel_family(running_src)}
         result["running_kernel"] = {"release": release, "source": running_src}
         result["dormant_kernels"] = sorted(dormant)
-        found = osv_query(sources, ecosystem)
+        found = osv_query(sources, ecosystem, skip=dormant)
         ids = sorted({vid for lst in found.values() for vid in lst})
         cache = (previous or {}).get("cache") or {}
         details = osv_details(ids, cache, ecosystem)
@@ -1521,6 +1531,8 @@ def collect_vulnerabilities(previous=None):
                     status = "fix_available"    # une mise à jour l'installe
                 else:
                     status = "unfixed"          # aucun correctif publié par Ubuntu pour ce paquet
+                if status == "unfixed" and running_src and kernel_family(source) == kernel_family(running_src):
+                    status = "kernel_pending"   # noyau en cours : correctif attendu d'Ubuntu, livré par les mises à jour
                 is_dormant = source in dormant
                 if is_dormant:
                     result["counts"]["dormant"] += 1
@@ -1528,14 +1540,15 @@ def collect_vulnerabilities(previous=None):
                     result["counts"][status] += 1
                 # Noyau GA (linux 6.8) : la faille est souvent déjà corrigée dans un noyau HWE plus récent
                 hwe = ""
-                if status == "unfixed" and source == "linux" and not is_dormant:
+                if status in ("unfixed", "kernel_pending") and source == "linux" and not is_dormant:
                     fixed_hwe = {k: v for k, v in (d.get("fixed_by_pkg") or {}).items() if k.startswith("linux-hwe-") and v}
                     if fixed_hwe:
                         k = sorted(fixed_hwe)[0]
                         hwe = f"{k} {fixed_hwe[k]}"
                         result["counts"]["kernel_hwe_fixed"] += 1
                 pr = d["priority"] or "untriaged"
-                result["by_priority"][pr] = result["by_priority"].get(pr, 0) + 1
+                if status != "kernel_pending":
+                    result["by_priority"][pr] = result["by_priority"].get(pr, 0) + 1
                 result["items"].append({"id": d["id"], "cve": d["cve"] or d["id"], "package": source,
                                         "installed": installed, "fixed": fixed, "status": status, "hwe_fixed": hwe, "dormant": is_dormant,
                                         "priority": pr, "cvss": d["cvss"], "summary": d["summary"],
@@ -2198,9 +2211,15 @@ def with_tools_now(integrity):
     return out
 
 
-def parse_lynis_report(path="/var/log/lynis-report.dat"):
-    """Rapport Lynis : indice de durcissement (0-100), avertissements, nombre de suggestions."""
-    rep = {"index": None, "warnings": [], "suggestions": 0, "tests": None, "version": ""}
+HARDEN_CATALOG = harden.catalog_public()       # test Lynis → kind/caution/no_revert/action (pour l'interface)
+
+
+def parse_lynis_report(path="/var/log/lynis-report.dat", log_path="/var/log/lynis.log"):
+    """Rapport Lynis : indice de durcissement (0-100), avertissements, suggestions (dédoublonnées par test, avec
+    détails) et, depuis le journal, les clés sysctl et permissions relevées (absentes du rapport)."""
+    rep = {"index": None, "warnings": [], "suggestions": 0, "items": [], "tests": None, "version": "",
+           "sysctl_diffs": [], "file_perms": []}
+    seen = {}
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             for ln in f:
@@ -2211,13 +2230,44 @@ def parse_lynis_report(path="/var/log/lynis-report.dat"):
                     parts = ln.split("=", 1)[1].split("|")
                     rep["warnings"].append(f"{parts[0]}: {parts[1]}" if len(parts) > 1 and parts[1] else parts[0])
                 elif ln.startswith("suggestion[]="):
-                    rep["suggestions"] += 1
+                    parts = (ln.split("=", 1)[1] + "|||").split("|")
+                    test, text, details = parts[0].strip(), parts[1].strip(), parts[2].strip()
+                    details = "" if details == "-" else details
+                    if not test:
+                        continue
+                    if test in seen:
+                        seen[test]["count"] += 1
+                        if details and details not in seen[test]["details"]:
+                            seen[test]["details"] = "; ".join(x for x in (seen[test]["details"], details) if x)
+                    else:
+                        seen[test] = {"test": test, "text": text, "details": details, "count": 1}
+                        rep["items"].append(seen[test])
                 elif ln.startswith(("lynis_tests_done=", "tests_executed=")):
                     rep["tests"] = ln.split("=", 1)[1].strip()
                 elif ln.startswith("lynis_version="):
                     rep["version"] = ln.split("=", 1)[1].strip()
     except (OSError, ValueError):
         pass
+    rep["suggestions"] = len(rep["items"])
+    diffs, perms = {}, {}
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                m = re.search(r"sysctl key (\S+) has a different value than expected in scan profile\. Expected=(\S+), Real=(\S+)", ln)
+                if m:
+                    diffs[m.group(1)] = {"key": m.group(1), "expected": m.group(2), "current": m.group(3)}
+                    continue
+                m = re.search(r"permissions of file (\S+) are not matching expected value \((\d+) != (\d+)\)", ln)
+                if m:
+                    perms[m.group(1)] = {"path": m.group(1), "current": m.group(2), "expected": m.group(3)}
+    except OSError:
+        pass
+    rep["sysctl_diffs"], rep["file_perms"] = list(diffs.values()), list(perms.values())
+    for it in rep["items"]:
+        if it["test"] == "KRNL-6000" and diffs:
+            it["details"] = ", ".join(f"{x['key']} {x['current']}→{x['expected']}" for x in rep["sysctl_diffs"][:40])
+        elif it["test"] == "FILE-7524" and perms:
+            it["details"] = ", ".join(f"{x['path']} ({x['current']}→{x['expected']})" for x in rep["file_perms"][:40])
     return rep
 
 
@@ -2294,6 +2344,7 @@ class Daemon:
         self.apply_policy(startup=True)
         self.last_daily = 0
         self.timeshift_enabling = False
+        self.hardening_running = False
         self.last_integrity = 0
         self.integrity_running = False
         self.daily_running = False
@@ -3068,6 +3119,113 @@ class Daemon:
         self.refresh_overall()
         return checklist
 
+    # ── Durcissement (recommandations Lynis) ─────────────────────────────
+    def integrity_payload(self):
+        """Résultat d'intégrité + disponibilité actuelle des outils + état du durcissement (pour l'interface)."""
+        out = with_tools_now(self.state.get("integrity"))
+        h = dict(self.state.get("hardening") or {})
+        h.pop("prev", None)
+        h["running"] = self.hardening_running
+        h["catalog"] = HARDEN_CATALOG
+        out["hardening"] = h
+        return out
+
+    def pending_safe_hardening(self, integrity):
+        """Tests Lynis relevés, applicables sans risque, ni appliqués ni échoués depuis moins de 7 jours."""
+        h = self.state.get("hardening") or {}
+        applied, failed = h.get("applied") or {}, h.get("failed") or {}
+        out = []
+        for it in ((integrity or {}).get("lynis") or {}).get("items") or []:
+            test = it.get("test")
+            if not harden.is_safe(test) or test in applied:
+                continue
+            try:
+                if test in failed and time.time() - datetime.fromisoformat(failed[test]["at"]).timestamp() < 7 * 86400:
+                    continue
+            except (KeyError, ValueError, TypeError):
+                pass
+            out.append(test)
+        return out
+
+    def start_hardening(self, tests, revert=False, auto=False):
+        with self.security_lock:
+            if self.hardening_running:
+                return False
+            self.hardening_running = True
+        threading.Thread(target=self._harden_worker, args=(tests, revert, auto), daemon=True).start()
+        return True
+
+    def _harden_worker(self, tests, revert, auto):
+        """Applique (ou annule) chaque recommandation, note le résultat, relance Lynis, puis diffuse."""
+        h = dict(self.state.get("hardening") or {})
+        for k in ("applied", "prev", "failed"):
+            h[k] = dict(h.get(k) or {})
+        ctx = {"file_perms": ((self.state.get("integrity") or {}).get("lynis") or {}).get("file_perms") or []}
+        ok = fail = 0
+        done_fns = set()
+        try:
+            for test in tests:
+                fn = (harden.CATALOG.get(test) or {}).get("fn")
+                if not fn or fn in done_fns:
+                    continue
+                done_fns.add(fn)
+                same = harden.tests_sharing(test)
+                try:
+                    if TEST_MODE:
+                        detail, prev = "test_mode", {}
+                    elif revert:
+                        detail, prev = harden.revert(fn, h["prev"].get(fn) or {}), None
+                    else:
+                        detail, prev = harden.apply(fn, ctx)
+                except Exception as e:  # noqa: BLE001
+                    fail += 1
+                    for t in same:
+                        h["failed"][t] = {"at": now_iso(), "detail": str(e)[:300], "revert": revert}
+                    self.write_log(f"hardening {'revert' if revert else 'apply'} {test} failed: {str(e)[:200]}")
+                    continue
+                ok += 1
+                for t in same:
+                    h["failed"].pop(t, None)
+                    if revert:
+                        h["applied"].pop(t, None)
+                    else:
+                        h["applied"][t] = {"at": now_iso(), "detail": detail, "fn": fn}
+                if revert:
+                    h["prev"].pop(fn, None)
+                else:
+                    h["prev"][fn] = prev or {}
+                self.write_log(f"hardening {'reverted' if revert else 'applied'} {test}: {detail}")
+            h["last"] = now_iso()
+            self.state.update(hardening=h)
+            if ok and not TEST_MODE and shutil.which("lynis"):
+                self._lynis_rescan()
+                self.refresh_checklist()
+        except Exception as e:  # noqa: BLE001
+            log(f"Durcissement : {e}")
+        finally:
+            self.hardening_running = False
+        index = ((self.state.get("integrity") or {}).get("lynis") or {}).get("index")
+        self.broadcast({"event": "integrity", "integrity": self.integrity_payload()})
+        self.broadcast({"event": "hardening_done", "ok": ok, "failed": fail, "revert": revert, "auto": auto, "index": index})
+
+    def _lynis_rescan(self):
+        """Nouvel audit Lynis seul (une à deux minutes) après un durcissement : indice et suggestions à jour sans
+        relancer toute la vérification d'intégrité."""
+        if self.integrity_running:
+            return
+        r = run_quiet(["lynis", "audit", "system", "--quick", "--no-colors", "--quiet"], timeout=1800)
+        rep = parse_lynis_report()
+        integ = dict(self.state.get("integrity") or {})
+        if not integ:
+            return
+        tools = dict(integ.get("tools") or {})
+        old = dict(tools.get("lynis") or {})
+        integ["warnings"] = max(0, int(integ.get("warnings") or 0) - len(old.get("warnings") or []) + len(rep["warnings"]))
+        tools["lynis"] = {"installed": True, "ran": True, "rc": r.returncode, "warnings": list(rep["warnings"])[:80]}
+        integ["tools"], integ["lynis"] = tools, rep
+        self.state.update(integrity=integ)
+        self.write_log(f"lynis rescan → index {rep.get('index')}")
+
     def _store_integrity(self, result, after_scan=False):
         self.last_integrity = time.time()
         self.state.update(integrity=result, last_integrity=now_iso())
@@ -3077,8 +3235,13 @@ class Daemon:
                                     [n for n, t in result["tools"].items() if t["warnings"]] +
                                     (["app"] if result["app"]["modified"] or result["app"]["missing"] else [])),
                                 "pid": 0, "comm": "", "exe": "", "count": 0, "top_dir": "", "reasons": [], "sample": []})
-        self.broadcast({"event": "integrity", "integrity": with_tools_now(result), "after_scan": after_scan})
+        self.broadcast({"event": "integrity", "integrity": self.integrity_payload(), "after_scan": after_scan})
         self.refresh_overall()
+        # Durcissement automatique (réglage) : recommandations Lynis sans risque pas encore appliquées
+        if self.settings.get("auto_harden") and not TEST_MODE:
+            tests = self.pending_safe_hardening(result)
+            if tests and self.start_hardening(tests, auto=True):
+                self.write_log("auto hardening: " + ", ".join(tests))
 
     def run_integrity(self, after_scan=False):
         if self.integrity_running:
@@ -3241,7 +3404,7 @@ class Daemon:
             "alerts_7d": {k: alerts.count(k) for k in set(alerts)},
             "trusted_programs": [anonymize_path(t.get("exe")) for t in (self.state.get("trusted_programs") or [])][:50],
             "acknowledged_persistence": [anonymize_path(k) for k in (self.state.get("acknowledged_persistence") or [])][:50],
-            "vulns": {k: vulns.get(k) for k in ("unfixed", "fix_available", "pro_only", "kernel_hwe_fixed")},
+            "vulns": {k: vulns.get(k) for k in ("unfixed", "fix_available", "pro_only", "kernel_pending", "kernel_hwe_fixed")},
             "integrity_warnings": (self.state.get("integrity") or {}).get("warnings"),
             "timeshift": bool((self.state.get("timeshift") or {}).get("schedule")),
             "policy": bool(self.policy),
@@ -3371,14 +3534,14 @@ class Daemon:
             return not req.get("enabled")
         if cmd == "firewall_profile":
             return req.get("profile") in ("home", "enterprise")   # ils ouvrent des ports au réseau local ; Public : libre
-        if cmd == "timeshift_disable":
+        if cmd in ("timeshift_disable", "harden_revert"):
             return True
         if cmd == "ssh_set":
             return bool(req.get("enabled"))
         if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools",
                    "install_phased", "install_package"):
             return True
-        if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence", "system_upgrade"):
+        if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence", "system_upgrade", "harden_apply"):
             return bool(self.settings.get("family_mode"))
         return False
 
@@ -3608,8 +3771,8 @@ class Daemon:
                 started = not self.integrity_running
                 if started:
                     threading.Thread(target=self.run_integrity, daemon=True).start()
-                return {"ok": True, "running": True, "started": started, "integrity": with_tools_now(self.state.get("integrity"))}
-            return {"ok": True, "running": self.integrity_running, "integrity": with_tools_now(self.state.get("integrity"))}
+                return {"ok": True, "running": True, "started": started, "integrity": self.integrity_payload()}
+            return {"ok": True, "running": self.integrity_running, "integrity": self.integrity_payload()}
 
         if cmd == "backup_status":
             return {"ok": True, "timeshift": self.refresh_backup(force=bool(req.get("refresh")))}
@@ -3647,6 +3810,21 @@ class Daemon:
             self.refresh_backup(force=True)
             self.refresh_overall()
             return {"ok": True}
+
+        if cmd in ("harden_apply", "harden_revert"):
+            # Recommandations Lynis : appliquer (sans mot de passe, protège le système ; mode famille : administrateur)
+            # ou annuler (administrateur). Tâche de fond ; résultat diffusé par l'événement hardening_done.
+            revert = cmd == "harden_revert"
+            tests = [str(t) for t in (req.get("tests") or []) if (harden.CATALOG.get(str(t)) or {}).get("kind") == "apply"]
+            if req.get("all") and not revert:
+                tests = self.pending_safe_hardening(self.state.get("integrity"))
+            if not tests:
+                return {"ok": False, "error": "nothing_to_harden"}
+            if os.geteuid() != 0 and not TEST_MODE:
+                return {"ok": False, "error": "root_required"}
+            if not self.start_hardening(tests, revert=revert):
+                return {"ok": False, "error": "busy_hardening"}
+            return {"ok": True, "started": True, "tests": tests}
 
         if cmd == "auto_updates_enable":
             # « Activer » (sans mot de passe : protège le système) : automatisation du Gestionnaire de mises à jour de

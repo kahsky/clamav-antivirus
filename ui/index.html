@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.11.5 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.12.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -812,6 +812,7 @@
                     <button class="seg-btn active" data-filter="unfixed" onclick="setVulnFilter('unfixed')" data-i18n="security.vulns.unfixed">Sans correctif</button>
                     <button class="seg-btn" data-filter="pro_only" onclick="setVulnFilter('pro_only')" data-i18n="security.vulns.pro">Ubuntu Pro</button>
                     <button class="seg-btn" data-filter="fix_available" onclick="setVulnFilter('fix_available')" data-i18n="security.vulns.fix_available">Correctif disponible</button>
+                    <button class="seg-btn" data-filter="kernel_pending" onclick="setVulnFilter('kernel_pending')" data-i18n="security.vulns.kernel_pending">Noyau (correctif attendu)</button>
                 </div>
                 <div class="vuln-prio-row">
                     <label class="lang-plain"><select id="vulnPrio" onchange="setVulnPrio(this.value)" aria-label="Priority">
@@ -822,7 +823,7 @@
                     <span class="text-muted" id="vulnHidden"></span>
                 </div>
                 <p class="text-muted alerts-intro hwe-note" id="vulnHweNote" hidden></p>
-                <p class="text-muted alerts-intro" id="vulnDormantNote" hidden></p>
+                <p class="text-muted alerts-intro" id="vulnKernelNote" hidden></p>
                 <div id="vulnList" class="vuln-list"><p class="text-muted" data-i18n="security.vulns.none_yet">Inventaire pas encore effectué.</p></div>
                 <div id="storeUpdates" class="store-updates"></div>
             </div>
@@ -884,6 +885,19 @@
                     </div>
                     <p class="text-muted" id="appUpdateRepo"></p>
                 </div>
+            </div>
+
+            <div class="card card-hardening" id="cardHardening">
+                <div class="card-title-row">
+                    <h4 data-i18n="security.hardening.title">Durcissement (Lynis)</h4>
+                    <div class="log-actions-right">
+                        <span class="text-muted" id="hardeningIndex"></span>
+                        <button class="btn btn-primary btn-sm" id="btnHardenAll" onclick="hardenApplyAll()" hidden data-i18n="security.hardening.apply_all">Appliquer les recommandations sans risque</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadSecurityData('integrity', false, true)" data-i18n="security.hardening.rescan">Relancer l'audit</button>
+                    </div>
+                </div>
+                <p class="text-muted alerts-intro" data-i18n="security.hardening.intro">Lynis relève des points à améliorer. Chaque recommandation sans risque s'applique d'un clic (ou toutes ensemble) et reste annulable ; les autres sont expliquées. Après application, l'audit est relancé pour mettre l'indice à jour.</p>
+                <div id="hardeningList" class="checklist-list"><p class="text-muted" data-i18n="security.integrity.none_yet">Aucune vérification effectuée.</p></div>
             </div>
         </section>
 
@@ -1148,6 +1162,8 @@
                     <label class="setting-row toggle"><span data-i18n="settings.telemetry">Télémétrie anonyme (opt-in) : aider Dukiwi à réduire les faux positifs</span><input type="checkbox" id="setTelemetry"></label>
                     <p class="text-muted setting-note" data-i18n="settings.telemetry.note">Une fois par semaine, si activé : version, système, score de la checklist, types d'alertes, programmes et entrées de démarrage que vous avez approuvés (chemins anonymisés), sans nom d'utilisateur, d'ordinateur ni adresse IP en clair. Sert à construire la liste blanche centrale signée.</p>
                     <p class="text-muted setting-note" id="telemetryLast"></p>
+                    <label class="setting-row toggle"><span data-i18n="settings.auto_harden">Appliquer automatiquement les recommandations Lynis sans risque après chaque audit</span><input type="checkbox" id="setAutoHarden"></label>
+                    <p class="text-muted setting-note" data-i18n="settings.auto_harden.note">Seules les recommandations marquées sans risque (paramètres du noyau, core dumps, bannières, protocoles inutiles, outils d'audit, anciens noyaux…) sont appliquées ; celles « à lire avant d'appliquer » (umask, SSH, TMPDIR) restent manuelles.</p>
                     <label class="setting-row toggle"><span data-i18n="settings.integrity_weekly">Vérification d'intégrité hebdomadaire</span><input type="checkbox" id="setIntegrityWeekly"></label>
                     <label class="setting-row"><span data-i18n="settings.schedule.weekly_day">Jour</span>
                         <select id="setIntegrityDay" class="lang-select"><option value="0" data-i18n="day.mon">Lundi</option><option value="1" data-i18n="day.tue">Mardi</option><option value="2" data-i18n="day.wed">Mercredi</option><option value="3" data-i18n="day.thu">Jeudi</option><option value="4" data-i18n="day.fri">Vendredi</option><option value="5" data-i18n="day.sat">Samedi</option><option value="6" data-i18n="day.sun">Dimanche</option></select></label>
