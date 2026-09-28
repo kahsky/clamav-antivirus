@@ -465,3 +465,93 @@ def _parse_size(text):
         if unit.startswith(prefix):
             return int(n * mult)
     return int(n)
+
+
+# ─── Restauration guidée ────────────────────────────────────────────────────
+RESTORE_DIR = os.path.expanduser("~/Restauration")
+
+
+def list_snapshots(dest):
+    """Instantanés disponibles sur une destination : [{name, label, folders:[...]}], le plus récent d'abord."""
+    ok, target = destination_available(dest)
+    if not ok:
+        return [], "destination_unavailable"
+    base_rel = f"{BACKUP_DIRNAME}/{_hostuser()}"
+    snaps = []
+    if dest.get("type") == "cloud":
+        base = f"{target.rstrip('/')}/{base_rel}"
+        r = _run(["rclone", "lsf", "--dirs-only", "--max-depth", "1", f"{base}/latest"], timeout=120)
+        if r.returncode == 0:
+            snaps.append({"name": "latest", "path": f"{base}/latest", "folders": [x.strip("/") for x in (r.stdout or "").splitlines() if x.strip()]})
+        r = _run(["rclone", "lsf", "--dirs-only", "--max-depth", "1", f"{base}/archive"], timeout=120)
+        for x in sorted((r.stdout or "").splitlines(), reverse=True):
+            name = x.strip("/")
+            if SNAPSHOT_RE.match(name):
+                r2 = _run(["rclone", "lsf", "--dirs-only", "--max-depth", "1", f"{base}/archive/{name}"], timeout=60)
+                snaps.append({"name": name, "path": f"{base}/archive/{name}", "archive": True,
+                              "folders": [y.strip("/") for y in (r2.stdout or "").splitlines() if y.strip()]})
+        return snaps, ""
+    base = os.path.join(target, base_rel)
+    if not os.path.isdir(base):
+        return [], "no_backup"
+    names = sorted((d for d in os.listdir(base) if SNAPSHOT_RE.match(d) and os.path.isdir(os.path.join(base, d))), reverse=True)
+    if os.path.isdir(os.path.join(base, "latest")) and not names:
+        names = ["latest"]
+    elif os.path.isdir(os.path.join(base, "latest")):
+        names = ["latest"] + names
+    for name in names:
+        p = os.path.join(base, name)
+        try:
+            folders = sorted(d for d in os.listdir(p) if os.path.isdir(os.path.join(p, d)))
+        except OSError:
+            folders = []
+        snaps.append({"name": name, "path": p, "folders": folders})
+    return snaps, ""
+
+
+class RestoreRunner(threading.Thread):
+    """Copie un dossier d'un instantané vers ~/Restauration/<instantané>/ (jamais par-dessus les fichiers actuels)."""
+
+    def __init__(self, dest, snapshot, folder, on_progress=None, on_done=None):
+        super().__init__(daemon=True)
+        self.dest, self.snapshot, self.folder = dict(dest), snapshot, (folder or "").strip("/")
+        self.on_progress = on_progress or (lambda pct, text: None)
+        self.on_done = on_done or (lambda result: None)
+        self.cancelled = threading.Event()
+        self.proc = None
+        self.started = time.time()
+        self.log_tail = []
+
+    def cancel(self):
+        self.cancelled.set()
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+            except OSError:
+                pass
+
+    def run(self):
+        try:
+            snaps, err = list_snapshots(self.dest)
+            snap = next((s for s in snaps if s["name"] == self.snapshot), None)
+            if err or not snap:
+                return self.on_done({"ok": False, "error": err or "snapshot_missing"})
+            if self.folder and self.folder not in snap["folders"]:
+                return self.on_done({"ok": False, "error": "folder_missing"})
+            target = os.path.join(RESTORE_DIR, self.snapshot)
+            os.makedirs(target, exist_ok=True)
+            src = f"{snap['path']}/{self.folder}" if self.folder else snap["path"]
+            dst = os.path.join(target, self.folder) if self.folder else target
+            if self.dest.get("type") == "cloud":
+                args = ["rclone", "copy", src, dst, "--stats", "1s", "--stats-one-line", "--stats-log-level", "NOTICE", "--transfers", "4"]
+            else:
+                args = ["rsync", "-a", "--info=progress2,stats2", "--no-inc-recursive", src.rstrip("/") + "/", dst.rstrip("/") + "/"]
+            rc, files, size = BackupRunner._stream(self, args)
+            if self.cancelled.is_set():
+                return self.on_done({"ok": False, "error": "cancelled", "path": target})
+            if rc not in (0, 23, 24):
+                return self.on_done({"ok": False, "error": f"copy_{rc}", "detail": "\n".join(self.log_tail[-5:])[-300:], "path": target})
+            self.on_done({"ok": True, "path": dst, "files": files, "bytes": size, "duration": round(time.time() - self.started),
+                          "snapshot": self.snapshot, "folder": self.folder})
+        except Exception as e:  # noqa: BLE001
+            self.on_done({"ok": False, "error": f"internal: {e}"[:200]})

@@ -34,6 +34,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
+                <button class="btn btn-secondary btn-sm" id="travelBtn" onclick="toggleTravel()"><span data-i18n="travel.btn">✈ Mode voyage</span></button>
                 <button class="btn btn-secondary btn-sm" onclick="setViewMode('advanced')" data-i18n="simple.advanced">Mode avancé</button>
             </div>
         </div>
@@ -72,6 +73,10 @@
                 <button class="btn btn-secondary btn-lg" onclick="showAwareness()">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
                     <span data-i18n="simple.learn">Apprendre à me protéger</span>
+                </button>
+                <button class="btn btn-secondary btn-lg" id="simpleVaultBtn" onclick="sendToBackend({action:'vault_toggle'})" hidden>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    <span id="simpleVaultLabel" data-i18n="simple.vault">Mon coffre</span>
                 </button>
             </div>
             <span class="text-muted" id="simpleLastScan"></span>
@@ -224,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.9.5 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.10.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -822,6 +827,39 @@
             </div>
 
             <div class="cards-grid">
+                <div class="card card-leaks">
+                    <div class="card-title-row">
+                        <h4 data-i18n="security.leaks.title">Fuites de données (Have I Been Pwned)</h4>
+                        <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'show_report'})" data-i18n="security.report_btn">Bilan de la semaine</button>
+                    </div>
+                    <p class="text-muted alerts-intro" data-i18n="security.leaks.intro">Vérifiez si vos adresses e-mail apparaissent dans des fuites de données connues, et testez un mot de passe sans jamais l'envoyer (seuls 5 caractères de son empreinte SHA-1 quittent l'ordinateur).</p>
+                    <label class="setting-col"><span data-i18n="security.leaks.emails">Adresses e-mail à surveiller (une par ligne)</span><textarea id="hibpEmails" class="input-field input-area" rows="2" spellcheck="false"></textarea></label>
+                    <label class="setting-row"><span data-i18n="security.leaks.key">Clé API HIBP (optionnelle)</span><input type="password" id="hibpKey" class="input-field input-sm input-key" autocomplete="off" placeholder="—"></label>
+                    <p class="text-muted setting-note" data-i18n="security.leaks.key_hint">Sans clé, la vérification des adresses passe par le relais Dukiwi s'il est disponible. La clé est stockée dans votre profil seulement.</p>
+                    <div class="log-actions-right">
+                        <span class="text-muted" id="hibpLast"></span>
+                        <button class="btn btn-secondary btn-sm" onclick="hibpSave()" data-i18n="security.leaks.save">Enregistrer</button>
+                        <button class="btn btn-primary btn-sm" onclick="hibpCheck()" data-i18n="security.leaks.check">Vérifier maintenant</button>
+                    </div>
+                    <div id="hibpResults" class="persistence-list"></div>
+                    <h5 class="sub-title" data-i18n="security.leaks.password_test">Tester un mot de passe</h5>
+                    <div class="backup-add-row">
+                        <input type="password" id="hibpPassword" class="input-field input-sm input-wide" autocomplete="off" data-i18n-placeholder="security.leaks.password_hint" placeholder="Mot de passe à tester (jamais envoyé, jamais enregistré)">
+                        <button class="btn btn-secondary btn-sm" onclick="hibpPassword()" data-i18n="security.leaks.password_btn">Tester</button>
+                    </div>
+                    <p class="text-muted" id="hibpPwResult"></p>
+                </div>
+                <div class="card card-apps">
+                    <div class="card-title-row">
+                        <h4 data-i18n="security.apps.title">Applications hors dépôts (Flatpak, Snap, AppImage)</h4>
+                        <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'get_apps'})" data-i18n="system.refresh">Actualiser</button>
+                    </div>
+                    <p class="text-muted alerts-intro" data-i18n="security.apps.intro">Ces applications ne viennent pas des dépôts de la distribution. Les Flatpak avec accès à tout le disque ou aux périphériques, les Snap en confinement « classic » et les AppImage (sans bac à sable ni mise à jour automatique) sont signalés.</p>
+                    <div id="appsList" class="persistence-list"><p class="text-muted" data-i18n="sidebar.loading">Chargement…</p></div>
+                </div>
+            </div>
+
+            <div class="cards-grid">
                 <div class="card card-integrity">
                     <div class="card-title-row">
                         <h4 data-i18n="security.integrity.title">Intégrité et rootkits</h4>
@@ -941,6 +979,33 @@
                 </div>
             </div>
 
+            <div class="cards-grid">
+                <div class="card card-restore">
+                    <div class="card-title-row"><h4 data-i18n="backup.restore.card">Restaurer des fichiers</h4><button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'backup_open_restore'})" data-i18n="backup.restore.open">Ouvrir le dossier</button></div>
+                    <p class="text-muted alerts-intro" data-i18n="backup.restore.intro2">Choisissez une destination, une sauvegarde et un dossier : la copie va dans ~/Restauration, sans jamais écraser vos fichiers actuels.</p>
+                    <label class="setting-row"><span data-i18n="backup.restore.dest">Destination</span><select id="restoreDest" class="lang-select" onchange="restoreListSnapshots()"></select></label>
+                    <label class="setting-row"><span data-i18n="backup.restore.snapshot">Sauvegarde</span><select id="restoreSnapshot" class="lang-select" onchange="restoreFillFolders()"></select></label>
+                    <label class="setting-row"><span data-i18n="backup.restore.folder">Dossier</span><select id="restoreFolder" class="lang-select"></select></label>
+                    <div class="log-actions-right">
+                        <span class="text-muted" id="restoreNote"></span>
+                        <button class="btn btn-secondary btn-sm" onclick="restoreListSnapshots()" data-i18n="backup.restore.list">Lister</button>
+                        <button class="btn btn-primary btn-sm" id="restoreGo" onclick="restoreGo()" data-i18n="backup.restore.go">Restaurer dans ~/Restauration</button>
+                    </div>
+                    <div id="restoreProgress" hidden><div class="simple-scan-bar"><div class="simple-scan-fill" id="restoreFill" style="width:0%"></div></div><div class="text-muted backup-progress-text" id="restoreText"></div><button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'backup_restore_cancel'})" data-i18n="backup.progress.cancel">Annuler</button></div>
+                </div>
+                <div class="card card-vault">
+                    <div class="card-title-row"><h4 data-i18n="vault.title">Coffre chiffré</h4><span class="badge" id="vaultBadge"></span></div>
+                    <p class="text-muted alerts-intro" data-i18n="vault.intro">Un dossier chiffré (gocryptfs) pour vos documents sensibles : fermé, son contenu est illisible, même si l'ordinateur est volé ou le disque copié. Il apparaît dans ~/Coffre quand il est ouvert et se ferme après 30 minutes d'inactivité. Le coffre chiffré est inclus dans vos sauvegardes.</p>
+                    <p class="text-muted" id="vaultState"></p>
+                    <div class="fw-actions">
+                        <button class="btn btn-primary btn-sm" id="vaultCreate" onclick="sendToBackend({action:'vault_create'})" data-i18n="vault.create">Créer mon coffre</button>
+                        <button class="btn btn-primary btn-sm" id="vaultOpen" onclick="sendToBackend({action:'vault_open'})" data-i18n="vault.open">Ouvrir</button>
+                        <button class="btn btn-secondary btn-sm" id="vaultClose" onclick="sendToBackend({action:'vault_close'})" data-i18n="vault.close">Fermer</button>
+                        <button class="btn btn-secondary btn-sm" id="vaultInstall" onclick="sendToBackend({action:'install_package', name:'gocryptfs'})" data-i18n="vault.install">Installer gocryptfs</button>
+                    </div>
+                </div>
+            </div>
+
             <div class="card card-backup-history">
                 <div class="card-title-row"><h4 data-i18n="backup.history.title">Historique</h4></div>
                 <div id="backupHistory" class="persistence-list"></div>
@@ -990,6 +1055,7 @@
                             <button class="profile-btn" data-profile="enterprise" onclick="setFirewallProfile('enterprise')"><strong data-i18n="firewall.profile.enterprise">Entreprise</strong><span data-i18n="firewall.profile.enterprise_desc">Réseau géré : seuls SSH, impression et partage depuis le sous-réseau actuel, journalisation renforcée.</span><small id="fwProfilePreview_enterprise"></small></button>
                         </div>
                         <p class="text-muted setting-note" id="fwProfileWarning" hidden></p>
+                        <div class="log-actions-right"><span class="text-muted" id="travelStatus"></span><button class="btn btn-secondary btn-sm" id="travelBtnFw" onclick="toggleTravel()"><span data-i18n="travel.btn">✈ Mode voyage</span></button></div>
                     </div>
                 </div>
 
@@ -1031,6 +1097,7 @@
                 <p class="subtitle" data-i18n="settings.subtitle">Réglages de l'antivirus — les réglages système sont appliqués par le service, sans mot de passe</p>
             </div>
 
+            <p class="text-muted alerts-intro policy-banner" id="policyBanner" hidden></p>
             <div class="settings-grid">
                 <div class="card settings-card">
                     <h4 data-i18n="settings.general">Général</h4>
@@ -1077,6 +1144,9 @@
                     <p class="text-muted setting-note" id="geoipStats"></p>
                     <p class="text-muted setting-note" data-i18n="settings.geoip.note">Sans clé : service gratuit ip-api.com (HTTP, 15 requêtes groupées par minute, 100 adresses par requête, usage non commercial). Avec une clé Pro : HTTPS et sans limite. Chaque adresse n'est demandée qu'une fois par 24 h et le cache survit au redémarrage.</p>
                     <label class="setting-row toggle"><span data-i18n="settings.backup_check">Vérifier les sauvegardes (Timeshift et fichiers) dans l'état global</span><input type="checkbox" id="setBackupCheck"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.telemetry">Télémétrie anonyme (opt-in) : aider Dukiwi à réduire les faux positifs</span><input type="checkbox" id="setTelemetry"></label>
+                    <p class="text-muted setting-note" data-i18n="settings.telemetry.note">Une fois par semaine, si activé : version, système, score de la checklist, types d'alertes, programmes et entrées de démarrage que vous avez approuvés (chemins anonymisés), sans nom d'utilisateur, d'ordinateur ni adresse IP en clair. Sert à construire la liste blanche centrale signée.</p>
+                    <p class="text-muted setting-note" id="telemetryLast"></p>
                     <label class="setting-row toggle"><span data-i18n="settings.integrity_weekly">Vérification d'intégrité hebdomadaire</span><input type="checkbox" id="setIntegrityWeekly"></label>
                     <label class="setting-row"><span data-i18n="settings.schedule.weekly_day">Jour</span>
                         <select id="setIntegrityDay" class="lang-select"><option value="0" data-i18n="day.mon">Lundi</option><option value="1" data-i18n="day.tue">Mardi</option><option value="2" data-i18n="day.wed">Mercredi</option><option value="3" data-i18n="day.thu">Jeudi</option><option value="4" data-i18n="day.fri">Vendredi</option><option value="5" data-i18n="day.sat">Samedi</option><option value="6" data-i18n="day.sun">Dimanche</option></select></label>

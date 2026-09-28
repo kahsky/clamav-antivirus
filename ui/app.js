@@ -144,6 +144,12 @@ function onBackendMessage(msg) {
         case 'settingsData':    onSettingsData(data); break;
         case 'trustedList':     onTrustedList(data); break;
         case 'backupStatus':    onBackupStatus(data); break;
+        case 'hibpResult':      onHibpResult(data); break;
+        case 'appsData':        renderApps(data); break;
+        case 'vaultStatus':     renderVault(data); break;
+        case 'backupSnapshots': onBackupSnapshots(data); break;
+        case 'restoreProgress': onRestoreProgress(data); break;
+        case 'restoreDone':     onRestoreDone(data); break;
         case 'backupProgress':  onBackupProgress(data); break;
         case 'backupDone':      onBackupDone(data); break;
         case 'backupTimeshift': if (backupData) { backupData.timeshift = data; renderBackupTab(); renderBackupWizard(); } if (lastStatus && lastStatus.backup) { lastStatus.backup.timeshift = data; renderSimpleView(); } break;
@@ -176,7 +182,8 @@ function switchTab(tabId) {
         panel.classList.toggle('active', panel.id === `tab-${tabId}`);
     });
     syncTopbar();
-    if (tabId === 'backup') loadBackup();
+    if (tabId === 'backup') { loadBackup(); sendToBackend({ action: 'vault_status' }); }
+    if (tabId === 'security') sendToBackend({ action: 'get_apps' });
 
     if (tabId === 'dashboard') {
         sendToBackend({ action: 'check_status' });
@@ -890,6 +897,14 @@ function onSettingsData(data) {
     }
     $('setIntegrityWeekly').checked = sys.integrity_weekly !== false;
     if ($('setBackupCheck')) $('setBackupCheck').checked = sys.backup_check !== false;
+    if ($('setTelemetry')) $('setTelemetry').checked = !!sys.telemetry;
+    if ($('telemetryLast')) $('telemetryLast').textContent = data.telemetry_sent ? t('settings.telemetry.last', { rel: formatRelative(data.telemetry_sent) }) : '';
+    const locked = new Set(data.locked || []);
+    const map = { setUploadMonitor: 'upload_monitor', setUploadGb: 'upload_alert_gb', setUploadHours: 'upload_window_hours', setBurstMonitor: 'burst_monitor', setBurstInfo: 'burst_info_threshold', setBurstDanger: 'burst_danger_threshold', setBurstWindow: 'burst_window_sec', setUsbAuto: 'usb_auto_scan', setUsbMax: 'usb_auto_scan_max_gib', setUpdateTime: 'update_hour', setFamilyMode: 'family_mode', setAutoResponse: 'auto_response', setConnectionMonitor: 'connection_monitor', setGeoip: 'geoip_lookup', setGeoipKey: 'geoip_api_key', setIntegrityWeekly: 'integrity_weekly', setIntegrityDay: 'integrity_day', setIntegrityHour: 'integrity_hour', setAppUpdateCheck: 'app_update_check', setAppUpdateAuto: 'app_update_auto', setWeekly: 'weekly_scan', setWeeklyDay: 'weekly_scan_day', setWeeklyHour: 'weekly_scan_hour', setBackupCheck: 'backup_check', setTelemetry: 'telemetry' };
+    Object.entries(map).forEach(([id, key]) => { const el = $(id); if (!el) return; const row = el.closest('.setting-row'); if (locked.has(key)) { el.disabled = true; if (row) { row.classList.add('locked'); row.title = t('settings.locked_note'); } } else if (row) { row.classList.remove('locked'); row.title = ''; } });
+    const banner = $('policyBanner');
+    if (banner) { banner.hidden = !data.policy; if (data.policy) banner.textContent = t('settings.policy.banner', { name: data.policy.name || '—', signed: data.policy.signed ? t('settings.policy.signed') : '', n: (data.locked || []).length }) + (data.allowlist && data.allowlist.version ? ' · ' + t('settings.allowlist', { version: data.allowlist.version, n: data.allowlist.patterns || 0 }) : ''); }
+    if (data.hibp) { if ($('hibpEmails') && document.activeElement !== $('hibpEmails')) $('hibpEmails').value = (data.hibp.emails || []).join('\n'); if ($('hibpKey')) $('hibpKey').placeholder = data.hibp.has_key ? '••••••••' : '—'; if ($('hibpLast')) $('hibpLast').textContent = data.hibp.last ? t('security.leaks.last', { rel: formatRelative(data.hibp.last) }) : ''; if (data.hibp.results && Object.keys(data.hibp.results).length) renderHibpEmails(data.hibp.results, ''); }
     $('setIntegrityDay').value = String(sys.integrity_day ?? 6);
     $('setIntegrityHour').value = sys.integrity_hour ?? 13;
     $('setAppUpdateCheck').checked = sys.app_update_check !== false;
@@ -927,6 +942,7 @@ function saveSettings() {
         geoip_api_key: $('setGeoipKey') ? $('setGeoipKey').value.trim() : '',
         integrity_weekly: $('setIntegrityWeekly').checked,
         backup_check: $('setBackupCheck') ? $('setBackupCheck').checked : true,
+        telemetry: $('setTelemetry') ? $('setTelemetry').checked : false,
         integrity_day: parseInt($('setIntegrityDay').value, 10),
         integrity_hour: parseInt($('setIntegrityHour').value, 10) || 0,
         app_update_check: $('setAppUpdateCheck').checked,
@@ -954,6 +970,10 @@ function updateDashboardStatus(data) {
     if (data.security) securityStatus = data.security;
     if (data.overall) overall = data.overall;
     if (Array.isArray(data.read_lessons)) { readLessons = new Set(data.read_lessons); updateLessonBadges(); }
+    document.body.classList.toggle('travel-on', !!data.travel_mode);
+    document.querySelectorAll('#travelBtn span, #travelBtnFw span').forEach(el => { el.textContent = data.travel_mode ? t('travel.btn_off') : t('travel.btn'); });
+    if ($('travelStatus')) $('travelStatus').textContent = data.travel_mode ? t('travel.status') : '';
+    if (data.vault) renderVault(data.vault);
     if (data.app_update && !secData.app_update) secData.app_update = data.app_update;
     if (data.disclaimer_accepted === false && legalAccepted) { legalAccepted = false; openLegal(); }
     else if (data.disclaimer_accepted === true) legalAccepted = true;
@@ -2085,6 +2105,21 @@ function simulateBackend(data) {
                 sources: ['/home/user/Documents', '/home/user/Images', '/home/user/Vidéos', '/home/user/Musique', '/home/user/Bureau'], excludes: ['.cache', 'node_modules', '*.tmp'], retention: 8, schedule: 'weekly',
                 history: [{ ok: true, date: new Date(Date.now() - 3 * 86400e3).toISOString(), dest_label: 'SANDISK 32G', type: 'local', files: 1234, bytes: 2.3e9, duration: 95, auto: false }], rclone: false, remotes: [], running: null, hostuser: 'pc-user', timeshift_installed: true });
             break;
+        case 'get_apps':
+            reply('appsData', { inventory: { flatpak: [{ kind: 'flatpak', id: 'org.gimp.GIMP', name: 'GIMP', version: '3.2.7', origin: 'flathub', risky: ['filesystem'], key: 'flatpak:org.gimp.GIMP' }, { kind: 'flatpak', id: 'com.spotify.Client', name: 'Spotify', version: '1.2', origin: 'flathub', risky: [], key: 'flatpak:com.spotify.Client' }], snap: [{ kind: 'snap', id: 'code', name: 'code', version: '1.95', origin: 'vscode', risky: ['classic'], plugs: [], key: 'snap:code' }], appimage: [{ kind: 'appimage', id: '/home/user/Applications/Obsidian.AppImage', name: 'Obsidian.AppImage', path: '/home/user/Applications/Obsidian.AppImage', size: 1e8, risky: ['unsandboxed'], key: 'appimage:/home/user/Applications/Obsidian.AppImage' }] }, acknowledged: ['snap:code'] });
+            break;
+        case 'vault_status':
+            reply('vaultStatus', { available: true, exists: true, mounted: false, mountpoint: '/home/user/Coffre' });
+            break;
+        case 'hibp_password':
+            reply('hibpResult', { type: 'password', count: data.password === 'password' ? 52372427 : 0, error: '' }, 600);
+            break;
+        case 'hibp_check':
+            reply('hibpResult', { type: 'emails', results: { 'moi@example.com': { breaches: [{ name: 'Adobe', title: 'Adobe', domain: 'adobe.com', date: '2013-10-04', data: ['Email addresses', 'Passwords'] }], error: '' }, 'autre@example.com': { breaches: [], error: '' } }, error: '' }, 800);
+            break;
+        case 'backup_snapshots':
+            reply('backupSnapshots', { dest_id: data.dest_id, snapshots: [{ name: 'latest', folders: ['Documents', 'Images'] }, { name: '2026-09-25_08-31-00', folders: ['Documents', 'Images'] }], error: '' }, 300);
+            break;
         case 'backup_run': case 'backup_quick':
             reply('backupProgress', { dest_id: data.dest_id || 'd1', dest_label: 'SANDISK 32G', pct: 0, text: '' }, 100);
             reply('backupProgress', { dest_id: data.dest_id || 'd1', dest_label: 'SANDISK 32G', pct: 42, text: '1.2G 42% 35MB/s 0:00:20' }, 900);
@@ -2373,6 +2408,7 @@ function renderBackupTab() {
             <span class="alert-meta">${h.ok ? t('backup.history.line', { files: formatNumber(h.files || 0), size: fmtBytes(h.bytes), duration: formatDuration(h.duration) }) : escapeHtml(h.error || '')}</span>
         </div>`).join('') : `<p class="text-muted">${t('backup.history.none')}</p>`;
     $('backupRestoreLocal').textContent = t('backup.restore.local', { hostuser: d.hostuser || '<hôte>-<utilisateur>' });
+    restoreFillDests();
     $('backupRestoreCloud').textContent = t('backup.restore.cloud', { hostuser: d.hostuser || '<hôte>-<utilisateur>' });
     updateBackupProgress();
 }
@@ -2459,6 +2495,7 @@ const CHECK_FIX = {
     open_vulns: () => { setVulnPrio('high'); const el = $('vulnList'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
     persistence: () => { switchTab('system'); setTimeout(() => { const el = $('persistenceList'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150); },
     ld_preload: () => loadSecurityData('integrity', false, true),
+    kernel_hwe: null,
 };
 
 function fixCheck(key) {
@@ -2495,4 +2532,139 @@ function syncScanButtons() {
     set('simpleScanBtn', busy || integrityRunning);
     if ($('btnCancelScan')) $('btnCancelScan').hidden = !busy;
     document.querySelectorAll('.target-btn').forEach(b => { b.disabled = busy; });
+}
+
+
+// ─── Fuites de données (HIBP) ───────────────────────────────────────────────
+function hibpSave() {
+    const emails = ($('hibpEmails').value || '').split('\n').map(x => x.trim()).filter(Boolean);
+    const payload = { action: 'hibp_save', emails };
+    if ($('hibpKey').value.trim()) payload.api_key = $('hibpKey').value.trim();
+    sendToBackend(payload);
+    $('hibpKey').value = '';
+}
+function hibpCheck() { hibpSave(); setTimeout(() => sendToBackend({ action: 'hibp_check' }), 300); $('hibpResults').innerHTML = `<p class="text-muted">${t('system.refreshing')}</p>`; }
+function hibpPassword() {
+    const pw = $('hibpPassword').value;
+    if (!pw) return;
+    sendToBackend({ action: 'hibp_password', password: pw });
+    $('hibpPassword').value = '';
+    $('hibpPwResult').textContent = t('system.refreshing');
+}
+function onHibpResult(d) {
+    if (d.type === 'password') {
+        const el = $('hibpPwResult');
+        if (d.error) el.textContent = t('security.leaks.error', { error: d.error });
+        else el.textContent = d.count ? t('security.leaks.pw_found', { n: formatNumber(d.count) }) : t('security.leaks.pw_ok');
+        el.style.color = d.count ? 'var(--accent-red)' : 'var(--accent-green)';
+        return;
+    }
+    if (d.error === 'no_emails') { $('hibpResults').innerHTML = `<p class="text-muted">${t('security.leaks.no_emails')}</p>`; return; }
+    renderHibpEmails(d.results || {}, d.error || '');
+}
+function renderHibpEmails(results, err) {
+    const el = $('hibpResults');
+    if (!el) return;
+    const rows = Object.entries(results).map(([email, r]) => {
+        if (r.error) return `<div class="package-item"><span class="package-name">${escapeHtml(email)}</span><span class="alert-meta">${escapeHtml(r.error === 'no_key' ? t('security.leaks.no_key') : t('security.leaks.error', { error: r.error }))}</span></div>`;
+        const b = r.breaches || [];
+        if (!b.length) return `<div class="package-item"><span class="scope-badge scope-user">✓</span><span class="package-name">${escapeHtml(email)}</span><span class="alert-meta">${t('security.leaks.email_ok')}</span></div>`;
+        return `<div class="package-item security hibp-breach"><span class="scope-badge scope-danger">${b.length}</span><span class="package-name">${escapeHtml(email)}</span>
+            <span class="alert-meta">${escapeHtml(t('security.leaks.email_found', { n: b.length, date: b[0].date || '', name: b[0].title || b[0].name || '' }))}</span>
+            <details class="alert-sample"><summary>${t('popup.btn.details')}</summary>${b.slice(0, 15).map(x => `<div>${escapeHtml(x.date || '')} · <strong>${escapeHtml(x.title || x.name || '')}</strong>${x.domain ? ` (${escapeHtml(x.domain)})` : ''} — ${escapeHtml((x.data || []).join(', '))}</div>`).join('')}</details></div>`;
+    });
+    el.innerHTML = rows.join('') + (err && err !== 'no_key' ? `<p class="text-muted">${escapeHtml(t('security.leaks.error', { error: err }))}</p>` : '');
+}
+
+// ─── Applications hors dépôts ───────────────────────────────────────────────
+function renderApps(data) {
+    const el = $('appsList');
+    if (!el) return;
+    const inv = data.inventory || {};
+    const ack = new Set(data.acknowledged || []);
+    const all = [...(inv.flatpak || []), ...(inv.snap || []), ...(inv.appimage || [])];
+    if (!all.length) { el.innerHTML = `<p class="text-muted">${t('security.apps.none')}</p>`; return; }
+    const riskText = (a) => (a.risky || []).map(r => r === 'plugs' ? t('security.apps.risk.plugs', { plugs: (a.plugs || []).join(', ') }) : t(`security.apps.risk.${r}`)).join(' · ');
+    el.innerHTML = all.sort((a, b) => (ack.has(a.key) || !a.risky.length) - (ack.has(b.key) || !b.risky.length)).map(a => {
+        const approved = ack.has(a.key);
+        const warn = a.risky.length && !approved;
+        return `<div class="package-item ${warn ? 'security' : ''}">
+            <span class="scope-badge scope-user">${t(`security.apps.kind.${a.kind}`)}</span>
+            <span class="package-name">${escapeHtml(a.name)}</span>
+            <span class="package-versions" title="${escapeHtml(a.id)}">${escapeHtml(a.version || '')}${a.origin ? ` · ${escapeHtml(a.origin)}` : ''}${a.path ? ` · ${escapeHtml(a.path)}` : ''}</span>
+            ${a.risky.length ? `<span class="apps-risk">${escapeHtml(riskText(a))}</span>` : ''}
+            ${approved ? `<span class="scope-badge scope-user">${t('system.persistence.approved')}</span> <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'apps_ack', key:'${escapeJs(a.key)}', remove:true})">${t('settings.trusted.remove')}</button>`
+                       : (a.risky.length ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'apps_ack', key:'${escapeJs(a.key)}'})">${t('popup.btn.its_me')}</button>` : '')}
+        </div>`;
+    }).join('');
+}
+
+// ─── Coffre chiffré ─────────────────────────────────────────────────────────
+function renderVault(v) {
+    if (!v) return;
+    const badge = $('vaultBadge');
+    if (badge) {
+        badge.textContent = !v.available ? t('vault.missing_short') : v.mounted ? t('vault.state.open_short') : v.exists ? t('vault.state.closed') : t('vault.state.none');
+        badge.className = 'badge ' + (v.mounted ? 'badge-green' : v.exists ? 'badge-amber' : '');
+    }
+    if ($('vaultState')) $('vaultState').textContent = !v.available ? t('vault.missing') : v.mounted ? t('vault.state.open', { path: v.mountpoint }) : v.exists ? t('vault.state.closed_hint') : t('vault.state.none_hint');
+    const show = (id, on) => { const el = $(id); if (el) el.hidden = !on; };
+    show('vaultInstall', !v.available);
+    show('vaultCreate', v.available && !v.exists);
+    show('vaultOpen', v.available && v.exists);
+    show('vaultClose', v.available && v.mounted);
+    const sb = $('simpleVaultBtn');
+    if (sb) { sb.hidden = !(v.available && v.exists); $('simpleVaultLabel').textContent = v.mounted ? t('simple.vault_open') : t('simple.vault'); }
+}
+
+// ─── Restauration guidée ────────────────────────────────────────────────────
+let restoreSnapshots = [];
+function restoreFillDests() {
+    const sel = $('restoreDest');
+    if (!sel || !backupData) return;
+    const cur = sel.value;
+    sel.innerHTML = (backupData.destinations || []).map(d => `<option value="${escapeHtml(d.id)}" ${d.available ? '' : 'disabled'}>${escapeHtml(d.label)}${d.available ? '' : ' · ' + t('backup.dest.unavailable')}</option>`).join('') || `<option value="">${t('backup.dest.none')}</option>`;
+    if (cur) sel.value = cur;
+}
+function restoreListSnapshots() {
+    const id = $('restoreDest') && $('restoreDest').value;
+    if (!id) return;
+    $('restoreNote').textContent = t('system.refreshing');
+    sendToBackend({ action: 'backup_snapshots', dest_id: id });
+}
+function onBackupSnapshots(d) {
+    restoreSnapshots = d.snapshots || [];
+    const sel = $('restoreSnapshot');
+    if (!sel) return;
+    sel.innerHTML = restoreSnapshots.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name === 'latest' ? t('backup.restore.latest') : s.name.replace('_', ' ').replace(/-(\d\d)-(\d\d)$/, ':$1:$2'))}${s.archive ? ' · archive' : ''}</option>`).join('');
+    $('restoreNote').textContent = d.error ? t(d.error === 'no_backup' ? 'backup.restore.none' : 'msg.backup_dest_unavailable') : (restoreSnapshots.length ? '' : t('backup.restore.none'));
+    restoreFillFolders();
+}
+function restoreFillFolders() {
+    const name = $('restoreSnapshot').value;
+    const snap = restoreSnapshots.find(s => s.name === name);
+    $('restoreFolder').innerHTML = `<option value="">${t('backup.restore.all')}</option>` + ((snap && snap.folders) || []).map(f => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join('');
+}
+function restoreGo() {
+    const dest_id = $('restoreDest').value, snapshot = $('restoreSnapshot').value, folder = $('restoreFolder').value;
+    if (!dest_id || !snapshot) { showToast(t('backup.restore.none'), 'error'); return; }
+    sendToBackend({ action: 'backup_restore', dest_id, snapshot, folder });
+}
+function onRestoreProgress(d) {
+    $('restoreProgress').hidden = false;
+    $('restoreFill').style.width = `${Math.min(100, d.pct || 0)}%`;
+    $('restoreText').textContent = t('backup.restore.running', { pct: Math.floor(d.pct || 0) }) + (d.text ? ` · ${d.text}` : '');
+    $('restoreGo').disabled = true;
+}
+function onRestoreDone(d) {
+    $('restoreProgress').hidden = true;
+    $('restoreGo').disabled = false;
+    $('restoreNote').textContent = d.ok ? t('backup.restore.done', { path: d.path || '', files: formatNumber(d.files || 0), size: fmtBytes(d.bytes) }) : (d.cancelled ? t('backup.history.cancelled') : t('msg.restore_failed', { error: d.error || '' }));
+}
+
+// ─── Mode voyage ────────────────────────────────────────────────────────────
+function toggleTravel() {
+    const on = !(lastStatus && lastStatus.travel_mode);
+    sendToBackend({ action: 'travel_mode', on });
+    showToast(on ? t('travel.on_title') : t('travel.off_title'), 'info');
 }

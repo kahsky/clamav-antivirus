@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.9.5)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.10.0)
 
 ---
 
@@ -77,6 +77,29 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   UFW renforcée. Les règles du profil sont taguées `cav-profile` et remplacées à chaque changement ; les
   règles personnelles restent, et en Public l'application signale celles ouvertes à tout Internet.
   Passer en Public ne demande rien ; Maison et Entreprise demandent l'authentification administrateur.
+- **Bilan de la semaine** — popup hebdomadaire (et bouton dans l'onglet Sécurité) : analyses, menaces,
+  alertes, score et sa variation, sauvegarde, conseils lus.
+- **Fuites de données** — test d'un mot de passe via Have I Been Pwned en k-anonymity (5 caractères
+  du SHA-1, jamais le mot de passe) ; surveillance d'adresses e-mail avec une clé API HIBP personnelle ou
+  le relais Dukiwi (`repo/api/hibp.php`, clé côté serveur), revérification hebdomadaire et popup à
+  chaque nouvelle fuite.
+- **Applications hors dépôts** — inventaire Flatpak (permissions larges, source hors Flathub), Snap
+  (confinement classic, plugs sensibles) et AppImage (sans bac à sable), avec « Faire confiance ».
+- **Coffre chiffré** — dossier gocryptfs (`~/.coffre` chiffré, monté sur `~/Coffre`), création,
+  ouverture et fermeture depuis la vue simple ou l'onglet Sauvegardes, mot de passe saisi dans une
+  boîte de dialogue native, fermeture automatique après 30 min, inclus dans les sauvegardes.
+- **Restauration guidée** — choix de la destination, de la sauvegarde et du dossier, copie dans
+  `~/Restauration` sans jamais écraser les fichiers actuels.
+- **Mode voyage** — un bouton : profil pare-feu Public, sauvegarde si un support est branché, mises
+  à jour, rappels (VPN, verrouillage, double authentification, clés USB) ; le retour rétablit le profil.
+- **Télémétrie anonyme opt-in** — désactivée par défaut ; une fois par semaine : version, système,
+  score, types d'alertes, programmes et entrées approuvés (chemins anonymisés), sans identifiant
+  personnel. Reçue par `repo/api/telemetry.php` (fichiers `api/data/*.jsonl`, résumé avec
+  `api/summarize.py`) pour alimenter la **liste blanche centrale signée** (`api/allowlist.json` +
+  `.sig`, vérifiée avec la clé Dukiwi, téléchargée chaque jour).
+- **Politique d'entreprise** — `/etc/clamav-antivirus/policy.json` déployé par dukiwi-kit (fichier
+  root, signature détachée facultative) : réglages imposés et verrouillés, profil pare-feu, programmes
+  de confiance ; voir `policy.example.json`. Les réglages verrouillés apparaissent grisés.
 - **Noyau HWE** — les failles du noyau 6.8 de Mint déjà corrigées dans un noyau HWE (6.11, 6.14) sont
   marquées « corrigée dans le noyau HWE » et comptées ; la carte des failles explique comment installer
   ce noyau (Gestionnaire de mises à jour → Noyaux Linux, ou `linux-generic-hwe-24.04`).
@@ -174,7 +197,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.9.5_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.9.5_all.deb)
+[Télécharger clamav-antivirus_1.10.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.10.0_all.deb)
 
 ---
 
@@ -205,12 +228,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.9.5_all.deb`
+Résultat : `clamav-antivirus_1.10.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.9.5_all.deb
+sudo dpkg -i clamav-antivirus_1.10.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
@@ -250,6 +273,8 @@ localement avec les droits de l'utilisateur.
 | `ui/i18n.js`                             | Traductions FR/EN/DE/IT (JSON) partagées par la page et Python    |
 | `ui/awareness.js`                        | Leçons de sensibilisation FR/EN/DE/IT (popup « conseil du jour » et page Bonnes pratiques) |
 | `clamav_backup.py`                       | Moteur de sauvegarde utilisateur (rsync incrémental, rclone cloud, détection des supports) |
+| `clamav_extras.py`                       | Fuites de données (HIBP), applications hors dépôts, coffre gocryptfs, bilan hebdomadaire |
+| `policy.example.json`                    | Exemple de politique d'entreprise pour dukiwi-kit |
 
 Réglages système (page Paramètres, fichier `/var/lib/clamav-antivirus/settings.json`,
 valeurs par défaut dans `DEFAULT_SETTINGS` de `clamav_common.py`) : seuil et fenêtre d'envoi

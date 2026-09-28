@@ -35,6 +35,7 @@ import ctypes
 import grp
 import hashlib
 import ipaddress
+import fnmatch
 import glob
 import json
 import os
@@ -49,6 +50,7 @@ import sys
 import threading
 import time
 import urllib.request
+import uuid
 import urllib.error
 import urllib.parse
 from collections import deque
@@ -74,6 +76,11 @@ INTEGRITY_FILE = os.path.join(APP_DIR, "integrity.json")
 MANIFEST_URL = os.environ.get("CLAMAV_ANTIVIRUS_MANIFEST_URL",
                               "https://www.dukiwi.com/repo/clamav-antivirus/manifest.json")
 UPDATES_DIR = os.path.join(SYSTEM_STATE_DIR, "updates")
+POLICY_DIR = "/etc/clamav-antivirus"
+POLICY_FILE = os.path.join(POLICY_DIR, "policy.json")          # déployé par dukiwi-kit (root)
+ALLOWLIST_URL = os.environ.get("CLAMAV_ANTIVIRUS_ALLOWLIST_URL", "https://www.dukiwi.com/repo/api/allowlist.json")
+TELEMETRY_URL = os.environ.get("CLAMAV_ANTIVIRUS_TELEMETRY_URL", "https://www.dukiwi.com/repo/api/telemetry.php")
+ALLOWLIST_FILE = os.path.join(SYSTEM_STATE_DIR, "allowlist.json")
 BLOCKLIST_FILE = os.path.join(SYSTEM_STATE_DIR, "ip-blocklist.txt")
 BLOCKLIST_URLS = {
     "feodo": "https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
@@ -353,6 +360,40 @@ TRUSTED_EXE_PREFIXES = ("/usr/", "/bin/", "/sbin/", "/lib", "/opt/", "/snap/", "
 UNTRUSTED_EXE_PREFIXES = ("/tmp/", "/var/tmp/", "/dev/shm/", "/run/user/", "/home/", "/root/", "/media/", "/mnt/")
 
 
+def load_policy():
+    """Politique d'entreprise (/etc/clamav-antivirus/policy.json) : fichier root, non modifiable par les autres,
+    signature détachée facultative (policy.json.sig, clé policy-key.gpg du même dossier ou clé Dukiwi)."""
+    try:
+        st = os.stat(POLICY_FILE)
+    except OSError:
+        return {}
+    if st.st_uid != 0 or (st.st_mode & 0o022):
+        log("Politique ignorée : policy.json doit appartenir à root et ne pas être modifiable par d'autres")
+        return {}
+    try:
+        with open(POLICY_FILE, encoding="utf-8") as f:
+            policy = json.load(f)
+    except (OSError, ValueError) as e:
+        log(f"Politique illisible : {e}")
+        return {}
+    if not isinstance(policy, dict):
+        return {}
+    sig = POLICY_FILE + ".sig"
+    if os.path.exists(sig):
+        keyring = os.path.join(POLICY_DIR, "policy-key.gpg")
+        r = run_quiet(["gpgv", "--keyring", keyring if os.path.exists(keyring) else KEYRING, sig, POLICY_FILE], timeout=30)
+        if r.returncode != 0:
+            log("Politique ignorée : signature invalide")
+            return {}
+        policy["_signed"] = True
+    policy["_mtime"] = st.st_mtime
+    return policy
+
+
+def anonymize_path(path):
+    return re.sub(r"^/home/[^/]+", "/home/~", str(path or ""))
+
+
 def normalize_exe(exe):
     """Chemin de l'exécutable sans le suffixe « (deleted) » (binaire remplacé par une mise à jour pendant l'exécution)."""
     exe = (exe or "").strip()
@@ -506,7 +547,7 @@ class ActivityMonitor(threading.Thread):
         exe = normalize_exe(exe)
         if not exe:
             return False
-        if exe in self.daemon_ref.user_trusted():
+        if exe in self.daemon_ref.user_trusted() or self.daemon_ref.central_trusted(exe):
             return True
         if exe.startswith(UNTRUSTED_EXE_PREFIXES):
             return False
@@ -1612,6 +1653,9 @@ def collect_checklist(daemon):
     # Persistance inconnue
     unknown = [it for it in persistence.get("items", []) if not it.get("trusted")]
     add("persistence", "ok" if not unknown else "warn", 4, f"{len(unknown)}")
+    # Noyau GA : failles déjà corrigées dans un noyau HWE (indication seulement, la distribution gère le déploiement)
+    hwe_fixed = ((vulns or {}).get("counts") or {}).get("kernel_hwe_fixed") or 0
+    add("kernel_hwe", "unknown" if not vulns else ("warn" if hwe_fixed else "ok"), 3, f"{hwe_fixed}" if hwe_fixed else "")
     # Réponse automatique
     add("auto_response", "ok" if settings.get("auto_response") else "warn", 2)
 
@@ -2068,6 +2112,11 @@ class Daemon:
         self.unlocked = {}          # uid -> expiry (session administrateur)
         self.suspended = {}         # pid -> info (processus suspendus par la réponse automatique)
         self._trusted_set = {t.get("exe") for t in (self.state.get("trusted_programs") or []) if t.get("exe")}
+        self.policy = {}
+        self.locked_settings = set()
+        self.central_patterns = []
+        self.load_central_allowlist()
+        self.apply_policy(startup=True)
         self.last_daily = 0
         self.last_integrity = 0
         self.integrity_running = False
@@ -2701,6 +2750,13 @@ class Daemon:
                 self.connections.load_blocklist(refresh=True)
             except Exception as e:  # noqa: BLE001
                 log(f"Blocklist : {e}")
+            # Liste blanche centrale (signée), politique d'entreprise, télémétrie opt-in
+            try:
+                self.refresh_central_allowlist()
+                self.apply_policy()
+                self.send_telemetry()
+            except Exception as e:  # noqa: BLE001
+                log(f"Liste blanche / politique / télémétrie : {e}")
             # Mise à jour de l'application
             self.check_app_update()
             # Checklist
@@ -2777,6 +2833,147 @@ class Daemon:
     def user_trusted(self):
         """Exécutables approuvés par l'utilisateur (« C'est moi ») : plus jamais d'alerte pour eux."""
         return self._trusted_set
+
+    def central_trusted(self, exe):
+        """Liste blanche centrale Dukiwi (signée) + programmes de confiance de la politique d'entreprise."""
+        for pat in self.central_patterns:
+            if fnmatch.fnmatch(exe, pat):
+                return True
+        return False
+
+    def load_central_allowlist(self):
+        """Charge allowlist.json (déjà vérifiée) et les programmes de la politique."""
+        patterns = []
+        try:
+            with open(ALLOWLIST_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+            for pat in data.get("programs") or []:
+                pat = str(pat)
+                patterns.append(pat.replace("~/", "/home/*/") if pat.startswith("~/") else pat)
+            self.state.update(allowlist_version=data.get("version"), allowlist_updated=data.get("updated"))
+        except (OSError, ValueError):
+            pass
+        for pat in (self.policy or {}).get("trusted_programs") or []:
+            patterns.append(str(pat))
+        self.central_patterns = patterns
+
+    def refresh_central_allowlist(self):
+        """Télécharge allowlist.json + .sig, vérifie la signature Dukiwi, remplace le fichier local."""
+        tmp = ALLOWLIST_FILE + ".new"
+        try:
+            data = http_get(ALLOWLIST_URL, timeout=30)
+            sig = http_get(ALLOWLIST_URL + ".sig", timeout=30)
+            with open(tmp, "wb") as f:
+                f.write(data)
+            with open(tmp + ".sig", "wb") as f:
+                f.write(sig)
+            ok, detail = gpg_verify(tmp + ".sig", tmp)
+            if not ok:
+                log(f"Liste blanche : signature refusée ({detail})")
+                return False
+            json.loads(data.decode("utf-8"))
+            os.replace(tmp, ALLOWLIST_FILE)
+            os.replace(tmp + ".sig", ALLOWLIST_FILE + ".sig")
+            self.load_central_allowlist()
+            self.monitor.dpkg_cache.clear()
+            log(f"Liste blanche centrale : {len(self.central_patterns)} motif(s)")
+            return True
+        except Exception as e:  # noqa: BLE001
+            log(f"Liste blanche : {e}")
+            return False
+        finally:
+            for p in (tmp, tmp + ".sig"):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    def apply_policy(self, startup=False):
+        """Applique la politique d'entreprise : réglages imposés (verrouillés), profil pare-feu, programmes de confiance."""
+        policy = load_policy()
+        if not policy:
+            if self.policy:
+                self.policy, self.locked_settings = {}, set()
+                self.load_central_allowlist()
+            return
+        if policy.get("_mtime") == (self.policy or {}).get("_mtime") and not startup:
+            return
+        self.policy = policy
+        settings = policy.get("settings") or {}
+        if isinstance(settings, dict) and settings:
+            changed, errors = self.settings.update(settings)
+            if changed and not startup:
+                self.apply_settings(changed)
+            if errors:
+                log(f"Politique : réglages ignorés {errors}")
+        locked = set(policy.get("locked") or [])
+        if policy.get("lock_all"):
+            locked |= set(settings.keys())
+        self.locked_settings = {k for k in locked if k in DEFAULT_SETTINGS}
+        self.load_central_allowlist()
+        profile = policy.get("firewall_profile")
+        if profile in FIREWALL_PROFILES and os.geteuid() == 0 and self.settings.get("firewall_profile") != profile:
+            ok, text = self.apply_firewall_profile(profile)
+            if ok:
+                self.settings.update({"firewall_profile": profile})
+        log(f"Politique d'entreprise appliquée : {policy.get('name', 'sans nom')}, {len(self.locked_settings)} réglage(s) verrouillé(s)"
+            + (" (signée)" if policy.get("_signed") else ""))
+        self.write_log(f"policy applied: {policy.get('name', '')}")
+
+    def send_telemetry(self):
+        """Télémétrie anonyme, opt-in, une fois par semaine : version, système, score, faux positifs approuvés (chemins anonymisés)."""
+        if not self.settings.get("telemetry"):
+            return False
+        last = self.state.get("telemetry_sent") or ""
+        try:
+            if last and (time.time() - datetime.fromisoformat(last).timestamp()) < 7 * 86400:
+                return False
+        except ValueError:
+            pass
+        install_id = self.state.get("install_id")
+        if not install_id:
+            install_id = uuid.uuid4().hex
+            self.state.update(install_id=install_id)
+        pretty = ""
+        try:
+            with open("/etc/os-release") as f:
+                for line in f:
+                    if line.startswith("PRETTY_NAME="):
+                        pretty = line.split("=", 1)[1].strip().strip('"')
+        except OSError:
+            pass
+        cutoff = time.time() - 7 * 86400
+        alerts = []
+        for a in self.state.get("alerts") or []:
+            try:
+                if datetime.fromisoformat(a.get("time", "")).timestamp() >= cutoff:
+                    alerts.append(a.get("kind", "?"))
+            except ValueError:
+                continue
+        checklist = self.state.get("checklist") or {}
+        vulns = (self.state.get("vulns") or {}).get("counts") or {}
+        payload = {
+            "install_id": install_id, "version": VERSION, "os": pretty, "kernel": os.uname().release, "arch": os.uname().machine,
+            "settings": {k: self.settings.get(k) for k in ("family_mode", "firewall_profile", "backup_check", "auto_response", "connection_monitor")},
+            "checklist": {"score": checklist.get("score"), "grade": checklist.get("grade"),
+                          "fail": [i["key"] for i in checklist.get("items", []) if i.get("status") == "fail"],
+                          "warn": [i["key"] for i in checklist.get("items", []) if i.get("status") == "warn"]},
+            "alerts_7d": {k: alerts.count(k) for k in set(alerts)},
+            "trusted_programs": [anonymize_path(t.get("exe")) for t in (self.state.get("trusted_programs") or [])][:50],
+            "acknowledged_persistence": [anonymize_path(k) for k in (self.state.get("acknowledged_persistence") or [])][:50],
+            "vulns": {k: vulns.get(k) for k in ("unfixed", "fix_available", "pro_only", "kernel_hwe_fixed")},
+            "integrity_warnings": (self.state.get("integrity") or {}).get("warnings"),
+            "timeshift": bool((self.state.get("timeshift") or {}).get("schedule")),
+            "policy": bool(self.policy),
+        }
+        try:
+            http_get(TELEMETRY_URL, timeout=30, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+            self.state.update(telemetry_sent=now_iso())
+            self.write_log("telemetry sent (opt-in)")
+            return True
+        except Exception as e:  # noqa: BLE001
+            log(f"Télémétrie : {e}")
+            return False
 
     def apply_acknowledged(self, pers):
         """Applique les entrées de persistance approuvées par l'utilisateur et recalcule les compteurs."""
@@ -3137,7 +3334,7 @@ class Daemon:
 
         if cmd == "install_package":
             name = str(req.get("name") or "")
-            if name not in ("rclone", "timeshift"):
+            if name not in ("rclone", "timeshift", "gocryptfs"):
                 return {"ok": False, "error": "forbidden", "forbidden": True}
             if TEST_MODE:
                 return {"ok": True, "detail": "test_mode"}
@@ -3266,10 +3463,20 @@ class Daemon:
             return {"ok": True, "status": self.state.get("system_status")}
 
         if cmd == "get_settings":
-            return {"ok": True, "settings": self.settings.snapshot(), "stats": {"geoip": self.connections.geoip_stats()}}
+            return {"ok": True, "settings": self.settings.snapshot(), "stats": {"geoip": self.connections.geoip_stats()},
+                    "locked": sorted(self.locked_settings),
+                    "policy": {"name": self.policy.get("name", ""), "signed": bool(self.policy.get("_signed"))} if self.policy else None,
+                    "allowlist": {"version": self.state.get("allowlist_version"), "updated": self.state.get("allowlist_updated"),
+                                  "patterns": len(self.central_patterns)},
+                    "telemetry_sent": self.state.get("telemetry_sent")}
 
         if cmd == "set_settings":
-            changed, errors = self.settings.update(req.get("settings") or {})
+            incoming = dict(req.get("settings") or {})
+            locked = [k for k in incoming if k in self.locked_settings]
+            for k in locked:
+                incoming.pop(k, None)
+            changed, errors = self.settings.update(incoming)
+            errors = list(errors) + [f"locked:{k}" for k in locked]
             applied = self.apply_settings(changed)
             if changed:
                 self.write_log(f"settings: {', '.join(f'{k}={v}' for k, v in changed.items())}")

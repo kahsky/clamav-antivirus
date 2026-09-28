@@ -43,6 +43,7 @@ from clamav_common import (  # noqa: E402
 
 # Réglages propres à l'utilisateur (le reste est géré par le daemon)
 import clamav_backup as backup   # sauvegarde des fichiers de l'utilisateur (droits utilisateur)
+import clamav_extras as extras   # fuites, applications hors dépôts, coffre chiffré, bilan hebdomadaire
 
 USER_DEFAULTS = {
     "view_mode": "simple",
@@ -1047,6 +1048,8 @@ class ClamAVAntivirusApp:
         self.backup_runner = None
         self.backup_progress = None
         GLib.timeout_add_seconds(120, self._backup_first_check)
+        self.restore_runner = None
+        GLib.timeout_add_seconds(90, self._weekly_first_check)
 
     # ── Conseil de sécurité du jour (sensibilisation) ───────────────────
     def show_daily_tip(self, force=False):
@@ -2073,6 +2076,325 @@ class ClamAVAntivirusApp:
             print(f"backup scheduler: {e}", file=sys.stderr)
         return True
 
+    # ── Bilan hebdomadaire ──────────────────────────────────────────────
+    def _weekly_first_check(self):
+        self.maybe_weekly_report()
+        GLib.timeout_add_seconds(12 * 3600, self.maybe_weekly_report)
+        return False
+
+    def maybe_weekly_report(self, force=False):
+        state = load_state()
+        last = state.get("weekly_report_date") or ""
+        try:
+            due = not last or (datetime.now() - datetime.fromisoformat(last)).days >= 7
+        except ValueError:
+            due = True
+        if not force and (not due or not self.popups_enabled("info")):
+            return True
+        threading.Thread(target=self._weekly_worker, args=(force,), daemon=True).start()
+        return True
+
+    def _weekly_worker(self, force):
+        ds = self.last_daemon_status if isinstance(self.last_daemon_status, dict) else {}
+        history = list(load_state().get("history", [])) + list(((ds or {}).get("state") or {}).get("history", []))
+        alerts = DaemonClient.request("alerts").get("alerts") or []
+        checklist = DaemonClient.request("checklist").get("checklist") or {}
+        state = load_state()
+        report = extras.weekly_report(history, alerts, checklist, self.backup_summary(), state.get("read_lessons"), state.get("weekly_prev_score"))
+        GLib.idle_add(self._show_weekly_report, report)
+
+    def _show_weekly_report(self, r):
+        T = self.T
+        lines = [T("report.scans", n=r["scans"], files=f"{r['files']:,}".replace(",", " "), threats=r["threats"]),
+                 T("report.alerts", n=r["alerts"], danger=r["danger_alerts"])]
+        if r.get("score") is not None:
+            delta = ""
+            if r.get("score_delta") is not None and r["score_delta"] != 0:
+                delta = T("report.delta_up", d=r["score_delta"]) if r["score_delta"] > 0 else T("report.delta_down", d=r["score_delta"])
+            lines.append(T("report.score", score=r["score"], grade=r.get("grade") or "", delta=delta).strip())
+        lines.append(T("report.backup_ok", rel=self.relative(r["backup_last"])) if r.get("backup_last") else T("report.backup_none"))
+        lines.append(T("report.lessons", n=r["lessons_read"]))
+        kind = "danger" if r["threats"] or r["danger_alerts"] else ("warning" if r.get("backup_state") in ("none", "old", "missing") else "success")
+        self.popup(kind, T("popup.report.title"), "\n".join(lines), timeout=45,
+                   buttons=[(T("popup.btn.details"), "primary", lambda: self.show_tab("security"))],
+                   on_activate=lambda: self.show_tab("security"))
+        save_state({"weekly_report_date": datetime.now().isoformat(timespec="seconds"), "weekly_prev_score": r.get("score")})
+        return False
+
+    def relative(self, iso):
+        """« il y a N j / N h » à partir d'une date ISO."""
+        try:
+            delta = datetime.now() - datetime.fromisoformat(str(iso)[:19])
+        except ValueError:
+            return str(iso)
+        if delta.days >= 1:
+            return self.T("rel.ago", t=self.T("rel.days", n=delta.days))
+        return self.T("rel.ago", t=self.T("rel.hours", n=max(1, delta.seconds // 3600)))
+
+    def act_show_report(self, _data):
+        self.maybe_weekly_report(force=True)
+
+    # ── Fuites de données (HIBP) ────────────────────────────────────────
+    def act_hibp_password(self, data):
+        pw = data.get("password") or ""
+
+        def worker():
+            count, err = extras.check_password(pw)
+            GLib.idle_add(lambda: self.send_to_js("hibpResult", {"type": "password", "count": count, "error": err}) or False)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def act_hibp_save(self, data):
+        emails = [e.strip().lower() for e in (data.get("emails") or []) if e and e.strip()][:10]
+        upd = {"hibp_emails": emails}
+        if "api_key" in data:
+            upd["hibp_api_key"] = "".join(ch for ch in str(data.get("api_key") or "") if ch.isalnum())[:64]
+        save_state(upd)
+        self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.hibp_saved")})
+        self.act_get_settings({})
+
+    def act_hibp_check(self, data):
+        state = load_state()
+        emails = state.get("hibp_emails") or []
+        key = state.get("hibp_api_key") or ""
+        if not emails:
+            self.send_to_js("hibpResult", {"type": "emails", "results": {}, "error": "no_emails"})
+            return
+
+        def worker():
+            results, err_all = {}, ""
+            for email in emails:
+                breaches, err = extras.check_email(email, api_key=key, proxy_url="" if key else extras.DUKIWI_HIBP_PROXY)
+                results[email] = {"breaches": breaches, "error": err, "checked": now_iso()}
+                if err and err != "":
+                    err_all = err
+            GLib.idle_add(self._hibp_done, results, err_all, bool(data.get("silent")))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _hibp_done(self, results, err_all, silent):
+        state = load_state()
+        previous = state.get("hibp_results") or {}
+        new_breaches = []
+        for email, r in results.items():
+            if r.get("error"):
+                continue
+            known = {b["name"] for b in (previous.get(email) or {}).get("breaches") or []}
+            for b in r["breaches"]:
+                if b["name"] not in known and known is not None and previous.get(email):
+                    new_breaches.append((email, b))
+        merged = dict(previous)
+        for email, r in results.items():
+            if not r.get("error"):
+                merged[email] = r
+        save_state({"hibp_results": merged, "hibp_last": now_iso()})
+        self.send_to_js("hibpResult", {"type": "emails", "results": results, "error": err_all})
+        for email, b in new_breaches[:3]:
+            self.popup("warning", self.T("popup.leak.title"), self.T("popup.leak.body", email=email, name=b.get("title") or b.get("name"), date=b.get("date", "")),
+                       timeout=40, buttons=[(self.T("popup.btn.details"), "primary", lambda: self.show_tab("security"))])
+        return False
+
+    # ── Applications hors dépôts ────────────────────────────────────────
+    def act_get_apps(self, _data):
+        def worker():
+            inv = extras.inventory_apps()
+            GLib.idle_add(lambda: self.send_to_js("appsData", {"inventory": inv, "acknowledged": load_state().get("apps_ack") or []}) or False)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def act_apps_ack(self, data):
+        key = str(data.get("key") or "")
+        ack = [k for k in (load_state().get("apps_ack") or []) if k != key]
+        if key and not data.get("remove"):
+            ack.append(key)
+        save_state({"apps_ack": ack[:200]})
+        self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.persistence_acknowledged" if not data.get("remove") else "msg.program_untrusted")})
+        self.act_get_apps({})
+
+    # ── Coffre chiffré (gocryptfs) ──────────────────────────────────────
+    def _password_dialog(self, title, confirm=False):
+        dlg = Gtk.Dialog(title=title, transient_for=self.window, modal=True)
+        dlg.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        dlg.add_button(Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dlg.set_default_response(Gtk.ResponseType.OK)
+        box = dlg.get_content_area()
+        box.set_spacing(8)
+        box.set_margin_top(12); box.set_margin_bottom(12); box.set_margin_start(12); box.set_margin_end(12)
+        lbl = Gtk.Label(label=self.T("vault.dialog.hint") if confirm else self.T("vault.dialog.password"))
+        lbl.set_line_wrap(True); lbl.set_max_width_chars(48); lbl.set_xalign(0)
+        box.pack_start(lbl, False, False, 0)
+        e1 = Gtk.Entry(); e1.set_visibility(False); e1.set_placeholder_text(self.T("vault.dialog.password")); e1.set_activates_default(True)
+        box.pack_start(e1, False, False, 0)
+        e2 = None
+        if confirm:
+            e2 = Gtk.Entry(); e2.set_visibility(False); e2.set_placeholder_text(self.T("vault.dialog.confirm")); e2.set_activates_default(True)
+            box.pack_start(e2, False, False, 0)
+        dlg.show_all()
+        resp = dlg.run()
+        pw, pw2 = e1.get_text(), (e2.get_text() if e2 else None)
+        dlg.destroy()
+        if resp != Gtk.ResponseType.OK:
+            return None
+        if confirm and pw != pw2:
+            self.send_to_js("operationResult", {"status": "error", "message": self.T("msg.vault_mismatch")})
+            return None
+        return pw
+
+    def act_vault_status(self, _data):
+        self.send_to_js("vaultStatus", extras.vault_status())
+
+    def _vault_run(self, fn, ok_key):
+        def worker():
+            ok, detail = fn()
+            GLib.idle_add(self._vault_done, ok, detail, ok_key)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _vault_done(self, ok, detail, ok_key):
+        if ok:
+            self.send_to_js("operationResult", {"status": "success", "message": self.T(ok_key)})
+            st = extras.vault_status()
+            if st.get("mounted") and ok_key in ("msg.vault_created", "msg.vault_opened"):
+                subprocess.Popen(["xdg-open", st["mountpoint"]])
+        else:
+            key = {"bad_password": "msg.vault_bad_password", "password_short": "msg.vault_short", "gocryptfs_missing": "vault.missing"}.get(detail)
+            self.send_to_js("operationResult", {"status": "error", "message": self.T(key) if key else self.T("msg.vault_error", detail=detail)})
+        self.send_to_js("vaultStatus", extras.vault_status())
+        self.send_status()
+        return False
+
+    def act_vault_create(self, _data):
+        if not extras.vault_status()["available"]:
+            self.send_to_js("operationResult", {"status": "error", "message": self.T("vault.missing")})
+            return
+        pw = self._password_dialog(self.T("vault.dialog.create_title"), confirm=True)
+        if pw is None:
+            return
+        if len(pw) < 8:
+            self.send_to_js("operationResult", {"status": "error", "message": self.T("msg.vault_short")})
+            return
+        st = backup.load_state()
+        if extras.VAULT_CIPHER not in st["sources"]:
+            st["sources"].append(extras.VAULT_CIPHER)       # le coffre chiffré fait partie des sauvegardes
+            backup.save_state(st)
+        self._vault_run(lambda: extras.vault_create(pw), "msg.vault_created")
+
+    def act_vault_open(self, _data):
+        st = extras.vault_status()
+        if not st["exists"]:
+            return self.act_vault_create({})
+        if st["mounted"]:
+            subprocess.Popen(["xdg-open", st["mountpoint"]])
+            return
+        pw = self._password_dialog(self.T("vault.dialog.open_title"))
+        if pw is None:
+            return
+        self._vault_run(lambda: extras.vault_open(pw), "msg.vault_opened")
+
+    def act_vault_close(self, _data):
+        self._vault_run(extras.vault_close, "msg.vault_closed")
+
+    def act_vault_toggle(self, _data):
+        if extras.vault_status().get("mounted"):
+            self.act_vault_close({})
+        else:
+            self.act_vault_open({})
+
+    # ── Restauration guidée ─────────────────────────────────────────────
+    def act_backup_snapshots(self, data):
+        st = backup.load_state()
+        dest = next((d for d in st["destinations"] if d.get("id") == data.get("dest_id")), None)
+        if not dest:
+            self.send_to_js("backupSnapshots", {"dest_id": data.get("dest_id"), "snapshots": [], "error": "no_dest"})
+            return
+
+        def worker():
+            snaps, err = backup.list_snapshots(dest)
+            GLib.idle_add(lambda: self.send_to_js("backupSnapshots", {"dest_id": dest["id"], "snapshots": snaps, "error": err}) or False)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def act_backup_restore(self, data):
+        if self.restore_runner and self.restore_runner.is_alive():
+            self.send_to_js("operationResult", {"status": "error", "message": self.T("msg.backup_running")})
+            return
+        st = backup.load_state()
+        dest = next((d for d in st["destinations"] if d.get("id") == data.get("dest_id")), None)
+        if not dest:
+            return
+
+        def progress(pct, text):
+            GLib.idle_add(lambda: self.send_to_js("restoreProgress", {"pct": round(pct, 1), "text": text}) or False)
+
+        def done(result):
+            GLib.idle_add(self._restore_done, result)
+        self.restore_runner = backup.RestoreRunner(dest, data.get("snapshot") or "latest", data.get("folder") or "",
+                                                   on_progress=progress, on_done=done)
+        self.restore_runner.start()
+        self.send_to_js("restoreProgress", {"pct": 0, "text": ""})
+
+    def _restore_done(self, result):
+        self.restore_runner = None
+        self.send_to_js("restoreDone", result)
+        if result.get("ok"):
+            msg = self.T("backup.restore.done", path=result.get("path", ""), files=result.get("files", 0), size=backup.format_size(result.get("bytes", 0)))
+            self.send_to_js("operationResult", {"status": "success", "message": msg})
+            self.popup("success", self.T("backup.restore.card"), msg, timeout=20,
+                       buttons=[(self.T("backup.restore.open"), "primary", lambda p=result.get("path", ""): subprocess.Popen(["xdg-open", p]))])
+        elif not result.get("cancelled"):
+            self.send_to_js("operationResult", {"status": "error", "message": self.T("msg.restore_failed", error=result.get("error", ""))})
+        return False
+
+    def act_backup_restore_cancel(self, _data):
+        if self.restore_runner and self.restore_runner.is_alive():
+            self.restore_runner.cancel()
+
+    def act_backup_open_restore(self, _data):
+        os.makedirs(backup.RESTORE_DIR, exist_ok=True)
+        subprocess.Popen(["xdg-open", backup.RESTORE_DIR])
+
+    # ── Mode voyage ─────────────────────────────────────────────────────
+    def act_travel_mode(self, data):
+        on = bool(data.get("on"))
+        state = load_state()
+        ds = self.last_daemon_status if isinstance(self.last_daemon_status, dict) else {}
+        current = (((ds or {}).get("security") or {}).get("ufw") or {}).get("profile") or ""
+        T = self.T
+        if on:
+            save_state({"travel_mode": True, "travel_prev_profile": current})
+            resp = DaemonClient.request("firewall_profile", profile="public")
+            if not resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+            # sauvegarde si un support est disponible
+            st = backup.load_state()
+            started = False
+            drives = backup.detect_drives()
+            for dest in st["destinations"]:
+                avail, _ = backup.destination_available(dest, drives)
+                if avail and not (self.backup_runner and self.backup_runner.is_alive()):
+                    started = self._start_backup(dest, auto=True)
+                    break
+            # mises à jour
+            sysst = (ds or {}).get("system_status") or {}
+            if sysst.get("upgradable"):
+                DaemonClient.request("system_upgrade")
+            body = T("travel.on_body") + ("" if started else "\n" + T("travel.no_backup_dest"))
+            self.popup("info", T("travel.on_title"), body, timeout=40,
+                       buttons=[(T("popup.btn.read_more"), None, lambda: self.open_lesson("wifi"))])
+        else:
+            prev = state.get("travel_prev_profile") or "home"
+            save_state({"travel_mode": False})
+
+            def done(resp):
+                if resp.get("ok"):
+                    self.popup("success", T("travel.off_title"), T("travel.off_body", profile=T(f"firewall.profile.{prev}")), timeout=15)
+                else:
+                    self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+                self.act_get_security({"refresh": True})
+                self.send_status()
+                return False
+            if prev in ("home", "enterprise"):
+                self.run_admin("firewall_profile", {"profile": prev}, done)
+            else:
+                done({"ok": True})
+        self.act_get_security({"refresh": True})
+        self.send_status()
+
     def act_show_tip(self, _data):
         self.show_daily_tip(force=True)
 
@@ -2096,7 +2418,11 @@ class ClamAVAntivirusApp:
         resp = DaemonClient.request("get_settings")
         self.send_to_js("settingsData", {"system": resp.get("settings") if resp.get("ok") else dict(DEFAULT_SETTINGS),
                                          "user": user_settings(), "available": bool(resp.get("ok")),
-                                         "stats": resp.get("stats") if resp.get("ok") else None})
+                                         "stats": resp.get("stats") if resp.get("ok") else None,
+                                         "locked": resp.get("locked") or [], "policy": resp.get("policy"),
+                                         "allowlist": resp.get("allowlist"), "telemetry_sent": resp.get("telemetry_sent"),
+                                         "hibp": {"emails": load_state().get("hibp_emails") or [], "has_key": bool(load_state().get("hibp_api_key")),
+                                                  "last": load_state().get("hibp_last"), "results": load_state().get("hibp_results") or {}}})
 
     def act_set_settings(self, data):
         user = data.get("user") or {}
@@ -2340,6 +2666,8 @@ class ClamAVAntivirusApp:
             "overall": (ds or {}).get("overall"),
             "read_lessons": load_state().get("read_lessons") or [],
             "backup": {"timeshift": (ds or {}).get("timeshift"), "user": self.backup_summary(), "running": self.backup_progress},
+            "travel_mode": bool(load_state().get("travel_mode")),
+            "vault": extras.vault_status(),
             "unlocked": (ds or {}).get("unlocked", False),
             "family_mode": (ds or {}).get("family_mode", False),
             "admin_groups": (ds or {}).get("admin_groups", []),

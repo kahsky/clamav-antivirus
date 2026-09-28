@@ -2832,3 +2832,12 @@ body.mode-simple { position: relative; }
 .btn:disabled, .btn[disabled] { opacity: .45; cursor: not-allowed; filter: grayscale(.35); box-shadow: none; }
 
 .hwe-note { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-left: 3px solid var(--accent-amber); padding-left: 10px; }
+
+/* ── v1.10.0 : fuites, applications, coffre, restauration, voyage, politique ── */
+.policy-banner { border-left: 3px solid var(--accent-blue, #3b82f6); padding-left: 10px; }
+.setting-row.locked { opacity: .6; }
+.setting-row.locked::after { content: "🔒"; font-size: 11px; margin-left: 6px; }
+#restoreProgress { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.travel-on #travelBtn, .travel-on #travelBtnFw { background: rgba(245,158,11,0.18); border-color: var(--accent-amber); color: var(--accent-amber); }
+.hibp-breach { border-color: rgba(239,68,68,0.45); }
+.apps-risk { font-size: 11px; color: var(--accent-amber); }
