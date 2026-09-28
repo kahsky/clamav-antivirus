@@ -1812,6 +1812,31 @@ def embedded_engine_users(binaries):
     return sorted(users or direct)[:12]
 
 
+# Failles célèbres sans correctif possible (défaut de conception) : explication intégrée, usage réel vérifié
+CVE_KNOWLEDGE = {"CVE-2024-3661": "tunnelvision"}
+
+
+def vpn_connections():
+    """Connexions VPN configurées dans NetworkManager (noms), pour dire si TunnelVision concerne cet ordinateur."""
+    r = run_quiet(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], timeout=15)
+    out = []
+    for ln in (r.stdout or "").splitlines():
+        parts = re.split(r"(?<!\\):", ln.strip())
+        if len(parts) >= 2 and parts[1] in ("vpn", "wireguard", "tun", "ip-tunnel"):
+            out.append(parts[0].replace("\\:", ":"))
+    return out[:10]
+
+
+def annotate_vulns(vulns):
+    """Notes intégrées par CVE (clé de traduction) et contexte machine (VPN configurés)."""
+    for it in vulns.get("items") or []:
+        note = CVE_KNOWLEDGE.get(it.get("cve") or "")
+        if note:
+            it["note"] = note
+    vulns["context"] = {"vpn_connections": vpn_connections()}
+    return vulns
+
+
 def reclassify_vulns(vulns):
     """Relevé enregistré par une version précédente : applique la classification « non applicable » (moteur intégré)
     sans réseau, au démarrage, pour que l'affichage soit juste tout de suite."""
@@ -1844,7 +1869,7 @@ def reclassify_vulns(vulns):
     counts["na_embedded"] = sum(1 for it in items if it.get("status") == "not_applicable" and it.get("package") in embedded)
     counts["na_vendor"] = sum(1 for it in items if it.get("status") == "not_applicable" and it.get("package") in vendor)
     out.update(items=items, counts=counts, by_priority=by_priority, embedded=embedded, vendor=vendor)
-    return out
+    return annotate_vulns(out)
 
 
 def collect_vulnerabilities(previous=None):
@@ -1926,6 +1951,7 @@ def collect_vulnerabilities(previous=None):
                                         "priority": pr, "cvss": d["cvss"], "summary": d["summary"],
                                         "url": f"https://ubuntu.com/security/{d['cve']}" if d["cve"] else f"https://osv.dev/vulnerability/{d['id']}"})
         result["items"].sort(key=lambda it: (PRIORITY_RANK.get(it["priority"], 6), it["status"] != "unfixed", it["package"]))
+        annotate_vulns(result)
     except Exception as e:  # noqa: BLE001
         result["ok"] = False
         result["error"] = str(e)[:200]
@@ -2158,7 +2184,8 @@ def collect_checklist(daemon):
     add("recent_scan", "ok" if scan_age <= 7 else ("warn" if scan_age <= 30 else "fail"), 4, f"{scan_age} d")
     # Failles ouvertes
     counts = vulns.get("counts") or {}
-    high = sum(1 for it in vulns.get("items", []) if it.get("status") == "unfixed" and it.get("priority") in ("critical", "high"))
+    high = len({it.get("cve") or it.get("id") for it in vulns.get("items", [])
+                if it.get("status") == "unfixed" and it.get("priority") in ("critical", "high")})   # CVE distinctes
     add("open_vulns", "unknown" if not vulns else ("ok" if not high else "warn"), 6,
         f"{counts.get('unfixed', 0)} unfixed, {high} high/critical")
     # Persistance inconnue
@@ -2893,7 +2920,7 @@ class Daemon:
         self.load_central_allowlist()
         try:
             stored_vulns = self.state.get("vulns") or {}
-            if stored_vulns.get("items") and "na_vendor" not in (stored_vulns.get("counts") or {}):
+            if stored_vulns.get("items") and ("na_vendor" not in (stored_vulns.get("counts") or {}) or "context" not in stored_vulns):
                 self.state.update(vulns=reclassify_vulns(stored_vulns))
                 log("Failles : relevé reclassé (moteur JavaScript intégré)")
         except Exception as e:  # noqa: BLE001

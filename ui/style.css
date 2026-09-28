@@ -2872,3 +2872,4 @@ body.mode-simple { position: relative; }
 /* Option de scan (cache) */
 .scan-option { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); cursor: pointer; }
 .cve-item.vuln-not_applicable { border-color: rgba(148,163,184,0.3); opacity: 0.85; }
+.cve-note { font-size: 12px; color: var(--text-secondary); margin-top: 6px; padding: 6px 8px; border-left: 3px solid var(--accent-blue); background: rgba(59,130,246,0.06); }

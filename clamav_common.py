@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.14.4"
+VERSION = "1.14.5"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.

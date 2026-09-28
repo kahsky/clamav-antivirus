@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.14.4)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.14.5)
 
 ---
 
@@ -122,6 +122,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   reclassé au démarrage du service. Les paquets construits par Linux Mint (version `+linuxmint`, Thunderbird,
   Firefox…) sont hors du suivi CVE d'Ubuntu : leurs failles « needed » sont classées non applicables avec la
   version installée en note.
+- **Failles sans correctif possible expliquées** — une base intégrée (TunnelVision CVE-2024-3661…) affiche sous
+  la faille ce qu'elle est (défaut de conception, statut « deferred » d'Ubuntu) et si elle vous concerne (VPN
+  configuré ou non) ; la checklist compte les CVE distinctes, pas une fois par paquet.
 - **Moteur résilient** — un lot que clamd refuse (service injoignable, descripteur refusé) est réessayé après
   attente de clamd, puis confié à clamscan ; au cinquième lot en échec, le reste du scan bascule sur clamscan
   au lieu d'échouer. chkrootkit : lignes d'outils système (« RTNETLINK answers… ») ignorées, constat
@@ -263,7 +266,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.14.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.14.4_all.deb)
+[Télécharger clamav-antivirus_1.14.5_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.14.5_all.deb)
 
 ---
 
@@ -294,12 +297,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.14.4_all.deb`
+Résultat : `clamav-antivirus_1.14.5_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.14.4_all.deb
+sudo dpkg -i clamav-antivirus_1.14.5_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
