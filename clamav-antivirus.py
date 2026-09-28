@@ -1865,6 +1865,26 @@ class ClamAVAntivirusApp:
                                         "acknowledged": resp.get("acknowledged", []) if resp.get("ok") else [],
                                         "available": bool(resp.get("ok"))})
 
+    def act_acknowledge_vuln(self, data):
+        """« Ignorer » des failles sans correctif (ou les réafficher avec remove) : elles ne comptent plus dans l'état."""
+        remove = bool(data.get("remove"))
+        params = {"remove": remove}
+        if data.get("all_open"):
+            params["all_open"] = True
+        else:
+            cves = data.get("cves") if isinstance(data.get("cves"), list) else [data.get("cve")]
+            params["cves"] = [str(c) for c in cves if c][:20000]
+
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "security",
+                                                    "message": self.T("msg.vuln_unacknowledged" if remove else "msg.vuln_acknowledged", n=resp.get("count") or 0)})
+                self.act_get_security_data({"type": "vulns"})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("acknowledge_vuln", params, done)
+
     def act_acknowledge_integrity(self, data):
         """« C'est normal » sur un avertissement d'intégrité : approuvé (ou réactivé avec remove)."""
         remove = bool(data.get("remove"))

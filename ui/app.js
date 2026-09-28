@@ -477,10 +477,18 @@ function renderVulns(refreshing = false) {
         ['unfixed', c.unfixed || 0, 'danger'], ['pro_only', c.pro_only || 0, 'warn'], ['fix_available', c.fix_available || 0, 'info'], ['kernel_pending', c.kernel_pending || 0, 'info'], ['not_applicable', c.not_applicable || 0, 'info'],
     ].map(([k, n, cls]) => `<div class="stat ${n && cls === 'danger' ? 'has-threats' : n && cls === 'warn' ? 'has-warning' : ''}"><span class="stat-value">${formatNumber(n)}</span><span class="stat-label">${t(`security.vulns.${k === 'pro_only' ? 'pro' : k}`)}</span></div>`).join('')
         + ['critical', 'high', 'medium', 'low'].map(pr => `<div class="stat"><span class="stat-value">${formatNumber(bp[pr] || 0)}</span><span class="stat-label">${t(`priority.${pr}`)}</span></div>`).join('')
-        + `<div class="stat"><span class="stat-value">${formatNumber(v.sources || 0)}</span><span class="stat-label">${t('security.vulns.sources')}</span></div>`;
+        + `<div class="stat"><span class="stat-value">${formatNumber(v.sources || 0)}</span><span class="stat-label">${t('security.vulns.sources')}</span></div>`
+        + (c.acknowledged_cves ? `<div class="stat stat-acked"><span class="stat-value">${formatNumber(c.acknowledged_cves)}</span><span class="stat-label">${t('security.vulns.acked')}</span></div>` : '');
     const maxRank = vulnPrio === 'all' ? 99 : vulnPrio === 'medium' ? 2 : 1;
-    const items = (v.items || []).filter(i => i.status === vulnFilter && !i.dormant && (VULN_PRIO_RANK[i.priority] ?? 5) <= maxRank);
-    const hidden = (v.items || []).filter(i => i.status === vulnFilter && !i.dormant).length - items.length;
+    const items = (v.items || []).filter(i => i.status === vulnFilter && !i.dormant && !i.acknowledged && (VULN_PRIO_RANK[i.priority] ?? 5) <= maxRank);
+    const hidden = (v.items || []).filter(i => i.status === vulnFilter && !i.dormant && !i.acknowledged).length - items.length;
+    const acked = (v.items || []).filter(i => i.acknowledged);
+    const ackable = ['unfixed', 'pro_only'].includes(vulnFilter);
+    const ackAll = $('vulnAckAll');
+    if (ackAll) {
+        ackAll.hidden = !(ackable && items.length);
+        ackAll.textContent = t('security.vulns.ack_all', { n: formatNumber(new Set(items.map(i => i.cve)).size) });
+    }
     if ($('vulnPrio')) $('vulnPrio').value = vulnPrio;
     if ($('vulnHidden')) $('vulnHidden').textContent = hidden > 0 ? t('security.vulns.hidden', { n: hidden }) : '';
     const naNote = $('vulnNaNote');
@@ -521,7 +529,24 @@ function renderVulns(refreshing = false) {
             </div>
             <div class="cve-title">${escapeHtml(i.summary || '')}</div>
             ${i.note ? `<div class="cve-note">${t(`security.vulns.cve.${i.note}${i.note === 'tunnelvision' && !((v.context || {}).vpn_connections || []).length ? '_novpn' : ''}`, { vpns: ((v.context || {}).vpn_connections || []).join(', ') })}</div>` : ''}
+            ${ackable ? `<div class="fw-actions cve-actions"><button class="btn btn-secondary btn-sm" onclick="ackVuln('${escapeJs(i.cve)}')" title="${escapeHtml(t('security.vulns.ack_hint'))}">${t('security.vulns.ack')}</button></div>` : ''}
         </div>`).join('') + (items.length > 300 ? `<p class="text-muted">+${items.length - 300}</p>` : '') : `<p class="text-muted">${t('security.vulns.none_in_filter')}</p>`;
+    const ackedBox = $('vulnAcked');
+    if (ackedBox) {
+        const byCve = new Map();
+        for (const i of acked) { const e = byCve.get(i.cve) || { ...i, packages: [] }; e.packages.push(i.package); byCve.set(i.cve, e); }
+        const list = [...byCve.values()].sort((a, b) => (VULN_PRIO_RANK[a.priority] ?? 5) - (VULN_PRIO_RANK[b.priority] ?? 5) || a.cve.localeCompare(b.cve));
+        ackedBox.hidden = !list.length;
+        ackedBox.innerHTML = list.length ? `<details class="alert-sample acked-vulns"><summary>${t('security.vulns.acked_list', { n: formatNumber(list.length) })}</summary>
+            <p class="text-muted">${escapeHtml(t('security.vulns.acked_intro'))} <button class="btn btn-secondary btn-sm" onclick="unackAllVulns()">${t('security.vulns.unack_all')}</button></p>
+            ${list.slice(0, 500).map(i => `<div class="cve-item cve-acked vuln-${i.status} prio-${i.priority}"><div class="cve-head">
+                <a class="cve-id" href="#" onclick="sendToBackend({action:'open_url', url:'${escapeJs(i.url)}'}); return false;">${escapeHtml(i.cve)}</a>
+                <span class="scope-badge prio-badge prio-${i.priority}">${t(`priority.${i.priority}`) !== `priority.${i.priority}` ? t(`priority.${i.priority}`) : escapeHtml(i.priority)}</span>
+                <span class="scope-badge scope-system">${escapeHtml(i.packages.join(', '))}</span>
+                ${i.acknowledged_at ? `<span class="cve-versions">${escapeHtml(t('security.vulns.acked_at', { date: formatDateTime(i.acknowledged_at) }))}</span>` : ''}
+                <button class="btn btn-secondary btn-sm" onclick="ackVuln('${escapeJs(i.cve)}', true)">${t('security.vulns.unack')}</button>
+            </div><div class="cve-title">${escapeHtml(i.summary || '')}</div></div>`).join('')}${list.length > 500 ? `<p class="text-muted">+${list.length - 500}</p>` : ''}</details>` : '';
+    }
     const store = [...(v.flatpak || []).map(x => ({ ...x, kind: 'Flatpak' })), ...(v.snap || []).map(x => ({ ...x, kind: 'Snap' }))];
     $('storeUpdates').innerHTML = store.length ? `<h5 class="sub-title">${t('security.vulns.store_updates')}</h5>` + store.map(x => `<div class="package-item"><span class="package-name">${escapeHtml(x.name)}</span><span class="package-versions">${escapeHtml(x.id)} · ${escapeHtml(x.version)}</span><span class="scope-badge scope-user">${x.kind}</span></div>`).join('') : '';
 }
@@ -590,6 +615,27 @@ function integrityWarningsHtml(tool, tl) {
             : `<button class="btn btn-secondary btn-sm" onclick="acknowledgeIntegrity(${ref})">${t('security.integrity.ack')}</button>`}</div></div>`;
     };
     return `<details class="alert-sample"${warns.length ? ' open' : ''}><summary>${t('popup.btn.details')}</summary>${warns.map(w => block(w, 'warn', notes[w] || null)).join('')}${ignored.map(w => block(w, 'ignored', null)).join('')}${benign.map(b => block(b.text, 'benign', b.notes || null)).join('')}</details>`;
+}
+
+// ─── Failles « dont on se fiche » : ignorées par CVE, ne comptent plus pour le tray, le score ni la vue simple ───
+function ackVuln(cve, remove = false) {
+    if (cve) sendToBackend({ action: 'acknowledge_vuln', cves: [cve], remove });
+}
+
+async function ackAllVulns() {
+    const v = secData.vulns;
+    if (!v) return;
+    const maxRank = vulnPrio === 'all' ? 99 : vulnPrio === 'medium' ? 2 : 1;
+    const cves = [...new Set((v.items || []).filter(i => i.status === vulnFilter && !i.dormant && !i.acknowledged && (VULN_PRIO_RANK[i.priority] ?? 5) <= maxRank).map(i => i.cve))];
+    if (!cves.length) return;
+    const ok = await appConfirm({ title: t('security.vulns.ack_all_title', { n: formatNumber(cves.length) }), message: t('security.vulns.ack_all_msg', { n: formatNumber(cves.length) }), ok: t('security.vulns.ack_all_ok') });
+    if (ok) sendToBackend({ action: 'acknowledge_vuln', cves });
+}
+
+async function unackAllVulns() {
+    const v = secData.vulns;
+    const cves = [...new Set(((v && v.items) || []).filter(i => i.acknowledged).map(i => i.cve))];
+    if (cves.length) sendToBackend({ action: 'acknowledge_vuln', cves, remove: true });
 }
 
 function acknowledgeIntegrity(ref, remove = false) {
@@ -2380,6 +2426,18 @@ function simulateBackend(data) {
         case 'acknowledge_integrity':
             reply('operationResult', { status: 'success', message: t(data.remove ? 'msg.integrity_unacknowledged' : 'msg.integrity_acknowledged') });
             break;
+        case 'acknowledge_vuln': {
+            const v = secData.vulns; const set = new Set(data.cves || []);
+            if (v) {
+                for (const i of v.items || []) if (set.has(i.cve) && ['unfixed', 'pro_only'].includes(i.status)) { i.acknowledged = !data.remove; i.acknowledged_at = data.remove ? null : new Date().toISOString(); }
+                const open = v.items.filter(i => !i.acknowledged && !i.dormant);
+                v.counts.unfixed = open.filter(i => i.status === 'unfixed').length; v.counts.pro_only = open.filter(i => i.status === 'pro_only').length;
+                v.counts.acknowledged_cves = new Set(v.items.filter(i => i.acknowledged).map(i => i.cve)).size;
+                renderVulns();
+            }
+            reply('operationResult', { status: 'success', message: t(data.remove ? 'msg.vuln_unacknowledged' : 'msg.vuln_acknowledged', { n: set.size }) });
+            break;
+        }
         case 'harden_apply': case 'harden_revert':
             reply('operationResult', { status: 'info', message: t('msg.harden_started', { n: (data.tests || []).length || 3 }) });
             break;
@@ -2430,8 +2488,8 @@ function simulateBackend(data) {
             const sim = {
                 checklist: { checked_at: now, score: 78, grade: 'B', ports: [{ proto: 'tcp', addr: '0.0.0.0', port: 22, process: 'sshd', service: 'ssh', exposed: true }, { proto: 'tcp', addr: '127.0.0.1', port: 631, process: 'cupsd', service: 'cups', exposed: false }],
                     items: [{ key: 'firewall', status: 'ok', weight: 15, detail: 'deny/allow' }, { key: 'disk_encryption', status: 'warn', weight: 8, detail: '' }, { key: 'secure_boot', status: 'ok', weight: 5 }, { key: 'apparmor', status: 'ok', weight: 6 }, { key: 'auto_updates', status: 'warn', weight: 6 }, { key: 'security_updates', status: 'fail', weight: 12, detail: '2' }, { key: 'empty_passwords', status: 'ok', weight: 10 }, { key: 'nopasswd_sudo', status: 'ok', weight: 5 }, { key: 'open_ports', status: 'warn', weight: 8, detail: '22/tcp sshd' }, { key: 'signatures', status: 'ok', weight: 8, detail: '0 d' }, { key: 'realtime', status: 'ok', weight: 6 }, { key: 'open_vulns', status: 'warn', weight: 6, detail: '12 unfixed, 2 high/critical' }] },
-                vulns: { checked_at: now, ok: true, sources: 1480, counts: { unfixed: 12, pro_only: 3, fix_available: 5, kernel_pending: 3569, not_applicable: 651, na_embedded: 622, na_vendor: 29 }, embedded: { mozjs115: { users: ['cjs', 'polkitd'] } }, vendor: { thunderbird: '1:153.3.1esr+linuxmint1' }, context: { vpn_connections: [] }, running_kernel: { release: '7.0.0-34-generic', source: 'linux-hwe-7.0' }, by_priority: { high: 2, medium: 9, low: 9 }, flatpak: [{ id: 'org.gimp.GIMP', version: '3.2.7', name: 'GIMP' }], snap: [],
-                    items: [{ id: 'UBUNTU-CVE-2026-32741', cve: 'CVE-2026-32741', package: 'libheif', installed: '1.17.6-1ubuntu4', fixed: '', status: 'unfixed', priority: 'high', cvss: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H', summary: 'Heap buffer overflow when decoding crafted HEIF images', url: 'https://ubuntu.com/security/CVE-2026-32741' }, { id: 'x', cve: 'CVE-2026-54369', package: 'acl', installed: '2.3.2-1build1.1', fixed: '', status: 'unfixed', priority: 'medium', cvss: '', summary: 'Race condition in setfacl', url: '#' }, { id: 'y', cve: 'CVE-2026-63072', package: 'openssl', installed: '3.0.13-0ubuntu3.13', fixed: '3.0.13-0ubuntu3.15', status: 'fix_available', priority: 'medium', cvss: '', summary: 'Heap Buffer Overflow in CMS Key Unwrapping', url: '#' }, { id: 'z', cve: 'CVE-2025-1234', package: 'libxml2', installed: '2.9.14', fixed: '2.9.14+esm1', status: 'pro_only', priority: 'low', cvss: '', summary: 'Use-after-free in xmlXPath', url: '#' }, { id: 'k', cve: 'CVE-2026-64564', package: 'linux-hwe-7.0', installed: '7.0.0-34.34~24.04.1', fixed: '', status: 'kernel_pending', priority: 'critical', cvss: '', summary: 'net: use-after-free in tcp_read_sock', url: '#' }, { id: 'tv', cve: 'CVE-2024-3661', package: 'openvpn', installed: '2.6.19-0ubuntu0.24.04.3', fixed: '', status: 'unfixed', priority: 'high', cvss: 'CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L', summary: 'DHCP can add routes to a client’s routing table via the classless static route option (121). VPN-based security solutions that rely on routes to redirect traffic can be forced to leak traffic over the physical interface.', url: '#', note: 'tunnelvision' }, { id: 'm', cve: 'CVE-2024-9680', package: 'mozjs115', installed: '115.10.0-1', fixed: '', status: 'not_applicable', priority: 'high', cvss: '', summary: 'An attacker was able to achieve code execution in the content process by exploiting a use-after-free in Animation timelines. This vulnerability affects Firefox < 131.0.2', url: '#' }] },
+                vulns: { checked_at: now, ok: true, sources: 1480, counts: { unfixed: 12, pro_only: 3, fix_available: 5, kernel_pending: 3569, not_applicable: 651, na_embedded: 622, na_vendor: 29, acknowledged: 1, acknowledged_cves: 1 }, embedded: { mozjs115: { users: ['cjs', 'polkitd'] } }, vendor: { thunderbird: '1:153.3.1esr+linuxmint1' }, context: { vpn_connections: [] }, running_kernel: { release: '7.0.0-34-generic', source: 'linux-hwe-7.0' }, by_priority: { high: 2, medium: 9, low: 9 }, flatpak: [{ id: 'org.gimp.GIMP', version: '3.2.7', name: 'GIMP' }], snap: [],
+                    items: [{ id: 'UBUNTU-CVE-2026-32741', cve: 'CVE-2026-32741', package: 'libheif', installed: '1.17.6-1ubuntu4', fixed: '', status: 'unfixed', priority: 'high', cvss: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H', summary: 'Heap buffer overflow when decoding crafted HEIF images', url: 'https://ubuntu.com/security/CVE-2026-32741' }, { id: 'x', cve: 'CVE-2026-54369', package: 'acl', installed: '2.3.2-1build1.1', fixed: '', status: 'unfixed', priority: 'medium', cvss: '', summary: 'Race condition in setfacl', url: '#' }, { id: 'x2', cve: 'CVE-2025-9999', package: 'libpng16-16t64', installed: '1.6.43-5build1', fixed: '', status: 'unfixed', priority: 'medium', cvss: '', summary: 'Out-of-bounds read in png_read_chunk (needs a crafted local file)', url: '#', acknowledged: true, acknowledged_at: now }, { id: 'y', cve: 'CVE-2026-63072', package: 'openssl', installed: '3.0.13-0ubuntu3.13', fixed: '3.0.13-0ubuntu3.15', status: 'fix_available', priority: 'medium', cvss: '', summary: 'Heap Buffer Overflow in CMS Key Unwrapping', url: '#' }, { id: 'z', cve: 'CVE-2025-1234', package: 'libxml2', installed: '2.9.14', fixed: '2.9.14+esm1', status: 'pro_only', priority: 'low', cvss: '', summary: 'Use-after-free in xmlXPath', url: '#' }, { id: 'k', cve: 'CVE-2026-64564', package: 'linux-hwe-7.0', installed: '7.0.0-34.34~24.04.1', fixed: '', status: 'kernel_pending', priority: 'critical', cvss: '', summary: 'net: use-after-free in tcp_read_sock', url: '#' }, { id: 'tv', cve: 'CVE-2024-3661', package: 'openvpn', installed: '2.6.19-0ubuntu0.24.04.3', fixed: '', status: 'unfixed', priority: 'high', cvss: 'CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L', summary: 'DHCP can add routes to a client’s routing table via the classless static route option (121). VPN-based security solutions that rely on routes to redirect traffic can be forced to leak traffic over the physical interface.', url: '#', note: 'tunnelvision' }, { id: 'm', cve: 'CVE-2024-9680', package: 'mozjs115', installed: '115.10.0-1', fixed: '', status: 'not_applicable', priority: 'high', cvss: '', summary: 'An attacker was able to achieve code execution in the content process by exploiting a use-after-free in Animation timelines. This vulnerability affects Firefox < 131.0.2', url: '#' }] },
                 integrity: { checked_at: now, warnings: 1, lynis: { index: 64, warnings: [], suggestions: 8, items: [{ test: 'KRNL-6000', text: 'One or more sysctl values differ from the scan profile and could be tweaked', details: 'fs.suid_dumpable 2→0, kernel.kptr_restrict 1→2, kernel.sysrq 176→0' }, { test: 'KRNL-5820', text: 'If not required, consider explicit disabling of core dump in /etc/security/limits.conf file', details: '' }, { test: 'AUTH-9328', text: 'Default umask in /etc/login.defs could be more strict like 027', details: '' }, { test: 'BANN-7126', text: 'Add a legal banner to /etc/issue, to warn unauthorized users', details: '' }, { test: 'PKGS-7410', text: 'Remove any unneeded kernel packages', details: '13 kernels' }, { test: 'PKGS-7420', text: 'Consider using a tool to automatically apply upgrades', details: '' }, { test: 'USB-1000', text: 'Disable drivers like USB storage when not used, to prevent unauthorized storage or data theft', details: '' }, { test: 'LOGG-2190', text: 'Check what deleted files are still in use and why.', details: '' }] },
                     hardening: { applied: { 'BANN-7126': { at: new Date(Date.now() - 3600e3).toISOString(), detail: 'bannières légales dans /etc/issue et /etc/issue.net' }, 'BANN-7130': { at: new Date(Date.now() - 3600e3).toISOString(), detail: '' } }, failed: { 'KRNL-5820': { at: now, detail: 'sysctl: permission denied' } }, running: false, catalog: { 'KRNL-6000': { kind: 'apply' }, 'KRNL-5820': { kind: 'apply' }, 'AUTH-9328': { kind: 'apply', caution: true }, 'BANN-7126': { kind: 'apply' }, 'PKGS-7410': { kind: 'apply', no_revert: true }, 'PKGS-7420': { kind: 'gui', action: 'auto_updates_enable' }, 'USB-1000': { kind: 'skip' }, 'LOGG-2190': { kind: 'manual' } } },
                     tools: { lynis: { installed: true, ran: true, warnings: ['KRNL-5788: Reboot needed'], notes: { 'KRNL-5788: Reboot needed': [{ path: 'KRNL-5788', verdict: 'unknown', reason: 'reboot' }] }, benign: [{ text: 'TIME-3185: systemd-timesyncd did not synchronized the time recently.', notes: [{ path: 'TIME-3185', verdict: 'benign', reason: 'time_synced' }] }] }, chkrootkit: { installed: true, ran: true, warnings: ['WARNING: The following suspicious files and directories were found:\n/usr/lib/debug/.build-id\n/usr/lib/.hidden_loader'], ignored: ['WARNING: crontab for nobody found, possible Lupper.Worm.'], notes: { 'WARNING: The following suspicious files and directories were found:\n/usr/lib/debug/.build-id\n/usr/lib/.hidden_loader': [{ path: '/usr/lib/debug/.build-id', verdict: 'benign', reason: 'dpkg', package: 'libc6-dbg:amd64' }, { path: '/usr/lib/.hidden_loader', verdict: 'unknown', reason: 'unknown' }] }, benign: [{ text: 'WARNING: The following suspicious files and directories were found:\n/usr/lib/modules/7.0.0-34-generic/vdso/.build-id\n/usr/lib/x86_64-linux-gnu/perl/5.38/.packlist\n/usr/lib/node_modules/npm/.npmrc', notes: [{ path: '/usr/lib/modules/7.0.0-34-generic/vdso/.build-id', verdict: 'benign', reason: 'debug' }, { path: '/usr/lib/x86_64-linux-gnu/perl/5.38/.packlist', verdict: 'benign', reason: 'perl' }, { path: '/usr/lib/node_modules/npm/.npmrc', verdict: 'benign', reason: 'dpkg', package: 'npm' }] }] }, debsums: { installed: true, ran: true, warnings: [] } }, app: { available: true, signed: true, verified: true, modified: [], missing: [], count: 27 } },

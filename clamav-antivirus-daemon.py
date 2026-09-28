@@ -1865,6 +1865,47 @@ def annotate_vulns(vulns):
     return vulns
 
 
+VULN_ACK_STATUSES = ("unfixed", "pro_only")
+VULN_ACK_MAX = 20000
+
+
+def apply_vuln_acks(vulns, acks):
+    """« Ignorer » : les CVE approuvées par l'utilisateur ne comptent plus (tray, score, vue simple) mais restent
+    listées dans une section repliée. Recalcule les compteurs et la répartition par priorité à partir des éléments."""
+    out = dict(vulns or {})
+    acks = acks or {}
+    items = []
+    counts = dict(out.get("counts") or {})
+    for k in ("unfixed", "pro_only", "fix_available", "acknowledged"):
+        counts[k] = 0
+    by_priority = {}
+    acked_cves = set()
+    for it in out.get("items") or []:
+        it = dict(it)
+        acked = it.get("status") in VULN_ACK_STATUSES and (it.get("cve") or it.get("id")) in acks
+        it["acknowledged"] = acked
+        if acked:
+            it["acknowledged_at"] = (acks.get(it.get("cve") or it.get("id")) or {}).get("at")
+            acked_cves.add(it.get("cve") or it.get("id"))
+        else:
+            it.pop("acknowledged_at", None)
+        items.append(it)
+        if it.get("dormant"):
+            continue
+        if acked:
+            counts["acknowledged"] += 1
+            continue
+        st = it.get("status")
+        if st in ("unfixed", "pro_only", "fix_available"):
+            counts[st] += 1
+        if st not in ("kernel_pending", "not_applicable"):
+            pr = it.get("priority") or "untriaged"
+            by_priority[pr] = by_priority.get(pr, 0) + 1
+    counts["acknowledged_cves"] = len(acked_cves)
+    out.update(items=items, counts=counts, by_priority=by_priority)
+    return out
+
+
 def reclassify_vulns(vulns):
     """Relevé enregistré par une version précédente : applique la classification « non applicable » (moteur intégré)
     sans réseau, au démarrage, pour que l'affichage soit juste tout de suite."""
@@ -2213,7 +2254,8 @@ def collect_checklist(daemon):
     # Failles ouvertes
     counts = vulns.get("counts") or {}
     high = len({it.get("cve") or it.get("id") for it in vulns.get("items", [])
-                if it.get("status") == "unfixed" and it.get("priority") in ("critical", "high")})   # CVE distinctes
+                if it.get("status") == "unfixed" and it.get("priority") in ("critical", "high")
+                and not it.get("acknowledged")})   # CVE distinctes, hors failles ignorées par l'utilisateur
     add("open_vulns", "unknown" if not vulns else ("ok" if not high else "warn"), 6,
         f"{counts.get('unfixed', 0)} unfixed, {high} high/critical")
     # Persistance inconnue
@@ -3145,8 +3187,12 @@ class Daemon:
         try:
             stored_vulns = self.state.get("vulns") or {}
             if stored_vulns.get("items") and ("na_vendor" not in (stored_vulns.get("counts") or {}) or "context" not in stored_vulns):
-                self.state.update(vulns=reclassify_vulns(stored_vulns))
+                stored_vulns = reclassify_vulns(stored_vulns)
                 log("Failles : relevé reclassé (moteur JavaScript intégré)")
+            if stored_vulns.get("items") and (self.state.get("acknowledged_vulns") or "acknowledged" not in (stored_vulns.get("counts") or {})):
+                stored_vulns = apply_vuln_acks(stored_vulns, self.state.get("acknowledged_vulns") or {})
+            if stored_vulns is not (self.state.get("vulns") or {}):
+                self.state.update(vulns=stored_vulns)
         except Exception as e:  # noqa: BLE001
             log(f"Reclassement des failles : {e}")
         self.apply_policy(startup=True)
@@ -4359,7 +4405,7 @@ class Daemon:
                 except Exception as e:  # noqa: BLE001
                     log(f"Taille du système : {e}")
             # Failles ouvertes
-            vulns = collect_vulnerabilities(self.state.get("vulns"))
+            vulns = apply_vuln_acks(collect_vulnerabilities(self.state.get("vulns")), self.state.get("acknowledged_vulns") or {})
             self.state.update(vulns=vulns)
             self.broadcast({"event": "vulns", "vulns": self.public_vulns(vulns)})
             log(f"Failles : {vulns['counts']} ({vulns['sources']} paquets sources)")
@@ -4778,7 +4824,7 @@ class Daemon:
         vulns = self.state.get("vulns") or {}
         high = {}
         for it in vulns.get("items") or []:
-            if it.get("status") == "unfixed" and it.get("priority") in ("critical", "high"):
+            if it.get("status") == "unfixed" and it.get("priority") in ("critical", "high") and not it.get("acknowledged"):
                 high[it.get("package") or "?"] = high.get(it.get("package") or "?", 0) + 1
         history = self.state.get("history") or []
         last = next((h for h in history if not h.get("usb")), None) or {}
@@ -4798,6 +4844,7 @@ class Daemon:
             "lynis_index": (integ.get("lynis") or {}).get("index"),
             "hardening": {"applied": sorted(hard.get("applied") or {})[:40], "failed": len(hard.get("failed") or {})},
             "vulns_high": dict(sorted(high.items(), key=lambda kv: -kv[1])[:20]),
+            "vulns_acknowledged": (vulns.get("counts") or {}).get("acknowledged_cves") or 0,
             "scan": {k: last.get(k) for k in ("duration", "files", "cached", "skipped", "engine", "infected", "status", "auto")} if last else None,
             "usb_scans_30d": usb30,
             "known_networks": len(self.state.get("network_profiles") or {}),
@@ -4999,7 +5046,7 @@ class Daemon:
                    "install_phased", "install_package"):
             return True
         if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence", "acknowledge_integrity",
-                   "system_upgrade", "harden_apply", "forget_network"):
+                   "acknowledge_vuln", "system_upgrade", "harden_apply", "forget_network"):
             return bool(self.settings.get("family_mode"))
         return False
 
@@ -5593,6 +5640,45 @@ class Daemon:
             self.broadcast({"event": "integrity", "integrity": self.integrity_payload()})
             self.refresh_overall()
             return {"ok": True, "key": key}
+
+        if cmd == "acknowledge_vuln":
+            # « Ignorer » une ou plusieurs failles sans correctif (par CVE, tous paquets confondus) ; remove les réaffiche
+            vulns = self.state.get("vulns") or {}
+            acks = dict(self.state.get("acknowledged_vulns") or {})
+            wanted = req.get("cves")
+            if req.get("all_open"):
+                wanted = [it.get("cve") or it.get("id") for it in vulns.get("items") or []
+                          if it.get("status") in VULN_ACK_STATUSES and not it.get("dormant")]
+            if not isinstance(wanted, list):
+                wanted = [req.get("cve")]
+            cves = []
+            for c in wanted[:VULN_ACK_MAX]:
+                c = str(c or "").strip()[:64]
+                if re.match(r"^[A-Za-z0-9._:-]{4,64}$", c) and c not in cves:
+                    cves.append(c)
+            if not cves:
+                return {"ok": False, "error": "invalid_key"}
+            remove = bool(req.get("remove"))
+            if remove:
+                for c in cves:
+                    acks.pop(c, None)
+            else:
+                pkgs = {}
+                for it in vulns.get("items") or []:
+                    if it.get("status") in VULN_ACK_STATUSES:
+                        pkgs.setdefault(it.get("cve") or it.get("id"), set()).add(it.get("package") or "")
+                now = now_iso()
+                for c in cves:
+                    acks[c] = {"at": now, "packages": sorted(pkgs.get(c) or [])[:20]}
+                if len(acks) > VULN_ACK_MAX:
+                    acks = dict(sorted(acks.items(), key=lambda kv: kv[1].get("at") or "")[-VULN_ACK_MAX:])
+            self.state.update(acknowledged_vulns=acks)
+            vulns = apply_vuln_acks(vulns, acks)
+            self.state.update(vulns=vulns)
+            self.write_log(f"{len(cves)} vulnerability(ies) {'re-enabled' if remove else 'acknowledged'}: {', '.join(cves[:8])}{'…' if len(cves) > 8 else ''}")
+            self.broadcast({"event": "vulns", "vulns": self.public_vulns(vulns)})
+            self.refresh_overall()
+            return {"ok": True, "count": len(cves), "acknowledged": (vulns.get("counts") or {}).get("acknowledged_cves") or 0}
 
         if cmd == "acknowledge_persistence":
             key = str(req.get("key") or "")[:500]

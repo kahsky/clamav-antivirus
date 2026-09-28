@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.17.2 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.18.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -826,12 +826,15 @@
                         <option value="all" data-i18n="security.vulns.prio.all">Toutes les priorités</option>
                     </select></label>
                     <span class="text-muted" id="vulnHidden"></span>
+                    <button class="btn btn-secondary btn-sm vuln-ack-all" id="vulnAckAll" onclick="ackAllVulns()" hidden>Tout ignorer</button>
                 </div>
+                <p class="text-muted alerts-intro" data-i18n="security.vulns.ack_intro">Une faille sans correctif que vous jugez sans importance pour vous peut être ignorée : elle ne compte plus dans la couleur du bouclier, le score ni la vue simple, et reste consultable dans « Failles ignorées ». Les nouvelles failles publiées ensuite sont toujours affichées.</p>
                 <p class="text-muted alerts-intro hwe-note" id="vulnHweNote" hidden></p>
                 <p class="text-muted alerts-intro" id="vulnKernelNote" hidden></p>
                 <p class="text-muted alerts-intro" id="vulnNaNote" hidden></p>
                 <p class="text-muted alerts-intro" id="vulnVendorNote" hidden></p>
                 <div id="vulnList" class="vuln-list"><p class="text-muted" data-i18n="security.vulns.none_yet">Inventaire pas encore effectué.</p></div>
+                <div id="vulnAcked" class="vuln-acked" hidden></div>
                 <div id="storeUpdates" class="store-updates"></div>
             </div>
 
