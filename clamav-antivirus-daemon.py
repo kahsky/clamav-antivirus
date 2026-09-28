@@ -4611,7 +4611,9 @@ class Daemon:
         if cmd == "firewall_set":
             return not req.get("enabled")
         if cmd == "firewall_profile":
-            return req.get("profile") in ("home", "enterprise")   # ils ouvrent des ports au réseau local ; Public : libre
+            # L'utilisateur sait sur quel réseau il est : le service applique le profil sans mot de passe
+            # (sauf en mode famille, où les actions sensibles restent réservées à un administrateur).
+            return bool(self.settings.get("family_mode"))
         if cmd in ("timeshift_disable", "harden_revert"):
             return True
         if cmd == "ssh_set":
