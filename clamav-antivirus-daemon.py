@@ -2122,6 +2122,20 @@ def debsums_verified_paths(failed_lines):
     return verified
 
 
+INTEGRITY_TOOLS = {"lynis": "lynis", "unhide": "unhide", "unhide-tcp": "unhide-tcp", "chkrootkit": "chkrootkit", "debsums": "debsums"}
+
+
+def integrity_tools_now():
+    """Disponibilité actuelle des outils d'intégrité (indépendante du dernier relevé mémorisé)."""
+    return {name: shutil.which(cmd) is not None for name, cmd in INTEGRITY_TOOLS.items()}
+
+
+def with_tools_now(integrity):
+    out = dict(integrity or {})
+    out["tools_now"] = integrity_tools_now()
+    return out
+
+
 def parse_lynis_report(path="/var/log/lynis-report.dat"):
     """Rapport Lynis : indice de durcissement (0-100), avertissements, nombre de suggestions."""
     rep = {"index": None, "warnings": [], "suggestions": 0, "tests": None, "version": ""}
@@ -2858,6 +2872,11 @@ class Daemon:
                 self.connections.load_blocklist(refresh=True)
             except Exception as e:  # noqa: BLE001
                 log(f"Blocklist : {e}")
+            # Vérification d'intégrité : jamais faite, ou faite avec une autre liste d'outils (mise à jour de l'application)
+            stored = self.state.get("integrity") or {}
+            if os.geteuid() == 0 and not self.integrity_running and set((stored.get("tools") or {}).keys()) != set(INTEGRITY_TOOLS):
+                log("Vérification d'intégrité relancée (outils modifiés)")
+                threading.Thread(target=self.run_integrity, daemon=True).start()
             # Liste blanche centrale (signée), politique d'entreprise, télémétrie opt-in
             try:
                 self.refresh_central_allowlist()
@@ -2905,7 +2924,7 @@ class Daemon:
                                     [n for n, t in result["tools"].items() if t["warnings"]] +
                                     (["app"] if result["app"]["modified"] or result["app"]["missing"] else [])),
                                 "pid": 0, "comm": "", "exe": "", "count": 0, "top_dir": "", "reasons": [], "sample": []})
-        self.broadcast({"event": "integrity", "integrity": result, "after_scan": after_scan})
+        self.broadcast({"event": "integrity", "integrity": with_tools_now(result), "after_scan": after_scan})
         self.refresh_overall()
 
     def run_integrity(self, after_scan=False):
@@ -3436,8 +3455,8 @@ class Daemon:
                 started = not self.integrity_running
                 if started:
                     threading.Thread(target=self.run_integrity, daemon=True).start()
-                return {"ok": True, "running": True, "started": started, "integrity": self.state.get("integrity")}
-            return {"ok": True, "running": self.integrity_running, "integrity": self.state.get("integrity")}
+                return {"ok": True, "running": True, "started": started, "integrity": with_tools_now(self.state.get("integrity"))}
+            return {"ok": True, "running": self.integrity_running, "integrity": with_tools_now(self.state.get("integrity"))}
 
         if cmd == "backup_status":
             return {"ok": True, "timeshift": self.refresh_backup(force=bool(req.get("refresh")))}

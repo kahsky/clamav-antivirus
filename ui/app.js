@@ -464,16 +464,21 @@ function renderIntegrity(running = false) {
     $('btnIntegrityRun').disabled = !!running;
     if (!it || !it.checked_at) { $('integrityList').innerHTML = `<p class="text-muted">${running ? t('security.integrity.running') : t('security.integrity.none_yet')}</p>`; $('btnInstallTools').hidden = true; return; }
     const tools = it.tools || {};
-    const missing = Object.keys(tools).filter(k => !tools[k].installed);
+    const now = it.tools_now || null;                      // disponibilité actuelle des outils (indépendante du relevé)
+    const names = now ? Object.keys(now) : Object.keys(tools);
+    const missing = names.filter(k => now ? !now[k] : !(tools[k] && tools[k].installed));
     $('btnInstallTools').hidden = !missing.length;
     let html = `<div class="text-muted">${t('system.checked', { date: formatDateTime(it.checked_at), rel: formatRelative(it.checked_at) })}</div>`;
     if (it.lynis && it.lynis.index != null) {
         const st = it.lynis.index >= 65 ? 'ok' : it.lynis.index >= 45 ? 'warn' : 'fail';
         html += `<div class="check-item check-${st}"><span class="check-icon">${st === 'ok' ? '✓' : '!'}</span><div class="check-text"><span class="check-title">${t('security.integrity.lynis', { index: it.lynis.index })}</span><span class="check-detail">${t('security.integrity.lynis_detail', { warnings: (it.lynis.warnings || []).length, suggestions: it.lynis.suggestions || 0 })}</span></div></div>`;
     }
-    for (const [name, tl] of Object.entries(tools)) {
-        const st = !tl.installed ? 'unknown' : (tl.warnings || []).length ? 'warn' : 'ok';
-        html += `<div class="check-item check-${st}"><span class="check-icon">${st === 'ok' ? '✓' : st === 'warn' ? '!' : '?'}</span><div class="check-text"><span class="check-title">${escapeHtml(name)}</span><span class="check-detail">${!tl.installed ? t('security.integrity.not_installed') : (tl.warnings || []).length ? t('security.integrity.warnings', { n: tl.warnings.length }) : t('security.integrity.clean')}</span>${(tl.warnings || []).length ? `<details class="alert-sample"><summary>${t('popup.btn.details')}</summary>${tl.warnings.map(w => `<div>${escapeHtml(w)}</div>`).join('')}</details>` : ''}</div></div>`;
+    for (const name of names) {
+        const tl = tools[name] || {};
+        const installedNow = now ? !!now[name] : !!tl.installed;
+        const pending = installedNow && !tl.ran;              // installé depuis le dernier relevé, pas encore vérifié
+        const st = !installedNow ? 'unknown' : pending ? 'neutral' : (tl.warnings || []).length ? 'warn' : 'ok';
+        html += `<div class="check-item check-${st}"><span class="check-icon">${st === 'ok' ? '✓' : st === 'warn' ? '!' : st === 'neutral' ? '…' : '?'}</span><div class="check-text"><span class="check-title">${escapeHtml(name)}</span><span class="check-detail">${!installedNow ? t('security.integrity.not_installed') : pending ? t('security.integrity.pending') : (tl.warnings || []).length ? t('security.integrity.warnings', { n: tl.warnings.length }) : t('security.integrity.clean')}</span>${(tl.warnings || []).length ? `<details class="alert-sample"><summary>${t('popup.btn.details')}</summary>${tl.warnings.map(w => `<div>${escapeHtml(w)}</div>`).join('')}</details>` : ''}</div></div>`;
     }
     const app = it.app || {};
     const appSt = !app.available ? 'unknown' : (app.modified || []).length || (app.missing || []).length ? 'fail' : 'ok';
