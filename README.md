@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.18.0)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.18.1)
 
 ---
 
@@ -144,6 +144,10 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   le nom du fichier et son dossier d'origine (index alimenté par les lignes « moved to » de clamdscan/clamscan,
   côté service et côté scan local) ; les confirmations (suppression, vidage, pare-feu, journaux) passent par
   une modale dans le thème de l'application, plus jamais par `confirm()` natif.
+- **Ports ouverts ignorés** — « Ignorer » sur le point « Ports ouverts » de la checklist et sur chaque port joignable
+  de la liste « Ports en écoute » (clé port/protocole/programme) : un serveur web de développement voulu ne compte
+  plus dans le score ni les points à corriger ; badge « ignoré par vous » et « Réafficher » ; un autre programme sur
+  le même port est de nouveau signalé.
 - **Failles ignorées** — bouton « Ignorer » sur chaque faille sans correctif (ou Ubuntu Pro) et « Tout ignorer »
   sur la liste affichée : la CVE, tous paquets confondus, ne compte plus dans la couleur du bouclier, le score ni la
   vue simple ; section repliée « Failles ignorées » avec « Réafficher » ; les nouvelles CVE publiées ensuite restent
@@ -299,7 +303,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.18.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.18.0_all.deb)
+[Télécharger clamav-antivirus_1.18.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.18.1_all.deb)
 
 ---
 
@@ -330,12 +334,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.18.0_all.deb`
+Résultat : `clamav-antivirus_1.18.1_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.18.0_all.deb
+sudo dpkg -i clamav-antivirus_1.18.1_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

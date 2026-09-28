@@ -440,7 +440,7 @@ function renderChecklist() {
                 <span class="check-title">${t(`check.${i.key}.title`)}</span>
                 <span class="check-detail">${i.extras ? t('check.auto_updates.extras', { list: checkExtrasText(i.extras) }) : t(`check.${i.key}.${i.status === 'ok' ? 'ok' : 'hint'}`)}${i.detail_key ? ` — ${escapeHtml(t(i.detail_key, i.detail_params || {}))}` : i.detail ? ` — ${escapeHtml(i.detail)}` : ''}</span>
             </div>
-            ${i.status !== 'ok' && i.status !== 'na' ? `<button class="btn ${i.status === 'fail' ? 'btn-danger' : 'btn-secondary'} btn-sm check-fix-btn" onclick="fixCheck('${escapeJs(i.key)}')">${CHECK_FIX_LABEL[i.key] ? t(CHECK_FIX_LABEL[i.key]) : CHECK_FIX[i.key] ? t('security.fix') : t('security.fix.how')}</button>` : ''}
+            ${i.status !== 'ok' && i.status !== 'na' ? `<span class="check-actions">${CHECK_ACK[i.key] ? `<button class="btn btn-secondary btn-sm" onclick="CHECK_ACK['${escapeJs(i.key)}']()" title="${escapeHtml(t('security.ignore_hint'))}">${t('security.ignore')}</button>` : ''}<button class="btn ${i.status === 'fail' ? 'btn-danger' : 'btn-secondary'} btn-sm check-fix-btn" onclick="fixCheck('${escapeJs(i.key)}')">${CHECK_FIX_LABEL[i.key] ? t(CHECK_FIX_LABEL[i.key]) : CHECK_FIX[i.key] ? t('security.fix') : t('security.fix.how')}</button></span>` : ''}
             <span class="check-weight">${i.weight}</span>
             ${t(`check.${i.key}.fix`) !== `check.${i.key}.fix` ? `<div class="check-fix" id="fix-${escapeHtml(i.key)}" hidden>${escapeHtml(t(`check.${i.key}.fix`))}</div>` : ''}
         </div>`).join('');
@@ -449,12 +449,14 @@ function renderChecklist() {
         const v = p.verdict || (p.exposed ? 'reachable' : 'local');
         const hintKey = p.service ? `ports.hint.${p.service}` : `ports.hint.proc.${p.process || ''}`;
         const hint = t(hintKey) !== hintKey ? t(hintKey) : t('ports.hint.generic', { proc: p.process || '?' });
-        return `<div class="port-item verdict-${v}">
+        const key = p.key || `${p.port}/${p.proto}:${p.process || p.service || ''}`;
+        return `<div class="port-item verdict-${v}${p.acknowledged ? ' acked' : ''}">
             <span class="rule-to">${p.port}/${escapeHtml(p.proto)}</span>
             <span class="port-proc">${escapeHtml(p.process || p.service || '')}</span>
             <span class="rule-from">${escapeHtml(p.addr)}</span>
-            <span class="scope-badge ${v === 'reachable' ? 'scope-danger' : v === 'filtered' ? 'scope-phased' : 'scope-user'}">${t(`ports.verdict.${v}`)}</span>
-            ${v === 'reachable' ? `<button class="btn btn-secondary btn-sm" onclick="firewallQuickDeny(${Number(p.port)}, '${escapeJs(p.proto)}')">${t('ports.block')}</button>` : ''}
+            <span class="scope-badge ${p.acknowledged ? 'scope-user' : v === 'reachable' ? 'scope-danger' : v === 'filtered' ? 'scope-phased' : 'scope-user'}">${p.acknowledged ? t('ports.acked_badge') : t(`ports.verdict.${v}`)}</span>
+            ${p.acknowledged ? `<span class="port-actions"><button class="btn btn-secondary btn-sm" onclick="ackPort('${escapeJs(key)}', true)">${t('ports.unack')}</button></span>`
+            : v === 'reachable' ? `<span class="port-actions"><button class="btn btn-secondary btn-sm" onclick="ackPort('${escapeJs(key)}')" title="${escapeHtml(t('ports.ack_hint'))}">${t('ports.ack')}</button><button class="btn btn-secondary btn-sm" onclick="firewallQuickDeny(${Number(p.port)}, '${escapeJs(p.proto)}')">${t('ports.block')}</button></span>` : ''}
             <span class="port-hint">${escapeHtml(hint)}</span>
         </div>`;
     }).join('') : `<p class="text-muted">${t('security.ports.none')}</p>`);
@@ -2426,6 +2428,18 @@ function simulateBackend(data) {
         case 'acknowledge_integrity':
             reply('operationResult', { status: 'success', message: t(data.remove ? 'msg.integrity_unacknowledged' : 'msg.integrity_acknowledged') });
             break;
+        case 'acknowledge_port': {
+            const c = secData.checklist; const set = new Set(data.keys || []);
+            if (c) {
+                for (const p of c.ports || []) { const k = p.key || `${p.port}/${p.proto}:${p.process || p.service || ''}`; if (set.has(k)) p.acknowledged = !data.remove; }
+                const open = (c.ports || []).filter(p => (p.verdict || (p.exposed ? 'reachable' : 'local')) === 'reachable' && !p.acknowledged);
+                const it = (c.items || []).find(i => i.key === 'open_ports');
+                if (it) { it.status = open.length ? 'warn' : 'ok'; it.detail = open.map(p => `${p.port}/${p.proto} ${p.process || ''}`).join(', '); if (!open.length) { it.detail_key = 'check.open_ports.acknowledged'; it.detail_params = { n: (c.ports || []).filter(p => p.acknowledged).length }; } else { delete it.detail_key; } }
+                renderChecklist();
+            }
+            reply('operationResult', { status: 'success', message: t(data.remove ? 'msg.ports_unacknowledged' : 'msg.ports_acknowledged', { n: set.size }) });
+            break;
+        }
         case 'acknowledge_vuln': {
             const v = secData.vulns; const set = new Set(data.cves || []);
             if (v) {
@@ -2486,7 +2500,7 @@ function simulateBackend(data) {
                 break;
             }
             const sim = {
-                checklist: { checked_at: now, score: 78, grade: 'B', ports: [{ proto: 'tcp', addr: '0.0.0.0', port: 22, process: 'sshd', service: 'ssh', exposed: true }, { proto: 'tcp', addr: '127.0.0.1', port: 631, process: 'cupsd', service: 'cups', exposed: false }],
+                checklist: { checked_at: now, score: 78, grade: 'B', ports: [{ proto: 'tcp', addr: '0.0.0.0', port: 22, process: 'sshd', service: 'ssh', exposed: true, verdict: 'reachable', key: '22/tcp:sshd' }, { proto: 'tcp', addr: '0.0.0.0', port: 80, process: 'apache2', service: 'http', exposed: true, verdict: 'reachable', key: '80/tcp:apache2', acknowledged: true }, { proto: 'tcp', addr: '127.0.0.1', port: 631, process: 'cupsd', service: 'cups', exposed: false, verdict: 'local', key: '631/tcp:cupsd' }],
                     items: [{ key: 'firewall', status: 'ok', weight: 15, detail: 'deny/allow' }, { key: 'disk_encryption', status: 'warn', weight: 8, detail: '' }, { key: 'secure_boot', status: 'ok', weight: 5 }, { key: 'apparmor', status: 'ok', weight: 6 }, { key: 'auto_updates', status: 'warn', weight: 6 }, { key: 'security_updates', status: 'fail', weight: 12, detail: '2' }, { key: 'empty_passwords', status: 'ok', weight: 10 }, { key: 'nopasswd_sudo', status: 'ok', weight: 5 }, { key: 'open_ports', status: 'warn', weight: 8, detail: '22/tcp sshd' }, { key: 'signatures', status: 'ok', weight: 8, detail: '0 d' }, { key: 'realtime', status: 'ok', weight: 6 }, { key: 'open_vulns', status: 'warn', weight: 6, detail: '12 unfixed, 2 high/critical' }] },
                 vulns: { checked_at: now, ok: true, sources: 1480, counts: { unfixed: 12, pro_only: 3, fix_available: 5, kernel_pending: 3569, not_applicable: 651, na_embedded: 622, na_vendor: 29, acknowledged: 1, acknowledged_cves: 1 }, embedded: { mozjs115: { users: ['cjs', 'polkitd'] } }, vendor: { thunderbird: '1:153.3.1esr+linuxmint1' }, context: { vpn_connections: [] }, running_kernel: { release: '7.0.0-34-generic', source: 'linux-hwe-7.0' }, by_priority: { high: 2, medium: 9, low: 9 }, flatpak: [{ id: 'org.gimp.GIMP', version: '3.2.7', name: 'GIMP' }], snap: [],
                     items: [{ id: 'UBUNTU-CVE-2026-32741', cve: 'CVE-2026-32741', package: 'libheif', installed: '1.17.6-1ubuntu4', fixed: '', status: 'unfixed', priority: 'high', cvss: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H', summary: 'Heap buffer overflow when decoding crafted HEIF images', url: 'https://ubuntu.com/security/CVE-2026-32741' }, { id: 'x', cve: 'CVE-2026-54369', package: 'acl', installed: '2.3.2-1build1.1', fixed: '', status: 'unfixed', priority: 'medium', cvss: '', summary: 'Race condition in setfacl', url: '#' }, { id: 'x2', cve: 'CVE-2025-9999', package: 'libpng16-16t64', installed: '1.6.43-5build1', fixed: '', status: 'unfixed', priority: 'medium', cvss: '', summary: 'Out-of-bounds read in png_read_chunk (needs a crafted local file)', url: '#', acknowledged: true, acknowledged_at: now }, { id: 'y', cve: 'CVE-2026-63072', package: 'openssl', installed: '3.0.13-0ubuntu3.13', fixed: '3.0.13-0ubuntu3.15', status: 'fix_available', priority: 'medium', cvss: '', summary: 'Heap Buffer Overflow in CMS Key Unwrapping', url: '#' }, { id: 'z', cve: 'CVE-2025-1234', package: 'libxml2', installed: '2.9.14', fixed: '2.9.14+esm1', status: 'pro_only', priority: 'low', cvss: '', summary: 'Use-after-free in xmlXPath', url: '#' }, { id: 'k', cve: 'CVE-2026-64564', package: 'linux-hwe-7.0', installed: '7.0.0-34.34~24.04.1', fixed: '', status: 'kernel_pending', priority: 'critical', cvss: '', summary: 'net: use-after-free in tcp_read_sock', url: '#' }, { id: 'tv', cve: 'CVE-2024-3661', package: 'openvpn', installed: '2.6.19-0ubuntu0.24.04.3', fixed: '', status: 'unfixed', priority: 'high', cvss: 'CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L', summary: 'DHCP can add routes to a client’s routing table via the classless static route option (121). VPN-based security solutions that rely on routes to redirect traffic can be forced to leak traffic over the physical interface.', url: '#', note: 'tunnelvision' }, { id: 'm', cve: 'CVE-2024-9680', package: 'mozjs115', installed: '115.10.0-1', fixed: '', status: 'not_applicable', priority: 'high', cvss: '', summary: 'An attacker was able to achieve code execution in the content process by exploiting a use-after-free in Animation timelines. This vulnerability affects Firefox < 131.0.2', url: '#' }] },
@@ -2863,6 +2877,23 @@ const CHECK_FIX = {
 
 // Libellé du bouton quand l'application règle elle-même (sinon « Régler » / « Comment faire »)
 const CHECK_FIX_LABEL = { auto_updates: 'check.auto_updates.action' };
+
+/** Contrôles que l'utilisateur peut ignorer en connaissance de cause (« Ignorer ») : ports ouverts voulus (développement web…). */
+const CHECK_ACK = { open_ports: () => ackAllPorts() };
+
+// ─── Ports joignables voulus : ignorés par port+programme, ne comptent plus dans la checklist ni le score ───
+function ackPort(key, remove = false) {
+    if (key) sendToBackend({ action: 'acknowledge_port', keys: [key], remove });
+}
+
+async function ackAllPorts() {
+    const c = secData.checklist || {};
+    const open = (c.ports || []).filter(p => (p.verdict || (p.exposed ? 'reachable' : 'local')) === 'reachable' && !p.acknowledged);
+    if (!open.length) { openPortsPanel(); return; }
+    const list = open.map(p => `${p.port}/${p.proto} ${p.process || p.service || ''}`.trim()).join(', ');
+    const ok = await appConfirm({ title: t('ports.ack_all_title', { n: open.length }), message: t('ports.ack_all_msg', { list }), ok: t('security.ignore') });
+    if (ok) sendToBackend({ action: 'acknowledge_port', keys: open.map(p => p.key || `${p.port}/${p.proto}:${p.process || p.service || ''}`) });
+}
 
 /** Compléments d'un contrôle gérés côté utilisateur (Spices Cinnamon, Flatpak) qui ne sont pas encore automatiques. */
 function checkExtrasMissing(key) {

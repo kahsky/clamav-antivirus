@@ -1899,6 +1899,29 @@ class ClamAVAntivirusApp:
             return False
         self.run_admin("acknowledge_integrity", {"tool": str(data.get("tool") or ""), "text": str(data.get("text") or ""), "remove": remove}, done)
 
+    def act_acknowledge_port(self, data):
+        """« Ignorer » un port joignable voulu (ou le réafficher avec remove) : la checklist ne le compte plus."""
+        remove = bool(data.get("remove"))
+        params = {"remove": remove}
+        if data.get("all_reachable"):
+            params["all_reachable"] = True
+        else:
+            keys = data.get("keys") if isinstance(data.get("keys"), list) else [data.get("key")]
+            params["keys"] = [str(k) for k in keys if k][:200]
+
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "security",
+                                                    "message": self.T("msg.ports_unacknowledged" if remove else "msg.ports_acknowledged", n=resp.get("count") or 0)})
+                if isinstance(resp.get("checklist"), dict):
+                    self.send_to_js("securityData", {"type": "checklist", "data": resp["checklist"], "available": True})
+                else:
+                    self.act_get_security_data({"type": "checklist"})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("acknowledge_port", params, done)
+
     def act_acknowledge_persistence(self, data):
         remove = bool(data.get("remove"))
 

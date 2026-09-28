@@ -2954,3 +2954,10 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .acked-vulns .cve-item, .acked-vulns .cve-item div, .acked-vulns .cve-item .cve-title { font-family: inherit; font-size: 13px; color: var(--text-secondary); }
 .acked-vulns .cve-item .cve-id { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; }
 .acked-vulns > summary { cursor: pointer; }
+
+/* ── v1.18.1 : ports ignorés ── */
+.check-item .check-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+.check-item .check-actions .check-fix-btn { margin-left: 0; }
+.ports-list .port-item .port-actions { margin-left: auto; display: flex; gap: 6px; }
+.ports-list .port-item .port-actions .btn-sm { margin-left: 0; }
+.port-item.acked { opacity: 0.8; border-color: rgba(148,163,184,0.3); }

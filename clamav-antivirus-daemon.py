@@ -2098,6 +2098,12 @@ def ufw_port_allowed(rules, port, proto):
     return False
 
 
+def port_key(p):
+    """Clé d'un port à l'écoute pour « Ignorer » : port, protocole et programme (un autre programme sur le même port
+    est de nouveau signalé)."""
+    return f"{p.get('port')}/{p.get('proto')}:{p.get('process') or p.get('service') or ''}"
+
+
 def listening_ports():
     r = run_quiet(["ss", "-tulnpH"], timeout=15)
     ports = []
@@ -2228,11 +2234,18 @@ def collect_checklist(daemon):
             p["verdict"] = "filtered"           # à l'écoute, mais bloqué par le pare-feu : injoignable depuis le réseau
         else:
             p["verdict"] = "reachable"
-    exposed = [p for p in ports if p["verdict"] == "reachable" and p["port"] not in (5353, 68, 546, 67)]
+    acks = daemon.state.get("acknowledged_ports") or {}
+    for p in ports:
+        p["key"] = port_key(p)
+        p["acknowledged"] = p["verdict"] == "reachable" and p["key"] in acks     # « Ignorer » : port voulu (développement web…)
+    exposed = [p for p in ports if p["verdict"] == "reachable" and not p["acknowledged"] and p["port"] not in (5353, 68, 546, 67)]
+    acknowledged = [p for p in ports if p["acknowledged"]]
     filtered = [p for p in ports if p["verdict"] == "filtered"]
     add("open_ports", "ok" if not exposed else ("warn" if ufw.get("active") else "fail"), 8,
         ", ".join(f"{p['port']}/{p['proto']} {p['process'] or p['service']}".strip() for p in exposed[:8]))
-    if not exposed and filtered:
+    if not exposed and acknowledged:
+        items[-1].update(detail_key="check.open_ports.acknowledged", detail_params={"n": len(acknowledged)})
+    elif not exposed and filtered:
         items[-1].update(detail_key="check.open_ports.filtered", detail_params={"n": len(filtered)})
     # Services exposés courants (joignables)
     exposed_services = sorted({p["service"] or p["process"] for p in exposed if p["port"] in (139, 445, 631, 5900, 5901, 3389, 3306, 5432, 27017)})
@@ -5046,7 +5059,7 @@ class Daemon:
                    "install_phased", "install_package"):
             return True
         if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence", "acknowledge_integrity",
-                   "acknowledge_vuln", "system_upgrade", "harden_apply", "forget_network"):
+                   "acknowledge_vuln", "acknowledge_port", "system_upgrade", "harden_apply", "forget_network"):
             return bool(self.settings.get("family_mode"))
         return False
 
@@ -5679,6 +5692,37 @@ class Daemon:
             self.broadcast({"event": "vulns", "vulns": self.public_vulns(vulns)})
             self.refresh_overall()
             return {"ok": True, "count": len(cves), "acknowledged": (vulns.get("counts") or {}).get("acknowledged_cves") or 0}
+
+        if cmd == "acknowledge_port":
+            # « Ignorer » un port joignable voulu (serveur web de développement…) : ne compte plus dans la checklist
+            acks = dict(self.state.get("acknowledged_ports") or {})
+            ports = (self.state.get("checklist") or {}).get("ports") or []
+            wanted = req.get("keys")
+            if req.get("all_reachable"):
+                wanted = [p.get("key") or port_key(p) for p in ports if p.get("verdict") == "reachable"]
+            if not isinstance(wanted, list):
+                wanted = [req.get("key")]
+            keys = []
+            for k in wanted[:200]:
+                k = str(k or "").strip()[:120]
+                if re.match(r"^\d{1,5}/(tcp|udp):[A-Za-z0-9._+@ -]{0,80}$", k) and k not in keys:
+                    keys.append(k)
+            if not keys:
+                return {"ok": False, "error": "invalid_key"}
+            remove = bool(req.get("remove"))
+            if remove:
+                for k in keys:
+                    acks.pop(k, None)
+            else:
+                now = now_iso()
+                for k in keys:
+                    acks[k] = {"at": now}
+                if len(acks) > 500:
+                    acks = dict(sorted(acks.items(), key=lambda kv: kv[1].get("at") or "")[-500:])
+            self.state.update(acknowledged_ports=acks)
+            self.write_log(f"{len(keys)} listening port(s) {'re-enabled' if remove else 'acknowledged'}: {', '.join(keys[:8])}")
+            checklist = self.refresh_checklist()
+            return {"ok": True, "count": len(keys), "checklist": checklist}
 
         if cmd == "acknowledge_persistence":
             key = str(req.get("key") or "")[:500]
