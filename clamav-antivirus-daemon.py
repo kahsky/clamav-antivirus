@@ -1812,6 +1812,33 @@ def embedded_engine_users(binaries):
     return sorted(users or direct)[:12]
 
 
+def reclassify_vulns(vulns):
+    """Relevé enregistré par une version précédente : applique la classification « non applicable » (moteur intégré)
+    sans réseau, au démarrage, pour que l'affichage soit juste tout de suite."""
+    out = dict(vulns or {})
+    counts = dict(out.get("counts") or {})
+    counts.setdefault("not_applicable", 0)
+    embedded = dict(out.get("embedded") or {})
+    by_priority, items = {}, []
+    r = run_quiet(["dpkg-query", "-W", "-f", "${Package}\n", "libmozjs*"], timeout=30)
+    mozjs_bins = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
+    for it in out.get("items") or []:
+        it = dict(it)
+        if it.get("status") == "unfixed" and EMBEDDED_ENGINE_RE.match(it.get("package") or "") \
+                and not ENGINE_TERMS.search(it.get("summary") or ""):
+            it["status"] = "not_applicable"
+            counts["unfixed"] = max(0, int(counts.get("unfixed") or 0) - 1)
+            counts["not_applicable"] += 1
+            if it["package"] not in embedded:
+                embedded[it["package"]] = {"users": embedded_engine_users(mozjs_bins)}
+        if it.get("status") not in ("kernel_pending", "not_applicable") and not it.get("dormant"):
+            pr = it.get("priority") or "untriaged"
+            by_priority[pr] = by_priority.get(pr, 0) + 1
+        items.append(it)
+    out.update(items=items, counts=counts, by_priority=by_priority, embedded=embedded)
+    return out
+
+
 def collect_vulnerabilities(previous=None):
     """Failles connues affectant les paquets installés : sans correctif, correctif Pro, ou correctif disponible."""
     ecosystem = ubuntu_osv_ecosystem()
@@ -2808,6 +2835,13 @@ class Daemon:
         self.locked_settings = set()
         self.central_patterns = []
         self.load_central_allowlist()
+        try:
+            stored_vulns = self.state.get("vulns") or {}
+            if stored_vulns.get("items") and "not_applicable" not in (stored_vulns.get("counts") or {}):
+                self.state.update(vulns=reclassify_vulns(stored_vulns))
+                log("Failles : relevé reclassé (moteur JavaScript intégré)")
+        except Exception as e:  # noqa: BLE001
+            log(f"Reclassement des failles : {e}")
         self.apply_policy(startup=True)
         self.last_daily = 0
         self.timeshift_enabling = False

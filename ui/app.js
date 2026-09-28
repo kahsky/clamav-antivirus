@@ -460,7 +460,7 @@ function renderVulns(refreshing = false) {
             <div class="cve-head">
                 <a class="cve-id" href="#" onclick="sendToBackend({action:'open_url', url:'${escapeJs(i.url)}'}); return false;">${escapeHtml(i.cve)}</a>
                 <span class="scope-badge prio-badge prio-${i.priority}">${t(`priority.${i.priority}`) !== `priority.${i.priority}` ? t(`priority.${i.priority}`) : escapeHtml(i.priority)}</span>
-                <span class="scope-badge scope-system">${escapeHtml(i.package)}</span>
+                <span class="scope-badge scope-system">${escapeHtml(i.package)}</span>${(v.embedded || {})[i.package] ? `<span class="scope-badge scope-user">${t('security.vulns.embedded_badge')}</span>` : ''}
                 <span class="cve-versions">${escapeHtml(i.installed)}${i.fixed ? ` → ${escapeHtml(i.fixed)}` : ''}</span>
                 ${i.hwe_fixed ? `<span class="scope-badge scope-phased" title="${escapeHtml(i.hwe_fixed)}">${t('security.vulns.hwe_badge', { pkg: escapeHtml(i.hwe_fixed.split(' ')[0]) })}</span>` : ''}
                 ${i.cvss ? `<span class="cve-versions">${escapeHtml(i.cvss)}</span>` : ''}

@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.14.2)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.14.3)
 
 ---
 
@@ -118,7 +118,8 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   moteur JavaScript `mozjs*` (SpiderMonkey extrait de Firefox ESR, utilisé par cjs/gjs/polkit) qui décrivent
   le navigateur (contenu web, médias, onglets…) sont classées « Non applicables (moteur intégré) » avec la
   liste des programmes qui l'utilisent ; celles propres au moteur (JIT, WebAssembly, ramasse-miettes) restent
-  « Sans correctif ».
+  « Sans correctif » ; badge « moteur JS intégré, pas Firefox ni Thunderbird » sur ces lignes, relevé existant
+  reclassé au démarrage du service.
 - **Activer Timeshift en un clic** — bouton dans l'onglet Sauvegardes et dans l'assistant de la vue
   simple, sans mot de passe : le service écrit la configuration recommandée (instantanés du système sur le
   disque principal, quotidiens 5, hebdomadaires 3, mensuels 2, mode btrfs si la racine est un sous-volume
@@ -254,7 +255,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.14.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.14.2_all.deb)
+[Télécharger clamav-antivirus_1.14.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.14.3_all.deb)
 
 ---
 
@@ -285,12 +286,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.14.2_all.deb`
+Résultat : `clamav-antivirus_1.14.3_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.14.2_all.deb
+sudo dpkg -i clamav-antivirus_1.14.3_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
