@@ -4818,7 +4818,9 @@ class Daemon:
             "vulns_summary": {k: (state.get("vulns") or {}).get(k) for k in ("checked_at", "counts", "by_priority", "ok", "error")}
                               | {"flatpak": len((state.get("vulns") or {}).get("flatpak", [])), "snap": len((state.get("vulns") or {}).get("snap", []))}
                               if state.get("vulns") else None,
-            "checklist_summary": {k: (state.get("checklist") or {}).get(k) for k in ("checked_at", "score", "grade")} if state.get("checklist") else None,
+            "checklist_summary": dict({k: (state.get("checklist") or {}).get(k) for k in ("checked_at", "score", "grade")},
+                                      todo=sum(1 for i in (state.get("checklist") or {}).get("items", []) if i.get("status") in ("warn", "fail")))
+            if state.get("checklist") else None,
             "integrity_summary": {"checked_at": (state.get("integrity") or {}).get("checked_at"),
                                   "warnings": (state.get("integrity") or {}).get("warnings")} if state.get("integrity") else None,
             "persistence_summary": (state.get("persistence") or {}).get("counts"),

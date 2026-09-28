@@ -362,9 +362,11 @@ function renderSecurityUnavailable(type) {
 }
 
 function renderSecurityBadge() {
-    const v = secData.vulns || (lastStatus && lastStatus.vulns_summary);
-    const counts = (v && v.counts) || {};
-    const n = (counts.unfixed || 0) + (counts.pro_only || 0);
+    // Le badge compte ce qui demande une action (points de la checklist à corriger ou à améliorer),
+    // pas les milliers de failles « sans correctif » qu'Ubuntu n'a pas encore traitées.
+    const c = secData.checklist;
+    const n = c && Array.isArray(c.items) ? c.items.filter(i => i.status === 'warn' || i.status === 'fail').length
+        : ((lastStatus && lastStatus.checklist_summary && lastStatus.checklist_summary.todo) || 0);
     const b = $('securityBadge');
     if (n > 0) { b.textContent = n > 99 ? '99+' : n; b.style.display = ''; } else b.style.display = 'none';
 }

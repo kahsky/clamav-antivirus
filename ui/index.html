@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.15.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.15.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -788,6 +788,7 @@
                 <div class="score-body">
                     <h2 id="scoreTitle" data-i18n="security.score.title">Score de sécurité</h2>
                     <p class="text-muted" id="scoreSub" data-i18n="security.score.sub">Calculé à partir de la checklist ci-dessous (pare-feu, chiffrement, mises à jour, comptes, ports, antivirus…).</p>
+                    <p class="text-muted setting-note" data-i18n="security.score.legend">Chaque point de la checklist a un poids : « ok » le compte en entier, « à améliorer » à moitié, « à corriger » pas du tout. Note : A à partir de 90, B de 75, C de 60, D de 40, E en dessous.</p>
                     <div class="score-actions">
                         <button class="btn btn-secondary btn-sm" onclick="loadSecurityData('checklist', true)" data-i18n="system.refresh">Actualiser</button>
                         <span class="text-muted" id="scoreChecked"></span>
