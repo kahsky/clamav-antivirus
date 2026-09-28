@@ -960,6 +960,17 @@ def profile_rules(profile):
     return rules
 VALID_ACTION = ("allow", "deny", "reject", "limit")
 VALID_POLICY = ("allow", "deny", "reject")
+UFW_RULE_COMMANDS = ("allow", "deny", "reject", "limit", "insert", "prepend")
+
+
+def ufw_args(args):
+    """Arguments complets d'un appel ufw. ufw n'insère le mot-clé implicite « rule » que si la commande est en
+    première position : « ufw --force allow … » répond « Invalid syntax » (frontend.parse_command). On écrit donc
+    « rule » explicitement pour les commandes de règle ; « delete N » (par numéro) reste tel quel."""
+    args = [str(a) for a in args]
+    if args and (args[0] in UFW_RULE_COMMANDS or (args[0] == "delete" and len(args) > 1 and not args[1].isdigit())):
+        args = ["rule"] + args
+    return ["ufw", "--force"] + args
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3083,9 +3094,10 @@ class Daemon:
         return ok and not errors, ("; ".join(errors) or text)[:300]
 
     def ufw(self, *args):
-        r = run_quiet(["ufw", "--force"] + list(args), timeout=60)
+        cmd = ufw_args(args)
+        r = run_quiet(cmd, timeout=60)
         text = ((r.stdout or "") + (r.stderr or "")).strip()
-        self.write_log(f"ufw {' '.join(args)} → {r.returncode}")
+        self.write_log(f"{' '.join(cmd[1:])} → {r.returncode}" + (f" : {text[:160]}" if r.returncode != 0 else ""))
         return r.returncode == 0, text[:300]
 
     # ── Application des réglages ─────────────────────────────────────────

@@ -1558,7 +1558,7 @@ class ClamAVAntivirusApp:
                "auto_updates_unavailable": "msg.auto_updates_unavailable", "busy_hardening": "msg.harden_busy",
                "nothing_to_harden": "msg.harden_nothing"}.get(err)
         if key:
-            return self.T(key, path=resp.get("path", ""))
+            return self.T(key, path=resp.get("path", ""), detail=str(resp.get("detail") or "")[:200])
         return err or self.T("msg.daemon_unavailable")
 
     # ── Scan local (callbacks) ──────────────────────────────────────────
