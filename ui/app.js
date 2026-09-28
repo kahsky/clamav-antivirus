@@ -467,6 +467,7 @@ function renderIntegrity(running = false) {
     const it = secData.integrity;
     $('btnIntegrityRun').disabled = !!running;
     if (!it || !it.checked_at) { $('integrityList').innerHTML = `<p class="text-muted">${running ? t('security.integrity.running') : t('security.integrity.none_yet')}</p>`; $('btnInstallTools').hidden = true; return; }
+    integrityWarnRefs = [];
     const tools = it.tools || {};
     const now = it.tools_now || null;                      // disponibilité actuelle des outils (indépendante du relevé)
     const names = now ? Object.keys(now) : Object.keys(tools);
@@ -482,13 +483,45 @@ function renderIntegrity(running = false) {
         const installedNow = now ? !!now[name] : !!tl.installed;
         const pending = installedNow && !tl.ran;              // installé depuis le dernier relevé, pas encore vérifié
         const st = !installedNow ? 'unknown' : pending ? 'neutral' : (tl.warnings || []).length ? 'warn' : 'ok';
-        html += `<div class="check-item check-${st}"><span class="check-icon">${st === 'ok' ? '✓' : st === 'warn' ? '!' : st === 'neutral' ? '…' : '?'}</span><div class="check-text"><span class="check-title">${escapeHtml(name)}</span><span class="check-detail">${!installedNow ? t('security.integrity.not_installed') : pending ? t('security.integrity.pending') : (tl.warnings || []).length ? t('security.integrity.warnings', { n: tl.warnings.length }) : t('security.integrity.clean')}</span>${(tl.warnings || []).length ? `<details class="alert-sample"><summary>${t('popup.btn.details')}</summary>${tl.warnings.map(w => `<div>${escapeHtml(w)}</div>`).join('')}</details>` : ''}</div></div>`;
+        html += `<div class="check-item check-${st}"><span class="check-icon">${st === 'ok' ? '✓' : st === 'warn' ? '!' : st === 'neutral' ? '…' : '?'}</span><div class="check-text"><span class="check-title">${escapeHtml(name)}</span><span class="check-detail">${!installedNow ? t('security.integrity.not_installed') : pending ? t('security.integrity.pending') : (tl.warnings || []).length ? t('security.integrity.warnings', { n: tl.warnings.length }) : t('security.integrity.clean')}${(tl.ignored || []).length ? ` · ${t('security.integrity.ignored', { n: tl.ignored.length })}` : ''}</span>${integrityWarningsHtml(name, tl)}</div></div>`;
     }
     const app = it.app || {};
     const appSt = !app.available ? 'unknown' : (app.modified || []).length || (app.missing || []).length ? 'fail' : 'ok';
     html += `<div class="check-item check-${appSt}"><span class="check-icon">${appSt === 'ok' ? '✓' : appSt === 'fail' ? '✕' : '?'}</span><div class="check-text"><span class="check-title">${t('security.integrity.app')}</span><span class="check-detail">${!app.available ? t('security.integrity.app_no_manifest') : appSt === 'ok' ? t('security.integrity.app_ok', { n: app.count, signed: app.signed ? (app.verified ? t('security.integrity.signed_ok') : t('security.integrity.signed_bad')) : t('security.integrity.unsigned') }) : t('security.integrity.app_modified', { n: (app.modified || []).length + (app.missing || []).length })}</span>${(app.modified || []).concat(app.missing || []).length ? `<details class="alert-sample"><summary>${t('popup.btn.details')}</summary>${(app.modified || []).map(f => `<div>${escapeHtml(f)}</div>`).join('')}${(app.missing || []).map(f => `<div>${escapeHtml(f)} (${t('security.integrity.missing')})</div>`).join('')}</details>` : ''}</div></div>`;
     $('integrityList').innerHTML = html;
     renderHardening();
+}
+
+
+// ─── Avertissements d'intégrité : texte complet, faux positifs expliqués, « C'est normal » ───
+
+let integrityWarnRefs = [];
+// Noms cachés courants et légitimes dans /usr/lib et /lib (symboles de débogage, modules Perl, marqueurs de paquets)
+const BENIGN_HIDDEN = /\/\.(build-id|packlist|gitignore|gitkeep|keep|placeholder|uuid|dirstamp|mkdir|htaccess|libs|deps|relocate|hidden|note\.[a-z.]+)(\/|$)/;
+
+function integrityHint(tool, text) {
+    if (tool !== 'chkrootkit' || !/suspicious files/i.test(text)) return '';
+    const paths = text.split('\n').slice(1).map(s => s.trim()).filter(s => s.startsWith('/'));
+    if (!paths.length) return '';
+    return t(paths.every(p => BENIGN_HIDDEN.test(p)) ? 'security.integrity.hint.hidden_benign' : 'security.integrity.hint.hidden_check');
+}
+
+function integrityWarningsHtml(tool, tl) {
+    const warns = tl.warnings || [], ignored = tl.ignored || [];
+    if (!warns.length && !ignored.length) return '';
+    const block = (w, isIgnored) => {
+        const ref = integrityWarnRefs.push({ tool, text: w }) - 1;
+        const hint = isIgnored ? '' : integrityHint(tool, w);
+        return `<div class="integrity-warning${isIgnored ? ' ignored' : ''}"><pre>${escapeHtml(w)}</pre>${hint ? `<div class="integrity-hint">${escapeHtml(hint)}</div>` : ''}<div class="fw-actions">${isIgnored
+            ? `<span class="scope-badge scope-user">${t('security.integrity.ignored_badge')}</span> <button class="btn btn-secondary btn-sm" onclick="acknowledgeIntegrity(${ref}, true)">${t('settings.trusted.remove')}</button>`
+            : `<button class="btn btn-secondary btn-sm" onclick="acknowledgeIntegrity(${ref})">${t('security.integrity.ack')}</button>`}</div></div>`;
+    };
+    return `<details class="alert-sample"${warns.length ? ' open' : ''}><summary>${t('popup.btn.details')}</summary>${warns.map(w => block(w, false)).join('')}${ignored.map(w => block(w, true)).join('')}</details>`;
+}
+
+function acknowledgeIntegrity(ref, remove = false) {
+    const r = integrityWarnRefs[ref];
+    if (r) sendToBackend({ action: 'acknowledge_integrity', tool: r.tool, text: r.text, remove });
 }
 
 
@@ -2198,6 +2231,9 @@ function simulateBackend(data) {
         case 'timeshift_enable': case 'timeshift_disable':
             reply('operationResult', { status: 'success', message: t(data.action === 'timeshift_enable' ? 'msg.timeshift_enabled' : 'msg.timeshift_disabled') });
             break;
+        case 'acknowledge_integrity':
+            reply('operationResult', { status: 'success', message: t(data.remove ? 'msg.integrity_unacknowledged' : 'msg.integrity_acknowledged') });
+            break;
         case 'harden_apply': case 'harden_revert':
             reply('operationResult', { status: 'info', message: t('msg.harden_started', { n: (data.tests || []).length || 3 }) });
             break;
@@ -2239,7 +2275,7 @@ function simulateBackend(data) {
                     items: [{ id: 'UBUNTU-CVE-2026-32741', cve: 'CVE-2026-32741', package: 'libheif', installed: '1.17.6-1ubuntu4', fixed: '', status: 'unfixed', priority: 'high', cvss: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H', summary: 'Heap buffer overflow when decoding crafted HEIF images', url: 'https://ubuntu.com/security/CVE-2026-32741' }, { id: 'x', cve: 'CVE-2026-54369', package: 'acl', installed: '2.3.2-1build1.1', fixed: '', status: 'unfixed', priority: 'medium', cvss: '', summary: 'Race condition in setfacl', url: '#' }, { id: 'y', cve: 'CVE-2026-63072', package: 'openssl', installed: '3.0.13-0ubuntu3.13', fixed: '3.0.13-0ubuntu3.15', status: 'fix_available', priority: 'medium', cvss: '', summary: 'Heap Buffer Overflow in CMS Key Unwrapping', url: '#' }, { id: 'z', cve: 'CVE-2025-1234', package: 'libxml2', installed: '2.9.14', fixed: '2.9.14+esm1', status: 'pro_only', priority: 'low', cvss: '', summary: 'Use-after-free in xmlXPath', url: '#' }, { id: 'k', cve: 'CVE-2026-64564', package: 'linux-hwe-7.0', installed: '7.0.0-34.34~24.04.1', fixed: '', status: 'kernel_pending', priority: 'critical', cvss: '', summary: 'net: use-after-free in tcp_read_sock', url: '#' }] },
                 integrity: { checked_at: now, warnings: 1, lynis: { index: 64, warnings: [], suggestions: 8, items: [{ test: 'KRNL-6000', text: 'One or more sysctl values differ from the scan profile and could be tweaked', details: 'fs.suid_dumpable 2→0, kernel.kptr_restrict 1→2, kernel.sysrq 176→0' }, { test: 'KRNL-5820', text: 'If not required, consider explicit disabling of core dump in /etc/security/limits.conf file', details: '' }, { test: 'AUTH-9328', text: 'Default umask in /etc/login.defs could be more strict like 027', details: '' }, { test: 'BANN-7126', text: 'Add a legal banner to /etc/issue, to warn unauthorized users', details: '' }, { test: 'PKGS-7410', text: 'Remove any unneeded kernel packages', details: '13 kernels' }, { test: 'PKGS-7420', text: 'Consider using a tool to automatically apply upgrades', details: '' }, { test: 'USB-1000', text: 'Disable drivers like USB storage when not used, to prevent unauthorized storage or data theft', details: '' }, { test: 'LOGG-2190', text: 'Check what deleted files are still in use and why.', details: '' }] },
                     hardening: { applied: { 'BANN-7126': { at: new Date(Date.now() - 3600e3).toISOString(), detail: 'bannières légales dans /etc/issue et /etc/issue.net' }, 'BANN-7130': { at: new Date(Date.now() - 3600e3).toISOString(), detail: '' } }, failed: { 'KRNL-5820': { at: now, detail: 'sysctl: permission denied' } }, running: false, catalog: { 'KRNL-6000': { kind: 'apply' }, 'KRNL-5820': { kind: 'apply' }, 'AUTH-9328': { kind: 'apply', caution: true }, 'BANN-7126': { kind: 'apply' }, 'PKGS-7410': { kind: 'apply', no_revert: true }, 'PKGS-7420': { kind: 'gui', action: 'auto_updates_enable' }, 'USB-1000': { kind: 'skip' }, 'LOGG-2190': { kind: 'manual' } } },
-                    tools: { lynis: { installed: true, ran: true, warnings: ['Warning: The file properties have changed: /usr/bin/ss'] }, chkrootkit: { installed: false, warnings: [] }, debsums: { installed: true, ran: true, warnings: [] } }, app: { available: true, signed: true, verified: true, modified: [], missing: [], count: 27 } },
+                    tools: { lynis: { installed: true, ran: true, warnings: ['Warning: The file properties have changed: /usr/bin/ss'] }, chkrootkit: { installed: true, ran: true, warnings: ['WARNING: The following suspicious files and directories were found:\n/usr/lib/debug/.build-id\n/lib/modules/6.8.0-142-generic/vdso/.build-id\n/usr/lib/x86_64-linux-gnu/perl/5.38/.packlist'], ignored: ['WARNING: crontab for nobody found, possible Lupper.Worm.'] }, debsums: { installed: true, ran: true, warnings: [] } }, app: { available: true, signed: true, verified: true, modified: [], missing: [], count: 27 } },
                 persistence: { checked_at: now, counts: { items: 5, untrusted: 1, extensions: 2, ext_outside_store: 1 }, items: [{ kind: 'autostart', path: '/home/user/.config/autostart/Conky.desktop', name: 'Conky', exec: 'conky -d', user: 'user', trusted: false, owner: '' }, { kind: 'cron', path: '/etc/cron.daily/apt-compat', name: 'apt-compat', exec: '', trusted: true, owner: 'apt' }], extensions: [{ browser: 'chrome', user: 'user', id: 'abcd', name: 'uBlock Origin', version: '1.60', from_store: true, enabled: true }, { browser: 'chrome', user: 'user', id: 'efgh', name: 'Mystery Helper', version: '0.1', from_store: false, enabled: true }] },
                 connections: { checked_at: now, blocklist_size: 1234, processes: [{ pid: 5099, comm: 'chrome', exe: '/opt/google/chrome/chrome', user: 'user', trusted: true, remotes: { '140.82.112.26': { ip: '140.82.112.26', ports: ['443'], flagged: false, country: 'US', org: 'GitHub' } } }, { pid: 777, comm: 'miner', exe: '/tmp/miner', user: 'user', trusted: false, remotes: { '185.220.101.1': { ip: '185.220.101.1', ports: ['4444'], flagged: true, country: 'DE', org: 'Hetzner' } } }] },
                 app_update: { checked_at: now, current: '1.7.0', available: true, verified: true, downloaded: true, version: '1.8.0', size: 102400, date: now, error: '' },

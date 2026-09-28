@@ -2271,6 +2271,35 @@ def parse_lynis_report(path="/var/log/lynis-report.dat", log_path="/var/log/lyni
     return rep
 
 
+def parse_chkrootkit(out):
+    """Sortie de chkrootkit -q → constats. Un « WARNING: … : » est suivi des chemins concernés sur les lignes
+    suivantes (fichiers cachés, etc.) : ils restent attachés au constat au lieu d'être perdus."""
+    findings, cur, prev_blank = [], [], True
+    for raw in out:
+        s = raw.strip()
+        if not s:
+            prev_blank = True
+            continue
+        if s.startswith("ROOTDIR") or s.lower().startswith(("not tested", "not infected", "not found", "nothing found")):
+            prev_blank = False
+            continue
+        # Se rattache au constat en cours : chemin ou ligne de tableau, ou en-tête terminé par « : » (liste annoncée)
+        attach = s.startswith(("/", "!")) or (bool(cur) and cur[0].rstrip().endswith(":"))
+        if cur and (s.startswith(("WARNING", "INFECTED", "Possible", "Checking")) or prev_blank or not attach):
+            findings.append("\n".join(cur))
+            cur = []
+        cur.append(s)
+        prev_blank = False
+    if cur:
+        findings.append("\n".join(cur))
+    return [f for f in findings if not f.startswith("Checking")][:80]
+
+
+def integrity_ack_key(tool, text):
+    """Clé d'un avertissement approuvé (« C'est normal ») : outil + empreinte du texte normalisé."""
+    return f"{tool}:{hashlib.sha1(re.sub(r'\s+', ' ', (text or '').strip()).encode()).hexdigest()[:16]}"
+
+
 def run_integrity_checks(collect_verified=False, cancel_event=None):
     """Lynis (audit de durcissement), unhide (processus et ports cachés), chkrootkit, debsums et fichiers de
     l'application. Avec collect_verified, retourne aussi l'ensemble (hashes) des fichiers système vérifiés
@@ -2300,7 +2329,7 @@ def run_integrity_checks(collect_verified=False, cancel_event=None):
             elif name in ("unhide", "unhide-tcp"):
                 lines = [ln for ln in lines if "HIDDEN" in ln.upper() and "Found" in ln]
             elif name == "chkrootkit":
-                lines = [ln for ln in lines if "INFECTED" in ln or "Warning" in ln or "suspicious" in ln.lower()]
+                lines = parse_chkrootkit(out)
             elif name == "debsums":
                 lines = [ln for ln in lines if ln and not ln.startswith("debsums:") or "FAILED" in ln or "REPLACED" in ln][:80]
                 if collect_verified:
@@ -3219,14 +3248,32 @@ class Daemon:
         if not integ:
             return
         tools = dict(integ.get("tools") or {})
-        old = dict(tools.get("lynis") or {})
-        integ["warnings"] = max(0, int(integ.get("warnings") or 0) - len(old.get("warnings") or []) + len(rep["warnings"]))
-        tools["lynis"] = {"installed": True, "ran": True, "rc": r.returncode, "warnings": list(rep["warnings"])[:80]}
+        tools["lynis"] = {"installed": True, "ran": True, "rc": r.returncode, "warnings": list(rep["warnings"])[:80],
+                          "all_warnings": list(rep["warnings"])[:80]}
         integ["tools"], integ["lynis"] = tools, rep
+        self.apply_integrity_acks(integ)
         self.state.update(integrity=integ)
         self.write_log(f"lynis rescan → index {rep.get('index')}")
 
+    def apply_integrity_acks(self, result):
+        """Avertissements d'intégrité approuvés par l'utilisateur (« C'est normal ») : mis à part, non comptés."""
+        if not result:
+            return result
+        acks = set(self.state.get("acknowledged_integrity") or [])
+        total = 0
+        for name, entry in (result.get("tools") or {}).items():
+            allw = entry.get("all_warnings")
+            if allw is None:
+                allw = entry["all_warnings"] = list(entry.get("warnings") or [])
+            entry["warnings"] = [w for w in allw if integrity_ack_key(name, w) not in acks]
+            entry["ignored"] = [w for w in allw if integrity_ack_key(name, w) in acks]
+            total += len(entry["warnings"])
+        app = result.get("app") or {}
+        result["warnings"] = total + len(app.get("modified") or []) + len(app.get("missing") or [])
+        return result
+
     def _store_integrity(self, result, after_scan=False):
+        self.apply_integrity_acks(result)
         self.last_integrity = time.time()
         self.state.update(integrity=result, last_integrity=now_iso())
         if result["warnings"]:
@@ -3541,7 +3588,8 @@ class Daemon:
         if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools",
                    "install_phased", "install_package"):
             return True
-        if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence", "system_upgrade", "harden_apply"):
+        if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence", "acknowledge_integrity",
+                   "system_upgrade", "harden_apply"):
             return bool(self.settings.get("family_mode"))
         return False
 
@@ -4082,6 +4130,24 @@ class Daemon:
             self.write_log(f"✘ untrusted program: {exe}")
             self.broadcast({"event": "trusted", "programs": programs, "acknowledged": self.state.get("acknowledged_persistence") or []})
             return {"ok": True, "programs": programs}
+
+        if cmd == "acknowledge_integrity":
+            # « C'est normal » : un avertissement d'intégrité (chkrootkit, debsums, unhide, Lynis) approuvé ne compte plus
+            tool, text = str(req.get("tool") or "")[:32], str(req.get("text") or "")[:4000]
+            if tool not in INTEGRITY_TOOLS or not text.strip():
+                return {"ok": False, "error": "invalid_key"}
+            key = integrity_ack_key(tool, text)
+            ack = [k for k in (self.state.get("acknowledged_integrity") or []) if k != key]
+            if not req.get("remove"):
+                ack.insert(0, key)
+            self.state.update(acknowledged_integrity=ack[:500])
+            integ = self.apply_integrity_acks(dict(self.state.get("integrity") or {}))
+            if integ:
+                self.state.update(integrity=integ)
+            self.write_log(f"integrity warning {'re-enabled' if req.get('remove') else 'acknowledged'} ({tool}): {text.splitlines()[0][:120]}")
+            self.broadcast({"event": "integrity", "integrity": self.integrity_payload()})
+            self.refresh_overall()
+            return {"ok": True, "key": key}
 
         if cmd == "acknowledge_persistence":
             key = str(req.get("key") or "")[:500]

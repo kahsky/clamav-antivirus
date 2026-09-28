@@ -2852,3 +2852,10 @@ body.mode-simple { position: relative; }
 .harden-error { color: var(--accent-red); }
 .check-item.check-na { opacity: 0.85; }
 .cve-item.vuln-kernel_pending { border-color: rgba(59,130,246,0.3); }
+
+/* Avertissements d'intégrité : texte complet (chemins), explication, approbation */
+.alert-sample .integrity-warning, .alert-sample .integrity-warning div { white-space: normal; overflow: visible; text-overflow: clip; font-family: inherit; font-size: inherit; color: inherit; }
+.integrity-warning { margin: 6px 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.integrity-warning.ignored { opacity: 0.6; }
+.integrity-warning pre { margin: 0 0 6px; white-space: pre-wrap; word-break: break-all; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.alert-sample .integrity-warning .integrity-hint { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; white-space: normal; }

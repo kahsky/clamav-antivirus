@@ -1811,6 +1811,20 @@ class ClamAVAntivirusApp:
                                         "acknowledged": resp.get("acknowledged", []) if resp.get("ok") else [],
                                         "available": bool(resp.get("ok"))})
 
+    def act_acknowledge_integrity(self, data):
+        """« C'est normal » sur un avertissement d'intégrité : approuvé (ou réactivé avec remove)."""
+        remove = bool(data.get("remove"))
+
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "security",
+                                                    "message": self.T("msg.integrity_unacknowledged" if remove else "msg.integrity_acknowledged")})
+                self.act_get_security_data({"type": "integrity"})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("acknowledge_integrity", {"tool": str(data.get("tool") or ""), "text": str(data.get("text") or ""), "remove": remove}, done)
+
     def act_acknowledge_persistence(self, data):
         remove = bool(data.get("remove"))
 
