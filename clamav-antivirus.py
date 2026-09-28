@@ -1174,6 +1174,11 @@ class ClamAVAntivirusApp:
                                     (T("popup.btn.details"), None, lambda: self.show_tab("system"))],
                            on_activate=lambda: self.show_tab("system"))
             return
+        if kind == "timeshift":
+            self.popup("warning", T("popup.timeshift.title"), T("popup.timeshift.body", free=alert.get("free_gb", 0)),
+                       timeout=40, on_activate=lambda: self.show_tab("backup"),
+                       buttons=[(T("popup.btn.details"), None, lambda: self.show_tab("backup"))])
+            return
         if kind == "persistence":
             if not self.popups_enabled("info"):
                 return
@@ -1339,6 +1344,8 @@ class ClamAVAntivirusApp:
             if isinstance(self.last_daemon_status, dict):
                 self.last_daemon_status["timeshift"] = ev.get("timeshift")
             self.send_to_js("backupTimeshift", ev.get("timeshift") or {})
+        elif et == "timeshift_enable":
+            self.timeshift_enable_result(ev.get("result") or {})
             self.tray.update_status()
         elif et == "trusted":
             self.send_to_js("trustedList", {"programs": ev.get("programs") or [], "acknowledged": ev.get("acknowledged") or [],
@@ -1538,7 +1545,8 @@ class ClamAVAntivirusApp:
                "command_failed": "msg.security_failed", "not_ready": "msg.update_not_ready",
                "sha256_mismatch": "msg.update_bad_hash", "not_suspended": "msg.process_gone",
                "nothing_phased": "msg.nothing_phased", "nothing_to_upgrade": "msg.nothing_to_upgrade",
-               "busy_upgrade": "msg.system_upgrading"}.get(err)
+               "busy_upgrade": "msg.system_upgrading", "busy_timeshift": "msg.timeshift_checking",
+               "auto_updates_unavailable": "msg.auto_updates_unavailable"}.get(err)
         if key:
             return self.T(key, path=resp.get("path", ""))
         return err or self.T("msg.daemon_unavailable")
@@ -2037,13 +2045,29 @@ class ClamAVAntivirusApp:
 
     def act_timeshift_enable(self, _data):
         resp = DaemonClient.request("timeshift_enable")
+        if resp.get("ok") and resp.get("pending"):
+            self.send_to_js("operationResult", {"status": "info", "message": self.T("msg.timeshift_checking")})
+            return
+        self.timeshift_enable_result(resp)
+
+    def timeshift_enable_result(self, resp):
+        """Résultat d'« Activer Timeshift » (immédiat, ou différé après la mesure du système par le service)."""
+        T = self.T
         if resp.get("ok"):
-            self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.timeshift_enabled")})
+            self.send_to_js("operationResult", {"status": "success", "message": T("msg.timeshift_enabled")})
             if self.popups_enabled("info"):
-                self.popup("success", self.T("backup.timeshift.title"), self.T("msg.timeshift_enabled"), timeout=15)
+                self.popup("success", T("backup.timeshift.title"), T("msg.timeshift_enabled"), timeout=15)
+        elif resp.get("error") == "timeshift_no_space":
+            def gb(n):
+                return round((n or 0) / 1e9)
+            body = T("msg.timeshift_no_space", size=gb(resp.get("size")), needed=gb(resp.get("needed")), free=gb(resp.get("free")))
+            self.send_to_js("operationResult", {"status": "error", "message": body})
+            self.popup("warning", T("backup.timeshift.title"), body, timeout=40,
+                       buttons=[(T("backup.open_timeshift"), "primary", lambda: self.act_backup_open_timeshift({}))],
+                       on_activate=lambda: self.show_tab("backup"))
         else:
             key = "msg.timeshift_missing" if resp.get("error") == "timeshift_missing" else None
-            self.send_to_js("operationResult", {"status": "error", "message": self.T(key) if key else self.daemon_error(resp)})
+            self.send_to_js("operationResult", {"status": "error", "message": T(key) if key else self.daemon_error(resp)})
         self.act_backup_status({"refresh": True})
         GLib.timeout_add_seconds(90, lambda: self.act_backup_status({"refresh": True}) or False)
 
@@ -2587,6 +2611,70 @@ class ClamAVAntivirusApp:
             return False
         self.run_admin("system_upgrade", {}, done)
 
+    # ── Mises à jour automatiques : réglages utilisateur (Spices Cinnamon, Flatpak) ──
+    MINT_UPDATES_SCHEMA = "com.linuxmint.updates"
+    _auto_updates_cache = (0.0, None)
+
+    def auto_updates_user(self, force=False):
+        """Réglages utilisateur du Gestionnaire de mises à jour de Mint : {spices: bool|None, flatpak: bool|None}
+        (None = outil absent), lus par gsettings et gardés 60 s."""
+        ts, cached = self._auto_updates_cache
+        if cached is not None and not force and time.time() - ts < 60:
+            return cached
+        result = {"spices": None, "flatpak": None}
+        if shutil.which("gsettings"):
+            for key, gkey, tool in (("spices", "auto-update-cinnamon-spices", "cinnamon-spice-updater"),
+                                    ("flatpak", "auto-update-flatpaks", "flatpak")):
+                if not shutil.which(tool):
+                    continue
+                try:
+                    r = subprocess.run(["gsettings", "get", self.MINT_UPDATES_SCHEMA, gkey], capture_output=True, text=True, timeout=10)
+                except Exception:  # noqa: BLE001
+                    continue
+                if r.returncode == 0:
+                    result[key] = r.stdout.strip() == "true"
+        self._auto_updates_cache = (time.time(), result)
+        return result
+
+    def enable_user_auto_updates(self):
+        """Active les mises à jour automatiques des Spices Cinnamon et des Flatpak quand ces outils existent ;
+        retourne les clés activées."""
+        done = []
+        current = self.auto_updates_user(force=True)
+        for key, gkey in (("spices", "auto-update-cinnamon-spices"), ("flatpak", "auto-update-flatpaks")):
+            if current.get(key) is None:
+                continue
+            try:
+                r = subprocess.run(["gsettings", "set", self.MINT_UPDATES_SCHEMA, gkey, "true"], capture_output=True, text=True, timeout=10)
+            except Exception:  # noqa: BLE001
+                continue
+            if r.returncode == 0:
+                done.append(key)
+        self.auto_updates_user(force=True)
+        return done
+
+    def act_auto_updates_enable(self, _data):
+        """« Activer » : automatisation des mises à jour système par le service, puis Spices et Flatpak pour l'utilisateur."""
+        def worker():
+            resp = daemon_request("auto_updates_enable", timeout=120)
+            GLib.idle_add(done, resp)
+
+        def done(resp):
+            T = self.T
+            if resp.get("ok"):
+                extras = self.enable_user_auto_updates()
+                parts = [T("msg.auto_updates.system")] + [T(f"check.auto_updates.{k}") for k in extras]
+                msg = T("msg.auto_updates_enabled", list=", ".join(parts))
+                self.send_to_js("operationResult", {"status": "success", "message": msg})
+                if self.popups_enabled("info"):
+                    self.popup("success", T("check.auto_updates.title"), msg, timeout=15)
+            else:
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+            self.send_status()
+            return False
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def act_open_update_manager(self, _data):
         for cmd in (["mintupdate"], ["update-manager"], ["gnome-software", "--mode=updates"]):
             if shutil.which(cmd[0]):
@@ -2689,6 +2777,7 @@ class ClamAVAntivirusApp:
             "read_lessons": load_state().get("read_lessons") or [],
             "backup": {"timeshift": (ds or {}).get("timeshift"), "user": self.backup_summary(), "running": self.backup_progress},
             "travel_mode": bool(load_state().get("travel_mode")),
+            "auto_updates_user": self.auto_updates_user(),
             "vault": extras.vault_status(),
             "unlocked": (ds or {}).get("unlocked", False),
             "family_mode": (ds or {}).get("family_mode", False),

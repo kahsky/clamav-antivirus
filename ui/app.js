@@ -376,7 +376,11 @@ function renderChecklist() {
     $('scoreGrade').textContent = c.grade || '';
     $('scoreFill').style.strokeDashoffset = RING_CIRC * (1 - (c.score || 0) / 100);
     $('scoreChecked').textContent = c.checked_at ? t('system.checked', { date: formatDateTime(c.checked_at), rel: formatRelative(c.checked_at) }) : '';
-    const items = c.items || [];
+    // Un contrôle peut être complété côté interface (réglages utilisateur : Spices Cinnamon et Flatpak pour les mises à jour)
+    const items = (c.items || []).map(i => {
+        const missing = checkExtrasMissing(i.key);
+        return missing.length && i.status === 'ok' ? { ...i, status: 'warn', extras: missing } : i;
+    });
     const counts = { ok: 0, warn: 0, fail: 0 };
     items.forEach(i => { if (counts[i.status] !== undefined) counts[i.status]++; });
     $('checklistCounts').textContent = t('security.checklist.counts', { ok: counts.ok, warn: counts.warn, fail: counts.fail });
@@ -386,9 +390,9 @@ function renderChecklist() {
             <span class="check-icon">${i.status === 'ok' ? '✓' : i.status === 'fail' ? '✕' : i.status === 'warn' ? '!' : '?'}</span>
             <div class="check-text">
                 <span class="check-title">${t(`check.${i.key}.title`)}</span>
-                <span class="check-detail">${t(`check.${i.key}.${i.status === 'ok' ? 'ok' : 'hint'}`)}${i.detail_key ? ` — ${escapeHtml(t(i.detail_key, i.detail_params || {}))}` : i.detail ? ` — ${escapeHtml(i.detail)}` : ''}</span>
+                <span class="check-detail">${i.extras ? t('check.auto_updates.extras', { list: checkExtrasText(i.extras) }) : t(`check.${i.key}.${i.status === 'ok' ? 'ok' : 'hint'}`)}${i.detail_key ? ` — ${escapeHtml(t(i.detail_key, i.detail_params || {}))}` : i.detail ? ` — ${escapeHtml(i.detail)}` : ''}</span>
             </div>
-            ${i.status !== 'ok' && i.status !== 'na' ? `<button class="btn ${i.status === 'fail' ? 'btn-danger' : 'btn-secondary'} btn-sm check-fix-btn" onclick="fixCheck('${escapeJs(i.key)}')">${CHECK_FIX[i.key] ? t('security.fix') : t('security.fix.how')}</button>` : ''}
+            ${i.status !== 'ok' && i.status !== 'na' ? `<button class="btn ${i.status === 'fail' ? 'btn-danger' : 'btn-secondary'} btn-sm check-fix-btn" onclick="fixCheck('${escapeJs(i.key)}')">${CHECK_FIX_LABEL[i.key] ? t(CHECK_FIX_LABEL[i.key]) : CHECK_FIX[i.key] ? t('security.fix') : t('security.fix.how')}</button>` : ''}
             <span class="check-weight">${i.weight}</span>
             ${t(`check.${i.key}.fix`) !== `check.${i.key}.fix` ? `<div class="check-fix" id="fix-${escapeHtml(i.key)}" hidden>${escapeHtml(t(`check.${i.key}.fix`))}</div>` : ''}
         </div>`).join('');
@@ -978,8 +982,14 @@ function saveSettings() {
 
 // ─── Dashboard ──────────────────────────────────────────────────────────────
 
+let lastExtrasKey = '';
+
 function updateDashboardStatus(data) {
+    const prevExtras = lastExtrasKey;
     lastStatus = data;
+    // Les compléments de la checklist (Spices, Flatpak) viennent de l'état : re-rendre la checklist quand ils changent
+    lastExtrasKey = JSON.stringify(data.auto_updates_user || null);
+    if (lastExtrasKey !== prevExtras && secData.checklist) renderChecklist();
     if (data.lang && data.lang !== lang) setLanguage(data.lang);
     if (data.view_mode && data.view_mode !== viewMode) setViewMode(data.view_mode, false);
     if (data.security) securityStatus = data.security;
@@ -2056,6 +2066,7 @@ function simulateBackend(data) {
     switch (data.action) {
         case 'check_status':
             reply('statusUpdate', {
+                auto_updates_user: DEV_OK ? { spices: true, flatpak: true } : { spices: false, flatpak: true },
                 backup: { timeshift: { installed: true, configured: DEV_OK, schedule: DEV_OK ? ['daily'] : [], snapshots: DEV_OK ? 5 : null, last: DEV_OK ? new Date(Date.now() - 86400e3).toISOString() : null },
                           user: DEV_OK ? { state: 'ok', last: new Date(Date.now() - 2 * 86400e3).toISOString(), age_days: 2, dest_label: 'SANDISK 32G', destinations: 1 } : { state: 'none', last: null, destinations: 0 }, running: null },
                 lang, color: 'green', message: 'Protected — signatures up to date (2 h)', installed: true, fully_installed: true,
@@ -2125,6 +2136,9 @@ function simulateBackend(data) {
             break;
         case 'timeshift_enable': case 'timeshift_disable':
             reply('operationResult', { status: 'success', message: t(data.action === 'timeshift_enable' ? 'msg.timeshift_enabled' : 'msg.timeshift_disabled') });
+            break;
+        case 'auto_updates_enable':
+            reply('operationResult', { status: 'success', message: t('msg.auto_updates_enabled', { list: [t('msg.auto_updates.system'), t('check.auto_updates.spices'), t('check.auto_updates.flatpak')].join(', ') }) });
             break;
         case 'vault_status':
             reply('vaultStatus', { available: true, exists: true, mounted: false, mountpoint: '/home/user/Coffre' });
@@ -2298,6 +2312,7 @@ function tsSchedLabel(ts) {
 function timeshiftInfo(ts) {
     if (!ts) return { state: 'neutral', text: t('backup.timeshift.unknown', { sched: '—' }) };
     if (!ts.installed) return { state: 'warn', text: t('backup.timeshift.not_installed') };
+    if (ts.suspended) return { state: 'warn', text: t('backup.timeshift.suspended', { free: Math.round((ts.free_bytes || ts.suspended.free_bytes || 0) / 1e9) }) };
     if (!ts.configured || !(ts.schedule || []).length) return { state: 'warn', text: t('backup.timeshift.not_configured') };
     const sched = tsSchedLabel(ts);
     if (ts.snapshots == null) return { state: 'neutral', text: t('backup.timeshift.unknown', { sched }) };
@@ -2509,7 +2524,7 @@ const CHECK_FIX = {
     ssh: () => switchTab('firewall'),
     security_updates: () => sendToBackend({ action: 'system_upgrade' }),
     reboot: null,
-    auto_updates: () => sendToBackend({ action: 'open_update_manager' }),
+    auto_updates: () => sendToBackend({ action: 'auto_updates_enable' }),
     signatures: () => triggerUpdate(),
     recent_scan: () => startFullSystemScan(true),
     realtime: () => switchTab('settings'),
@@ -2523,6 +2538,17 @@ const CHECK_FIX = {
     kernel_hwe: null,
     hardening: () => loadSecurityData('integrity', false, true),
 };
+
+// Libellé du bouton quand l'application règle elle-même (sinon « Régler » / « Comment faire »)
+const CHECK_FIX_LABEL = { auto_updates: 'check.auto_updates.action' };
+
+/** Compléments d'un contrôle gérés côté utilisateur (Spices Cinnamon, Flatpak) qui ne sont pas encore automatiques. */
+function checkExtrasMissing(key) {
+    const u = key === 'auto_updates' && lastStatus ? lastStatus.auto_updates_user : null;
+    return u ? ['spices', 'flatpak'].filter(k => u[k] === false) : [];
+}
+
+function checkExtrasText(missing) { return missing.map(k => t(`check.auto_updates.${k}`)).join(', '); }
 
 function fixCheck(key) {
     const fn = CHECK_FIX[key];

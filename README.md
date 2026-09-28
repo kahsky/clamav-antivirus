@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.11.4)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.11.5)
 
 ---
 
@@ -45,7 +45,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 - **Envoi Internet** — le service mesure le volume envoyé (`/proc/net/dev`) et affiche un
   popup au-delà du seuil, avec la liste des programmes connectés (`ss`).
 - **Centre de sécurité** (onglet Sécurité) — score et checklist (pare-feu, SSH, chiffrement
-  LUKS, Secure Boot, AppArmor, mises à jour automatiques, comptes sans mot de passe, sudo
+  LUKS, Secure Boot, AppArmor, mises à jour automatiques — bouton « Activer » qui enclenche
+  l'automatisation du Gestionnaire de mises à jour de Mint (ou unattended-upgrades) puis les mises à jour
+  automatiques des Spices Cinnamon et des Flatpak —, comptes sans mot de passe, sudo
   sans mot de passe, ports exposés, services exposés, `ld.so.preload`, antivirus…), inventaire
   des **failles ouvertes** des paquets installés via OSV.dev (sans correctif / Ubuntu Pro /
   correctif disponible, priorité Ubuntu et vecteur CVSS), mises à jour Flatpak/Snap, vérification
@@ -80,8 +82,12 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 - **Activer Timeshift en un clic** — bouton dans l'onglet Sauvegardes et dans l'assistant de la vue
   simple, sans mot de passe : le service écrit la configuration recommandée (instantanés du système sur le
   disque principal, quotidiens 5, hebdomadaires 3, mensuels 2, mode btrfs si la racine est un sous-volume
-  @, sinon rsync en excluant les fichiers des utilisateurs), installe la tâche cron horaire et lance le
-  premier instantané. Désactiver demande l'authentification administrateur.
+  @, sinon rsync en excluant les dossiers personnels), installe la tâche cron horaire et lance le
+  premier instantané. Désactiver demande l'authentification administrateur. **Garde-fou d'espace** : la
+  taille du système est mesurée (`du`, mise en cache une semaine) et l'activation est refusée s'il ne reste
+  pas 1,2 × cette taille + 10 Go libres (message avec les chiffres, bouton « Ouvrir Timeshift » pour
+  choisir un disque dédié) ; la tâche cron ne lance un instantané que s'il reste 10 Go, et le service
+  suspend les planifications (popup, voyant orange) si le disque passe sous ce seuil.
 - **Bilan de la semaine** — popup hebdomadaire (et bouton dans l'onglet Sécurité) : analyses, menaces,
   alertes, score et sa variation, sauvegarde, conseils lus.
 - **Fuites de données** — test d'un mot de passe via Have I Been Pwned en k-anonymity (5 caractères
@@ -208,7 +214,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.11.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.11.4_all.deb)
+[Télécharger clamav-antivirus_1.11.5_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.11.5_all.deb)
 
 ---
 
@@ -239,12 +245,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.11.4_all.deb`
+Résultat : `clamav-antivirus_1.11.5_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.11.4_all.deb
+sudo dpkg -i clamav-antivirus_1.11.5_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

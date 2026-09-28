@@ -742,8 +742,9 @@ TIMESHIFT_CRON = "/etc/cron.d/timeshift-hourly"
 
 def timeshift_best_practice_config(existing=None):
     """Configuration Timeshift recommandée : instantanés du système sur le disque principal, quotidiens (5),
-    hebdomadaires (3), mensuels (2) ; mode btrfs si la racine est un sous-volume @, sinon rsync en excluant les
-    fichiers des utilisateurs (leurs réglages cachés sont conservés). Les documents relèvent de la sauvegarde."""
+    hebdomadaires (3), mensuels (2) ; mode btrfs si la racine est un sous-volume @, sinon rsync en excluant tout le
+    contenu des dossiers personnels (réglage par défaut de Timeshift : les données cachées — Flatpak, Steam,
+    navigateurs — pèsent des dizaines de Go). Les documents relèvent de la sauvegarde."""
     r = run_quiet(["findmnt", "-no", "FSTYPE,UUID,OPTIONS", "/"], timeout=10)
     parts = (r.stdout or "").split()
     fstype, uuid_root, options = (parts + ["", "", ""])[:3]
@@ -754,7 +755,7 @@ def timeshift_best_practice_config(existing=None):
         "btrfs_mode": "true" if btrfs else "false", "include_btrfs_home": "false", "stop_cron_emails": "true",
         "schedule_monthly": "true", "schedule_weekly": "true", "schedule_daily": "true", "schedule_hourly": "false", "schedule_boot": "false",
         "count_monthly": "2", "count_weekly": "3", "count_daily": "5", "count_hourly": "6", "count_boot": "5",
-        "exclude": [] if btrfs else ["+ /root/.**", "/root/**", "+ /home/*/.**", "/home/*/**"],
+        "exclude": [] if btrfs else ["/root/**", "/home/*/**"],
         "exclude-apps": cfg.get("exclude-apps") or [],
     })
     return cfg, btrfs
@@ -769,14 +770,62 @@ def timeshift_write_config(cfg):
     os.replace(tmp, TIMESHIFT_CONF)
 
 
+TIMESHIFT_MIN_FREE = 10 * 1024 ** 3        # sous ce seuil, les instantanés planifiés sont suspendus
+TIMESHIFT_GUARD_CRON = ("SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n"
+                        "# ClamAV Antivirus GUI : instantane planifie seulement s'il reste au moins 10 Go sur le disque principal\n"
+                        "@hourly root a=$(df -k --output=avail / | tail -n1 | tr -d ' '); [ \"${a:-0}\" -ge 10485760 ] && timeshift --check\n")
+DU_EXCLUDES = ["/home", "/root", "/timeshift", "/timeshift-btrfs", "/dev", "/proc", "/sys", "/run", "/tmp", "/media", "/mnt",
+               "/var/lib/docker", "/var/lib/schroot", "/snap", "/var/cache/apt/archives", "/var/log", "/swapfile", "/lost+found"]
+
+
+def estimate_system_size(timeout=900):
+    """Taille du système tel que Timeshift le copie en mode rsync (sans les dossiers personnels), en octets ;
+    None si du échoue. Une à deux minutes sur un gros système, en priorité basse."""
+    cmd = []
+    if shutil.which("nice"):
+        cmd += ["nice", "-n", "19"]
+    if shutil.which("ionice"):
+        cmd += ["ionice", "-c", "3"]
+    cmd += ["du", "-sxB1"] + [f"--exclude={p}" for p in DU_EXCLUDES] + ["/"]
+    r = run_quiet(cmd, timeout=timeout)
+    m = re.match(r"\s*(\d+)", r.stdout or "")
+    return int(m.group(1)) if m else None
+
+
+def timeshift_space_needed(size, btrfs=False):
+    """Espace libre exigé avant d'activer : 1,2 × le système + 10 Go (première copie complète, puis incréments) ;
+    en btrfs les instantanés ne copient rien, seul le seuil minimal s'applique."""
+    return TIMESHIFT_MIN_FREE if btrfs else int(size * 1.2) + TIMESHIFT_MIN_FREE
+
+
+def timeshift_free_bytes(cfg=None):
+    """Espace libre (et point de montage) du disque qui reçoit les instantanés : le périphérique configuré s'il est
+    monté, le disque principal sinon ; (None, "") si le disque configuré est un disque dédié non monté."""
+    uuid = (cfg or {}).get("backup_device_uuid") or ""
+    path = "/"
+    if uuid:
+        r = run_quiet(["findmnt", "-rno", "TARGET", "-S", f"UUID={uuid}"], timeout=10)
+        lines = [x.strip() for x in (r.stdout or "").splitlines() if x.strip()]
+        if lines:
+            path = lines[0]
+        else:
+            return None, ""
+    try:
+        st = os.statvfs(path)
+        return st.f_bavail * st.f_frsize, path
+    except OSError:
+        return None, path
+
+
 def collect_timeshift_status(list_snapshots=True):
     """Instantanés système Timeshift : installé, configuré, planification, dernier instantané (lecture root)."""
     ts = {"checked_at": now_iso(), "installed": shutil.which("timeshift") is not None, "configured": False,
           "schedule": [], "mode": "", "device": "", "snapshots": None, "last": None, "error": ""}
     if not ts["installed"]:
         return ts
+    cfg = {}
     try:
-        with open("/etc/timeshift/timeshift.json", encoding="utf-8") as f:
+        with open(TIMESHIFT_CONF, encoding="utf-8") as f:
             cfg = json.load(f)
         ts["configured"] = True
         ts["mode"] = "btrfs" if str(cfg.get("btrfs_mode", "")).lower() == "true" else "rsync"
@@ -785,6 +834,9 @@ def collect_timeshift_status(list_snapshots=True):
                           if str(cfg.get(f"schedule_{k}", "")).lower() == "true"]
     except (OSError, ValueError):
         ts["configured"] = False
+    free, _path = timeshift_free_bytes(cfg)
+    ts["free_bytes"] = free
+    ts["low_space"] = free is not None and free < TIMESHIFT_MIN_FREE
     if ts["configured"] and list_snapshots and os.geteuid() == 0:
         r = run_quiet(["timeshift", "--list", "--scripted"], timeout=120)
         names = sorted(set(re.findall(r"\b(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\b", (r.stdout or ""))))
@@ -841,6 +893,16 @@ PROFILE_PRIVATE_NETS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fe80::
 def unit_active(name):
     r = run_quiet(["systemctl", "is-active", name], timeout=10)
     return (r.stdout or "").strip() == "active"
+
+
+def unit_enabled(name):
+    r = run_quiet(["systemctl", "is-enabled", name], timeout=10)
+    return (r.stdout or "").strip() == "enabled"
+
+
+MINT_AUTOMATION = "/usr/bin/mintupdate-automation"                                  # Linux Mint
+MINT_AUTO_UPGRADE_FLAG = "/var/lib/linuxmint/mintupdate-automatic-upgrades-enabled"  # témoin lu par le Gestionnaire
+APT_AUTO_CONF = "/etc/apt/apt.conf.d/20auto-upgrades"                                # unattended-upgrades (autres Debian/Ubuntu)
 
 
 def local_subnets():
@@ -1636,8 +1698,8 @@ def collect_checklist(daemon):
             auto = 'Unattended-Upgrade "1"' in f.read()
     except OSError:
         pass
-    auto = auto or os.path.exists("/etc/cron.daily/mintupdate-automation-upgrade") \
-        or os.path.exists("/etc/systemd/system/mintupdate-automation-upgrade.timer")
+    # Linux Mint : automatisation du Gestionnaire de mises à jour (timer systemd + fichier témoin)
+    auto = auto or unit_enabled("mintupdate-automation-upgrade.timer") or os.path.exists(MINT_AUTO_UPGRADE_FLAG)
     add("auto_updates", "ok" if auto else "warn", 6)
     add("security_updates", "ok" if not sysst.get("security") else "fail", 12, sysst.get("security", 0))
     add("reboot", "ok" if not sysst.get("reboot_required") else "warn", 3)
@@ -2231,6 +2293,7 @@ class Daemon:
         self.load_central_allowlist()
         self.apply_policy(startup=True)
         self.last_daily = 0
+        self.timeshift_enabling = False
         self.last_integrity = 0
         self.integrity_running = False
         self.daily_running = False
@@ -2286,7 +2349,7 @@ class Daemon:
             log(f"Alerte envoi Internet : {alert.get('gb')} Go en {alert.get('window_hours')} h")
         elif alert.get("kind") == "connection":
             self.write_log(f"⚠ connection {alert['severity']}: {alert.get('comm')} (pid {alert.get('pid')}) → {alert.get('ip')}:{alert.get('port')} {alert.get('country', '')}")
-        elif alert.get("kind") in ("persistence", "integrity", "update"):
+        elif alert.get("kind") in ("persistence", "integrity", "update", "timeshift"):
             self.write_log(f"⚠ {alert.get('kind')}: {alert.get('title', '')} {alert.get('detail', '')}")
         else:
             self.write_log(f"⚠ {alert['severity']}: {alert['comm']} (pid {alert['pid']}, {alert.get('exe')}) "
@@ -2730,6 +2793,88 @@ class Daemon:
         self.refresh_backup(force=True)
         self.refresh_overall()
 
+    def cached_system_size(self, max_age=7 * 86400):
+        info = self.state.get("system_size") or {}
+        try:
+            age = time.time() - datetime.fromisoformat(info.get("checked_at", "")).timestamp()
+        except ValueError:
+            return None
+        return info.get("bytes") if age < max_age and info.get("bytes") else None
+
+    def refresh_system_size(self, force=False):
+        """Taille du système (garde-fou Timeshift), mesurée au plus une fois par semaine ; None si indisponible."""
+        size = None if force else self.cached_system_size()
+        if size is not None:
+            return size
+        size = estimate_system_size()
+        if size is None:   # du indisponible : occupation du disque principal, majorant prudent
+            try:
+                st = os.statvfs("/")
+                size = (st.f_blocks - st.f_bfree) * st.f_frsize
+            except OSError:
+                return None
+        self.state.update(system_size={"bytes": size, "checked_at": now_iso()})
+        log(f"Taille du système : {size // 10**9} Go")
+        return size
+
+    def _timeshift_enable_now(self, existing, size):
+        """Garde-fou puis activation : refus si l'espace libre est inférieur à 1,2 × le système + 10 Go."""
+        cfg, btrfs = timeshift_best_practice_config(existing)
+        free, path = timeshift_free_bytes(None)
+        needed = timeshift_space_needed(size, btrfs)
+        if free is not None and free < needed:
+            self.write_log(f"timeshift refused: {free // 10**9} GB free on {path}, {needed // 10**9} GB needed "
+                           f"(system {size // 10**9} GB)")
+            return {"ok": False, "error": "timeshift_no_space", "free": free, "needed": needed, "size": size, "path": path}
+        timeshift_write_config(cfg)
+        with open(TIMESHIFT_CRON, "w") as f:
+            f.write(TIMESHIFT_GUARD_CRON)
+        os.chmod(TIMESHIFT_CRON, 0o644)
+        self.state.update(timeshift_suspended=None)
+        self.write_log(f"timeshift enabled ({'btrfs' if btrfs else 'rsync'}, daily 5 / weekly 3 / monthly 2, "
+                       f"{'?' if free is None else free // 10**9} GB free for a {size // 10**9} GB system)")
+        threading.Thread(target=self._timeshift_first_snapshot, daemon=True).start()
+        self.refresh_backup(force=True)
+        return {"ok": True, "mode": "btrfs" if btrfs else "rsync", "started": True, "free": free, "size": size}
+
+    def _timeshift_enable_worker(self, existing):
+        """Activation différée : mesure du système (une à deux minutes), garde-fou, activation ; résultat diffusé."""
+        try:
+            size = self.refresh_system_size(force=True)
+            result = self._timeshift_enable_now(existing, size) if size is not None \
+                else {"ok": False, "error": "command_failed", "detail": "du"}
+        except Exception as e:  # noqa: BLE001
+            log(f"Timeshift : {e}")
+            result = {"ok": False, "error": "command_failed", "detail": str(e)[:200]}
+        finally:
+            self.timeshift_enabling = False
+        self.broadcast({"event": "timeshift_enable", "result": result})
+
+    def _timeshift_suspend(self, ts):
+        """Garde-fou : disque presque plein → planifications Timeshift coupées (les instantanés existants restent)
+        et alerte. À réactiver depuis l'onglet Sauvegardes une fois de la place libérée."""
+        try:
+            with open(TIMESHIFT_CONF, encoding="utf-8") as f:
+                cfg = json.load(f)
+            for k in ("schedule_monthly", "schedule_weekly", "schedule_daily", "schedule_hourly", "schedule_boot"):
+                cfg[k] = "false"
+            timeshift_write_config(cfg)
+        except (OSError, ValueError) as e:
+            log(f"Timeshift : suspension impossible : {e}")
+            return ts
+        try:
+            os.remove(TIMESHIFT_CRON)
+        except OSError:
+            pass
+        free_gb = round((ts.get("free_bytes") or 0) / 1e9, 1)
+        self.state.update(timeshift_suspended={"at": now_iso(), "free_bytes": ts.get("free_bytes")})
+        self.write_log(f"timeshift schedules suspended: only {free_gb} GB free")
+        self.publish_alert({"kind": "timeshift", "severity": "warn", "time": now_iso(), "title": "low_space",
+                            "detail": f"{free_gb} GB free", "free_gb": free_gb})
+        new = collect_timeshift_status(list_snapshots=False)
+        new["snapshots"], new["last"] = ts.get("snapshots"), ts.get("last")
+        return new
+
     def refresh_backup(self, force=False):
         """État Timeshift, au plus une fois par heure (timeshift --list peut monter le disque de sauvegarde)."""
         with self.security_lock:
@@ -2741,6 +2886,9 @@ class Daemon:
             if not force and cached and age < 3600:
                 return cached
         ts = collect_timeshift_status()
+        if ts.get("low_space") and ts.get("schedule") and os.geteuid() == 0:
+            ts = self._timeshift_suspend(ts)
+        ts["suspended"] = self.state.get("timeshift_suspended") or None
         self.state.update(timeshift=ts)
         self.broadcast({"event": "timeshift", "timeshift": ts})
         return ts
@@ -2843,6 +2991,11 @@ class Daemon:
                 self.refresh_backup(force=True)
             except Exception as e:  # noqa: BLE001
                 log(f"Timeshift : {e}")
+            if shutil.which("timeshift") and not TEST_MODE:
+                try:
+                    self.refresh_system_size()
+                except Exception as e:  # noqa: BLE001
+                    log(f"Taille du système : {e}")
             # Failles ouvertes
             vulns = collect_vulnerabilities(self.state.get("vulns"))
             self.state.update(vulns=vulns)
@@ -3473,15 +3626,15 @@ class Daemon:
             except (OSError, ValueError):
                 existing = {}
             if cmd == "timeshift_enable":
-                cfg, btrfs = timeshift_best_practice_config(existing)
-                timeshift_write_config(cfg)
-                with open(TIMESHIFT_CRON, "w") as f:
-                    f.write("SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n@hourly root timeshift --check\n")
-                os.chmod(TIMESHIFT_CRON, 0o644)
-                self.write_log(f"timeshift enabled ({'btrfs' if btrfs else 'rsync'}, daily 5 / weekly 3 / monthly 2)")
-                threading.Thread(target=self._timeshift_first_snapshot, daemon=True).start()
-                self.refresh_backup(force=True)
-                return {"ok": True, "mode": "btrfs" if btrfs else "rsync", "started": True}
+                # Garde-fou : jamais sans avoir mesuré la place (la première copie rsync, c'est tout le système)
+                if self.timeshift_enabling:
+                    return {"ok": False, "error": "busy_timeshift"}
+                size = self.cached_system_size()
+                if size is None:
+                    self.timeshift_enabling = True
+                    threading.Thread(target=self._timeshift_enable_worker, args=(existing,), daemon=True).start()
+                    return {"ok": True, "pending": True}
+                return self._timeshift_enable_now(existing, size)
             for k in ("schedule_monthly", "schedule_weekly", "schedule_daily", "schedule_hourly", "schedule_boot"):
                 existing[k] = "false"
             timeshift_write_config(existing)
@@ -3489,10 +3642,37 @@ class Daemon:
                 os.remove(TIMESHIFT_CRON)
             except OSError:
                 pass
+            self.state.update(timeshift_suspended=None)
             self.write_log("timeshift schedules disabled")
             self.refresh_backup(force=True)
             self.refresh_overall()
             return {"ok": True}
+
+        if cmd == "auto_updates_enable":
+            # « Activer » (sans mot de passe : protège le système) : automatisation du Gestionnaire de mises à jour de
+            # Linux Mint, sinon unattended-upgrades. Les réglages utilisateur (Spices, Flatpak) sont faits par l'interface.
+            if TEST_MODE:
+                return {"ok": True, "method": "test"}
+            if os.geteuid() != 0:
+                return {"ok": False, "error": "root_required"}
+            if os.path.exists(MINT_AUTOMATION):
+                r = run_quiet([MINT_AUTOMATION, "upgrade", "enable"], timeout=120)
+                ok = r.returncode == 0 and (unit_enabled("mintupdate-automation-upgrade.timer")
+                                            or os.path.exists(MINT_AUTO_UPGRADE_FLAG))
+                method, detail = "mintupdate", ((r.stderr or "") + (r.stdout or "")).strip()[-200:]
+            elif os.path.exists("/usr/bin/unattended-upgrade"):
+                try:
+                    with open(APT_AUTO_CONF, "w") as f:
+                        f.write('APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n')
+                    ok, method, detail = True, "unattended", ""
+                except OSError as e:
+                    ok, method, detail = False, "unattended", str(e)
+            else:
+                return {"ok": False, "error": "auto_updates_unavailable"}
+            self.write_log(f"automatic updates enable ({method}) → {'ok' if ok else 'failed'} {detail}")
+            if ok:
+                threading.Thread(target=self.refresh_checklist, daemon=True).start()
+            return {"ok": ok, "error": "" if ok else "command_failed", "method": method, "detail": detail}
 
         if cmd == "install_package":
             name = str(req.get("name") or "")
