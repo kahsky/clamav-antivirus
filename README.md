@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.17.1)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.17.2)
 
 ---
 
@@ -144,6 +144,10 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   le nom du fichier et son dossier d'origine (index alimenté par les lignes « moved to » de clamdscan/clamscan,
   côté service et côté scan local) ; les confirmations (suppression, vidage, pare-feu, journaux) passent par
   une modale dans le thème de l'application, plus jamais par `confirm()` natif.
+- **Fichiers debsums classés** — un fichier de paquet signalé modifié est bénin s'il fait partie des ajustements
+  de Linux Mint (`/usr/share/linuxmint/adjustments`, motifs des `.overwrite`, fichiers cités par les `.execute`)
+  ou s'il est détourné par `dpkg-divert` ; sinon il reste « à vérifier ». chkrootkit en mode verbeux : messages
+  d'outils collés à la ligne d'un test et « started/finished » ignorés. Reclassement du relevé au démarrage.
 - **Avertissements Lynis classés** — l'état réel est vérifié avant d'alerter (TIME-3185 : NTP actif et horloge
   alignée = faux positif connu, sinon « Régler » relance la synchronisation ; KRNL-5788 : redémarrage à faire) ;
   le relevé existant est reclassé au démarrage.
@@ -291,7 +295,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.17.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.17.1_all.deb)
+[Télécharger clamav-antivirus_1.17.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.17.2_all.deb)
 
 ---
 
@@ -322,12 +326,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.17.1_all.deb`
+Résultat : `clamav-antivirus_1.17.2_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.17.1_all.deb
+sudo dpkg -i clamav-antivirus_1.17.2_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

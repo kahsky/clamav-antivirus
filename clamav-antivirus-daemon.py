@@ -2698,7 +2698,7 @@ def parse_lynis_report(path="/var/log/lynis-report.dat", log_path="/var/log/lyni
     return rep
 
 
-CHK_RULES_VERSION = 3              # règles de classification intégrées ; un relevé plus ancien est refait au démarrage
+CHK_RULES_VERSION = 4              # règles de classification intégrées ; un relevé plus ancien est refait au démarrage
 CHK_NOISE = ("RTNETLINK answers", "ip: ", "ifconfig:", "ls: ", "find: ", "grep: ", "netstat:", "ss: ", "Usage:",
              "/usr/sbin/chkrootkit:", "chkrootkit:", "chkproc:", "chkdirs:", "chkutmp:", "eth", "wlan")   # messages d'outils, pas des constats
 CHK_NOISE = tuple(x for x in CHK_NOISE if x not in ("eth", "wlan"))
@@ -2779,8 +2779,8 @@ def parse_chkrootkit(out):
         m = re.match(r"^(?:Checking `[^']*'\.\.\.|Searching for .*?\.\.\.)\s*(.*)$", s)
         if m:                                       # mode verbeux : le résultat du test suit sur la même ligne
             rest = m.group(1).strip().lower()
-            if not rest or rest.startswith(("not infected", "not found", "not tested", "nothing", "ok", "warning", "no ")) \
-                    or "nothing detected" in rest or "nothing deleted" in rest:
+            if not rest or rest.startswith(("not infected", "not found", "not tested", "nothing", "ok", "warning", "no ", "started", "finished")) \
+                    or "nothing detected" in rest or "nothing deleted" in rest or rest.startswith(tuple(x.lower() for x in CHK_NOISE)):
                 prev_blank = False
                 continue                            # test sans constat (un WARNING détaillé suit sur ses propres lignes)
             if cur:                                 # résultat non anodin (ex. « Checking `ls'... INFECTED ») : constat entier
@@ -2939,6 +2939,79 @@ def chkrootkit_analysis(out):
     return {"warnings": warnings[:80], "benign": benign[:40], "notes": notes}
 
 
+DEBSUMS_RULES_VERSION = 1
+MINT_ADJUST_DIRS = ("/usr/share/linuxmint/adjustments", "/etc/linuxmint/adjustments")
+_MINT_ADJ = {"at": 0.0, "patterns": [], "paths": set()}
+
+
+def mint_adjustments():
+    """Fichiers que Linux Mint remplace ou modifie lui-même à chaque démarrage (mintsystem « adjustments ») :
+    motifs de destination des .overwrite (glob) et chemins cités par les .execute/.menu. Cache 10 min."""
+    if time.time() - _MINT_ADJ["at"] < 600:
+        return _MINT_ADJ["patterns"], _MINT_ADJ["paths"]
+    patterns, paths = [], set()
+    for base in MINT_ADJUST_DIRS:
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            continue
+        for n in names:
+            full = os.path.join(base, n)
+            try:
+                with open(full, encoding="utf-8", errors="replace") as f:
+                    for ln in f:
+                        ln = ln.strip()
+                        if not ln or ln.startswith("#"):
+                            continue
+                        if n.endswith(".overwrite"):
+                            parts = ln.split()
+                            if len(parts) >= 2 and parts[1].startswith("/"):
+                                patterns.append(parts[1])
+                        else:
+                            paths.update(m.group(1) for m in re.finditer(r"(/usr/[^\s'\"]+)", ln))
+            except OSError:
+                pass
+    _MINT_ADJ.update(at=time.time(), patterns=patterns, paths=paths)
+    return patterns, paths
+
+
+def dpkg_diversions():
+    r = run_quiet(["dpkg-divert", "--list"], timeout=30)
+    return set(re.findall(r"^diversion of (\S+) to ", r.stdout or "", flags=re.M))
+
+
+def classify_debsums(lines):
+    """Verdict intégré pour chaque fichier signalé par debsums : remplacé par les ajustements Mint, détourné par
+    dpkg-divert (bénins), sinon modifié depuis l'installation (à vérifier)."""
+    patterns, mentioned = mint_adjustments()
+    diverted = dpkg_diversions()
+    notes = []
+    for ln in lines:
+        path = ln.split()[0] if ln.strip() else ""
+        if not path.startswith("/"):
+            notes.append({"path": ln[:120], "verdict": "unknown", "reason": "modified"})
+            continue
+        if path in mentioned or any(fnmatch.fnmatch(path, p) for p in patterns):
+            notes.append({"path": path, "verdict": "benign", "reason": "mint_adjustment"})
+        elif path in diverted:
+            notes.append({"path": path, "verdict": "benign", "reason": "diverted"})
+        else:
+            notes.append({"path": path, "verdict": "unknown", "reason": "modified"})
+    return notes
+
+
+def debsums_analysis(lines):
+    """Lignes debsums (FAILED/REPLACED/missing) → {warnings, benign, notes} comme pour chkrootkit et Lynis."""
+    out, benign, notes = [], [], {}
+    for ln, note in zip(lines, classify_debsums(lines)):
+        if note["verdict"] == "benign":
+            benign.append({"text": ln, "notes": [note]})
+        else:
+            notes[ln] = [note]
+            out.append(ln)
+    return {"warnings": out[:80], "benign": benign[:80], "notes": notes}
+
+
 def integrity_ack_key(tool, text):
     """Clé d'un avertissement approuvé (« C'est normal ») : outil + empreinte du texte normalisé."""
     return f"{tool}:{hashlib.sha1(re.sub(r'\s+', ' ', (text or '').strip()).encode()).hexdigest()[:16]}"
@@ -3026,10 +3099,13 @@ def run_integrity_checks(collect_verified=False, cancel_event=None, progress=Non
                 lines = chk["warnings"]
                 entry["benign"], entry["notes"], entry["rules"] = chk["benign"], chk["notes"], CHK_RULES_VERSION
             elif name == "debsums":
-                lines = [ln for ln in lines if "FAILED" in ln or "REPLACED" in ln or "missing file" in ln][:80]
+                lines = [ln for ln in lines if "FAILED" in ln or "REPLACED" in ln or "missing file" in ln][:160]
                 if collect_verified:
-                    verified = debsums_verified_paths(lines)
+                    verified = debsums_verified_paths(lines)      # tout fichier signalé reste à analyser, bénin ou non
                     result["verified_files"] = len(verified)
+                da = debsums_analysis(lines)
+                lines = da["warnings"]
+                entry["benign"], entry["notes"], entry["rules"] = da["benign"], da["notes"], DEBSUMS_RULES_VERSION
             entry["warnings"] = lines[:80]
             report(name, 100, "", "done", len(entry["warnings"]))
         result["tools"][name] = entry
@@ -4335,6 +4411,25 @@ class Daemon:
                         log(f"Avertissements Lynis reclassés : {len(la['benign'])} faux positif(s) connu(s)")
                     except Exception as e:  # noqa: BLE001
                         log(f"Reclassement Lynis : {e}")
+                # Fichiers debsums d'un relevé antérieur : reclassés sur place (ajustements Mint, détournements)
+                ds = (stored.get("tools") or {}).get("debsums") or {}
+                if ds.get("ran") and ds.get("rules") != DEBSUMS_RULES_VERSION:
+                    try:
+                        src = list(ds.get("all_warnings") or ds.get("warnings") or []) + [b.get("text") for b in (ds.get("benign") or [])]
+                        da = debsums_analysis([x for x in src if x])
+                        integ = dict(stored)
+                        tools = dict(integ.get("tools") or {})
+                        tools["debsums"] = dict(ds, all_warnings=list(da["warnings"]), warnings=list(da["warnings"]),
+                                                benign=da["benign"], notes=da["notes"], rules=DEBSUMS_RULES_VERSION)
+                        integ["tools"] = tools
+                        self.apply_integrity_acks(integ)
+                        self.state.update(integrity=integ)
+                        stored = integ
+                        self.broadcast({"event": "integrity", "integrity": self.integrity_payload()})
+                        self.refresh_overall()
+                        log(f"Fichiers debsums reclassés : {len(da['benign'])} bénin(s), {len(da['warnings'])} à vérifier")
+                    except Exception as e:  # noqa: BLE001
+                        log(f"Reclassement debsums : {e}")
                 # Relevé chkrootkit incomplet (en-tête sans ses chemins, versions < 1.12.1) ou sans classification
                 chk = (stored.get("tools") or {}).get("chkrootkit") or {}
                 old_style = any(str(w).rstrip().endswith(":") for w in (chk.get("all_warnings") or chk.get("warnings") or []))
