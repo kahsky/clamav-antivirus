@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.15.3)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.16.0)
 
 ---
 
@@ -125,6 +125,10 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 - **Failles sans correctif possible expliquées** — une base intégrée (TunnelVision CVE-2024-3661…) affiche sous
   la faille ce qu'elle est (défaut de conception, statut « deferred » d'Ubuntu) et si elle vous concerne (VPN
   configuré ou non) ; la checklist compte les CVE distinctes, pas une fois par paquet.
+- **Quarantaine lisible et modales maison** — chaque fichier isolé affiche la signature détectée en titre, puis
+  le nom du fichier et son dossier d'origine (index alimenté par les lignes « moved to » de clamdscan/clamscan,
+  côté service et côté scan local) ; les confirmations (suppression, vidage, pare-feu, journaux) passent par
+  une modale dans le thème de l'application, plus jamais par `confirm()` natif.
 - **Avertissements Lynis classés** — l'état réel est vérifié avant d'alerter (TIME-3185 : NTP actif et horloge
   alignée = faux positif connu, sinon « Régler » relance la synchronisation ; KRNL-5788 : redémarrage à faire) ;
   le relevé existant est reclassé au démarrage.
@@ -272,7 +276,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.15.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.15.3_all.deb)
+[Télécharger clamav-antivirus_1.16.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.16.0_all.deb)
 
 ---
 
@@ -303,12 +307,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.15.3_all.deb`
+Résultat : `clamav-antivirus_1.16.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.15.3_all.deb
+sudo dpkg -i clamav-antivirus_1.16.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

@@ -952,8 +952,8 @@ function renderSecurity(available = true) {
     }).join('');
 }
 
-function firewallToggle(enabled) {
-    if (!enabled && !confirm(t('firewall.confirm_disable'))) return;
+async function firewallToggle(enabled) {
+    if (!enabled && !(await appConfirm({ title: t('firewall.title'), message: t('firewall.confirm_disable'), ok: t('firewall.disable'), danger: true }))) return;
     sendToBackend({ action: 'security_action', cmd: 'firewall_set', enabled, allow_ssh: !!($('fwAllowSsh') && $('fwAllowSsh').checked) });
 }
 
@@ -972,14 +972,14 @@ function firewallAddRuleFromForm() {
     $('ruleAddPort').value = ''; $('ruleAddComment').value = '';
 }
 
-function firewallDeleteRule(number) {
-    if (confirm(t('firewall.rules.confirm_delete', { n: number }))) {
+async function firewallDeleteRule(number) {
+    if (await appConfirm({ title: t('firewall.rules.title'), message: t('firewall.rules.confirm_delete', { n: number }), ok: t('quarantine.delete'), danger: true })) {
         sendToBackend({ action: 'security_action', cmd: 'firewall_rule_delete', number });
     }
 }
 
-function sshToggle(enabled) {
-    if (enabled && !confirm(t('firewall.ssh.confirm_enable'))) return;
+async function sshToggle(enabled) {
+    if (enabled && !(await appConfirm({ title: t('firewall.ssh.title'), message: t('firewall.ssh.confirm_enable'), ok: t('modal.ok') }))) return;
     sendToBackend({ action: 'security_action', cmd: 'ssh_set', enabled });
 }
 
@@ -1995,8 +1995,8 @@ function loadLogs() {
     sendToBackend({ action: 'get_log', scope: logScope });
 }
 
-function clearLogs() {
-    if (confirm(t('logs.confirm_clear'))) {
+async function clearLogs() {
+    if (await appConfirm({ title: t('logs.title'), message: t('logs.confirm_clear'), ok: t('logs.clear'), danger: true })) {
         sendToBackend({ action: 'clear_log', scope: logScope });
         showToast(t('logs.cleared'), 'success');
     }
@@ -2066,9 +2066,10 @@ function renderQuarantine(files) {
                 </svg>
             </div>
             <div class="quarantine-item-info">
-                <div class="quarantine-item-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}
+                <div class="quarantine-item-name" title="${escapeHtml(f.signature || '')}">${escapeHtml(f.signature || t('quarantine.unknown_signature'))}
                     <span class="scope-badge scope-${f.scope === 'system' ? 'system' : 'user'}">${f.scope === 'system' ? t('quarantine.scope.system') : t('quarantine.scope.user')}</span>
                 </div>
+                <div class="quarantine-item-file"><span class="quarantine-file-name">${escapeHtml(f.name)}</span> <span class="text-muted">${escapeHtml(f.origin ? t('quarantine.origin', { path: f.origin.replace(/\/[^/]*$/, '') || '/' }) : t('quarantine.origin_unknown'))}</span></div>
                 <div class="quarantine-item-meta">${escapeHtml(f.date)} — ${formatSize(String(f.size))}</div>
             </div>
             <div class="quarantine-item-actions">
@@ -2078,8 +2079,36 @@ function renderQuarantine(files) {
         </div>`).join('');
 }
 
-function deleteQuarantineFile(filepath, name, scope) {
-    if (confirm(t('quarantine.confirm_delete', { name }))) {
+// ─── Modale de confirmation maison (jamais confirm()/alert() natifs, hors du thème) ─────────────
+let confirmResolve = null;
+
+function appConfirm({ title, message, ok, cancel, danger = false }) {
+    const overlay = $('confirmModal');
+    if (!overlay) return Promise.resolve(window.confirm(message));
+    $('confirmTitle').textContent = title || '';
+    $('confirmMessage').textContent = message || '';
+    const okBtn = $('confirmOk'), cancelBtn = $('confirmCancel');
+    okBtn.textContent = ok || t('modal.ok');
+    cancelBtn.textContent = cancel || t('modal.cancel');
+    okBtn.className = `btn ${danger ? 'btn-danger' : 'btn-primary'}`;
+    overlay.classList.add('open');
+    setTimeout(() => (danger ? cancelBtn : okBtn).focus(), 50);
+    return new Promise(resolve => { confirmResolve = resolve; });
+}
+
+function closeConfirm(result) {
+    const overlay = $('confirmModal');
+    if (overlay) overlay.classList.remove('open');
+    const r = confirmResolve; confirmResolve = null;
+    if (r) r(!!result);
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && confirmResolve) closeConfirm(false);
+});
+
+async function deleteQuarantineFile(filepath, name, scope) {
+    if (await appConfirm({ title: t('quarantine.delete_title'), message: t('quarantine.confirm_delete', { name }), ok: t('quarantine.delete'), danger: true })) {
         sendToBackend({ action: 'delete_quarantine', path: filepath, scope });
     }
 }
@@ -2088,8 +2117,8 @@ function restoreQuarantineFile(filepath, scope) {
     pickFolder('restore', { path: filepath, scope });
 }
 
-function emptyQuarantine() {
-    if (confirm(t('quarantine.confirm_empty'))) {
+async function emptyQuarantine() {
+    if (await appConfirm({ title: t('quarantine.empty_title'), message: t('quarantine.confirm_empty'), ok: t('quarantine.empty_btn'), danger: true })) {
         sendToBackend({ action: 'empty_quarantine' });
     }
 }
@@ -2255,7 +2284,7 @@ function simulateBackend(data) {
                 { name: 'main.cvd', size: '89072577', date: '2026-03-21 07:58' }] });
             break;
         case 'get_quarantine':
-            reply('quarantineList', { files: [{ name: 'eicar.com', path: '/var/lib/clamav-antivirus/quarantine/eicar.com', size: 68, date: '2026-09-27 22:40', scope: 'system' }] });
+            reply('quarantineList', { files: [{ name: 'eicar.com', path: '/var/lib/clamav-antivirus/quarantine/eicar.com', size: 68, date: '2026-09-27 22:40', scope: 'system', signature: 'Win.Test.EICAR_HDB-1', origin: '/home/user/Téléchargements/eicar.com' }, { name: 'setup.exe', path: '/var/lib/clamav-antivirus/quarantine/setup.exe', size: 1048576, date: '2026-09-26 10:12', scope: 'system' }] });
             break;
         case 'get_log':
             reply('logContent', { scope: data.scope, available: true, lines: ['[2026-09-27T22:40:16] ▶ scan /home', '[2026-09-27T22:40:35] /home/user/eicar.com: Eicar-Test-Signature FOUND', '[2026-09-27T22:40:35] ■ done: 1 infected / 3 files'] });
@@ -2443,6 +2472,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (params.get('backup') === '1') setTimeout(openBackupWizard, 400);   // dev : assistant de sauvegarde
     if (params.get('autoscan') === '1') setTimeout(() => startFullSystemScan(true), 500);   // dev : scan en cours
     if (params.get('integrity') === '1') setTimeout(() => runIntegrityOnly(), 500);           // dev : intégrité en cours
+    if (params.get('modal') === '1') setTimeout(() => appConfirm({ title: t('quarantine.delete_title'), message: t('quarantine.confirm_delete', { name: 'eicar.com' }), ok: t('quarantine.delete'), danger: true }), 500);
     if (params.get('lesson')) setTimeout(() => openLesson(params.get('lesson')), 300);   // dev : ouvre une leçon
     if (location.hash && $(`tab-${location.hash.slice(1)}`)) { setViewMode('advanced', false); switchTab(location.hash.slice(1)); }
     sendToBackend({ action: 'check_status' });

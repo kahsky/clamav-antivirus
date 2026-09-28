@@ -39,6 +39,7 @@ from clamav_common import (  # noqa: E402
     DEFAULT_SETTINGS, daemon_connect, daemon_request, find_command, is_noise_line,
     classify_line, db_last_update, db_files_info, systemd_next_elapse,
     systemd_is_active, load_i18n, pick_language, t as translate,
+    quarantine_index_add, quarantine_enrich, parse_moved_line,
 )
 
 # Réglages propres à l'utilisateur (le reste est géré par le daemon)
@@ -215,7 +216,10 @@ def daemon_can_scan(path):
 class LocalScan:
     """Scan exécuté par l'utilisateur lui-même (ou via pkexec pour le scan complet)."""
 
+    found_sigs = {}   # chemin infecté → signature (index de quarantaine utilisateur)
+
     def __init__(self, path, callback, resume=False, use_sudo=False):
+        self.found_sigs = {}
         self.path = path
         self.callback = callback
         self.resume = resume
@@ -385,8 +389,14 @@ class LocalScan:
                     self.infected += 1
                     path, _, sig = line[:-6].rpartition(": ")
                     self.threats.append({"path": path, "signature": sig, "time": now_iso()})
+                    self.found_sigs[path] = sig
                     write_log(line)
                     self.emit("line", {"kind": "found", "text": line})
+                elif " moved to " in line:
+                    moved = parse_moved_line(line)
+                    if moved:
+                        quarantine_index_add(QUARANTINE_DIR, moved[1], moved[0], self.found_sigs.get(moved[0], ""))
+                    self.emit("line", {"kind": "info", "text": line})
                 elif not is_noise_line(line):
                     kind = classify_line(line)
                     if kind == "denied":
@@ -533,7 +543,7 @@ class ClamAVBackend:
                     })
         except Exception:
             pass
-        return files
+        return quarantine_enrich(files, QUARANTINE_DIR)
 
     @staticmethod
     def _in_quarantine(path):

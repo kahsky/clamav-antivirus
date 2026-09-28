@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.15.3 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.16.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -1305,6 +1305,16 @@
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- CREDITS MODAL                                                      -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <div class="modal-overlay" id="confirmModal" onclick="closeConfirm(false)">
+        <div class="modal modal-sm" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
+            <div class="modal-header"><h2 id="confirmTitle"></h2><button class="btn-icon" onclick="closeConfirm(false)">✕</button></div>
+            <div class="modal-body"><p id="confirmMessage" class="confirm-message"></p></div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="confirmCancel" onclick="closeConfirm(false)">Annuler</button>
+                <button class="btn btn-primary" id="confirmOk" onclick="closeConfirm(true)">Confirmer</button>
+            </div>
+        </div>
+    </div>
     <div class="modal-overlay" id="creditsModal" onclick="closeCredits(event)">
         <div class="modal" onclick="event.stopPropagation()">
             <div class="modal-header">

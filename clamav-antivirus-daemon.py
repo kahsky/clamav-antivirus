@@ -65,6 +65,7 @@ import clamav_harden as harden  # noqa: E402
 from clamav_common import (  # noqa: E402
     VERSION, SYSTEM_STATE_DIR, SYSTEM_LOG_DIR, DAEMON_SOCKET,
     SYSTEM_STATE_FILE, SYSTEM_QUARANTINE_DIR, SYSTEM_PROGRESS_FILE, SYSTEM_SCAN_CACHE_DB, SYSTEM_SECRET_FILE,
+    quarantine_index_add, quarantine_enrich, parse_moved_line,
     SYSTEM_FILELIST_CACHE, FIRST_SCAN_FLAG, SYSTEM_LOG_FILE, USB_MOUNT_ROOT,
     SYSTEM_SETTINGS_FILE, DEFAULT_SETTINGS, DAEMON_ALLOWED_ROOTS,
     BURST_PID_COOLDOWN_SEC, BURST_GLOBAL_COOLDOWN, BURST_IGNORE_PREFIXES, BURST_IGNORE_PARTS,
@@ -516,6 +517,7 @@ class Job:
         self.count_lock = threading.Lock()
         self.manifest_keep = {}     # support amovible : fichiers sains {relatif: [taille, mtime]}
         self.usb_infected = set()
+        self.found_sigs = {}        # chemin infecté → signature (pour l'index de quarantaine)
         self.integrity_warnings = None
         self.requested_by = requested_by
         self.created_at = time.time()
@@ -3535,6 +3537,7 @@ class Daemon:
                 job.infected += 1
                 job.current_file = path
                 job.threats.append({"path": path, "signature": sig, "time": now_iso()})
+                job.found_sigs[path] = sig
                 if job.usb:
                     job.usb_infected.add(os.path.relpath(path, job.path))
             self.write_log(line)
@@ -3555,6 +3558,9 @@ class Daemon:
             self.emit_line("denied" if denied else "error", line)
             return True
         if " moved to " in line:
+            moved = parse_moved_line(line)
+            if moved:
+                quarantine_index_add(SYSTEM_QUARANTINE_DIR, moved[1], moved[0], job.found_sigs.get(moved[0], ""))
             self.emit_line("info", line)
             return False
         if not is_noise_line(line):
@@ -3749,10 +3755,16 @@ class Daemon:
                 job.infected += 1
                 path, _, sig = line[:-6].rpartition(": ")
                 job.threats.append({"path": path, "signature": sig, "time": now_iso()})
+                job.found_sigs[path] = sig
                 if job.usb:
                     job.usb_infected.add(os.path.relpath(path, job.path))
                 self.write_log(line)
                 self.emit_line("found", line)
+            elif " moved to " in line:
+                moved = parse_moved_line(line)
+                if moved:
+                    quarantine_index_add(SYSTEM_QUARANTINE_DIR, moved[1], moved[0], job.found_sigs.get(moved[0], ""))
+                self.emit_line("info", line)
             elif not is_noise_line(line):
                 kind = classify_line(line)
                 if kind == "denied":
@@ -4904,7 +4916,7 @@ class Daemon:
                     })
         except OSError:
             pass
-        return files
+        return quarantine_enrich(files, SYSTEM_QUARANTINE_DIR)
 
     @staticmethod
     def _in_quarantine(path):

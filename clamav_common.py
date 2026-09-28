@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.15.3"
+VERSION = "1.16.0"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -184,6 +184,58 @@ SCAN_EXCLUDE = [
 # Lignes de sortie clamscan --verbose qui sont du bruit (ne pas journaliser)
 NOISE_PREFIXES = ("traverse_to:", "LibClamAV", "Scanning ")
 NOISE_SUFFIXES = (": Empty file", ": No such file or directory", ": Excluded", ": Symbolic link")
+
+
+# ── Index de quarantaine : fichier isolé → chemin d'origine et signature (alimenté par les lignes « moved to ») ──
+def quarantine_index_path(quarantine_dir):
+    return os.path.join(os.path.dirname(quarantine_dir.rstrip("/")), "quarantine-index.json")
+
+
+def quarantine_index_load(quarantine_dir):
+    try:
+        with open(quarantine_index_path(quarantine_dir), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def quarantine_index_add(quarantine_dir, dest, origin, signature):
+    """Mémorise, pour le fichier isolé `dest`, son chemin d'origine et la signature détectée."""
+    index = quarantine_index_load(quarantine_dir)
+    index[os.path.basename(dest)] = {"origin": origin, "signature": signature or "",
+                                     "time": datetime.now().isoformat(timespec="seconds")}
+    if len(index) > 5000:
+        for k in sorted(index, key=lambda k: index[k].get("time", ""))[:-5000]:
+            index.pop(k, None)
+    path = quarantine_index_path(quarantine_dir)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def parse_moved_line(line):
+    """« /chemin/origine: moved to '/quarantaine/nom' » → (origine, destination) ou None."""
+    m = re.match(r"^(.*): moved to '(.*)'$", line)
+    return (m.group(1), m.group(2)) if m else None
+
+
+def quarantine_enrich(files, quarantine_dir):
+    """Ajoute origine, signature et date de détection aux entrées de la liste de quarantaine."""
+    index = quarantine_index_load(quarantine_dir)
+    for f in files:
+        info = index.get(f.get("name") or "")
+        if info:
+            f["origin"] = info.get("origin") or ""
+            f["signature"] = info.get("signature") or ""
+            f["found_at"] = info.get("time") or ""
+    return files
 
 
 def find_command(path, exclude=SCAN_EXCLUDE, stat=False):

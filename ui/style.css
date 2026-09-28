@@ -2917,3 +2917,11 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .tool-pct { font-family: var(--font-mono); color: var(--text-secondary); text-align: right; }
 .tool-detail { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-pending { opacity: 0.6; }
+
+/* Modale de confirmation maison */
+.modal-sm { width: 480px; }
+.confirm-message { font-size: 14px; line-height: 1.5; color: var(--text-secondary); white-space: pre-line; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 24px 20px; border-top: 1px solid var(--border); }
+/* Quarantaine : signature en titre, fichier et emplacement dessous */
+.quarantine-item-file { font-size: 12px; color: var(--text-secondary); margin: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quarantine-file-name { font-family: var(--font-mono); color: var(--text-primary); }
