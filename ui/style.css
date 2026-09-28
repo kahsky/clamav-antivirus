@@ -2841,3 +2841,8 @@ body.mode-simple { position: relative; }
 .travel-on #travelBtn, .travel-on #travelBtnFw { background: rgba(245,158,11,0.18); border-color: var(--accent-amber); color: var(--accent-amber); }
 .hibp-breach { border-color: rgba(239,68,68,0.45); }
 .apps-risk { font-size: 11px; color: var(--accent-amber); }
+
+/* ── v1.11.1 : espacement des blocs (cartes et grilles) dans chaque onglet ── */
+.tab-panel > .card, .tab-panel > .cards-grid, .tab-panel > .settings-grid, .tab-panel > .backup-progress-card { margin-bottom: 20px; }
+.tab-panel > .card:last-child, .tab-panel > .cards-grid:last-child { margin-bottom: 0; }
+.cards-grid > .card { margin-bottom: 0; }

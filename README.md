@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.11.0)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.11.1)
 
 ---
 
@@ -77,6 +77,11 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   UFW renforcée. Les règles du profil sont taguées `cav-profile` et remplacées à chaque changement ; les
   règles personnelles restent, et en Public l'application signale celles ouvertes à tout Internet.
   Passer en Public ne demande rien ; Maison et Entreprise demandent l'authentification administrateur.
+- **Activer Timeshift en un clic** — bouton dans l'onglet Sauvegardes et dans l'assistant de la vue
+  simple, sans mot de passe : le service écrit la configuration recommandée (instantanés du système sur le
+  disque principal, quotidiens 5, hebdomadaires 3, mensuels 2, mode btrfs si la racine est un sous-volume
+  @, sinon rsync en excluant les fichiers des utilisateurs), installe la tâche cron horaire et lance le
+  premier instantané. Désactiver demande l'authentification administrateur.
 - **Bilan de la semaine** — popup hebdomadaire (et bouton dans l'onglet Sécurité) : analyses, menaces,
   alertes, score et sa variation, sauvegarde, conseils lus.
 - **Fuites de données** — test d'un mot de passe via Have I Been Pwned en k-anonymity (5 caractères
@@ -199,7 +204,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.11.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.11.0_all.deb)
+[Télécharger clamav-antivirus_1.11.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.11.1_all.deb)
 
 ---
 
@@ -230,12 +235,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.11.0_all.deb`
+Résultat : `clamav-antivirus_1.11.1_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.11.0_all.deb
+sudo dpkg -i clamav-antivirus_1.11.1_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

@@ -2112,6 +2112,9 @@ function simulateBackend(data) {
         case 'get_apps':
             reply('appsData', { inventory: { flatpak: [{ kind: 'flatpak', id: 'org.gimp.GIMP', name: 'GIMP', version: '3.2.7', origin: 'flathub', risky: ['filesystem'], key: 'flatpak:org.gimp.GIMP' }, { kind: 'flatpak', id: 'com.spotify.Client', name: 'Spotify', version: '1.2', origin: 'flathub', risky: [], key: 'flatpak:com.spotify.Client' }], snap: [{ kind: 'snap', id: 'code', name: 'code', version: '1.95', origin: 'vscode', risky: ['classic'], plugs: [], key: 'snap:code' }], appimage: [{ kind: 'appimage', id: '/home/user/Applications/Obsidian.AppImage', name: 'Obsidian.AppImage', path: '/home/user/Applications/Obsidian.AppImage', size: 1e8, risky: ['unsandboxed'], key: 'appimage:/home/user/Applications/Obsidian.AppImage' }] }, acknowledged: ['snap:code'] });
             break;
+        case 'timeshift_enable': case 'timeshift_disable':
+            reply('operationResult', { status: 'success', message: t(data.action === 'timeshift_enable' ? 'msg.timeshift_enabled' : 'msg.timeshift_disabled') });
+            break;
         case 'vault_status':
             reply('vaultStatus', { available: true, exists: true, mounted: false, mountpoint: '/home/user/Coffre' });
             break;
@@ -2365,7 +2368,10 @@ function renderBackupWizard() {
     const ts = timeshiftInfo(d.timeshift);
     html += `<h4>${t('backup.wizard.timeshift')}</h4><div class="backup-choice"><div class="backup-choice-icon"><span class="ts-dot ${ts.state}"></span></div>
         <div class="backup-choice-text"><span class="backup-choice-title">${escapeHtml(ts.text)}</span><span class="backup-choice-sub">${t('backup.wizard.timeshift_hint')}</span></div>
-        ${d.timeshift_installed ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'backup_open_timeshift'})">${t('backup.open_timeshift')}</button>` : `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'install_package', name:'timeshift'})">${t('backup.install_timeshift')}</button>`}</div>`;
+        ${!d.timeshift_installed ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'install_package', name:'timeshift'})">${t('backup.install_timeshift')}</button>`
+          : (d.timeshift && d.timeshift.configured && (d.timeshift.schedule || []).length) ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'backup_open_timeshift'})">${t('backup.open_timeshift')}</button>`
+          : `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'timeshift_enable'})">${t('backup.timeshift.enable_simple')}</button>`}</div>
+        <p class="text-muted">${t('backup.timeshift.enable_hint')}</p>`;
     box.innerHTML = html;
 }
 
@@ -2380,8 +2386,12 @@ function renderBackupTab() {
     const d = backupData;
     if (!d || !$('backupTimeshift')) return;
     const ts = timeshiftInfo(d.timeshift);
-    $('backupTimeshift').innerHTML = `<div class="ts-line"><span class="ts-dot ${ts.state}"></span><span>${escapeHtml(ts.text)}</span></div>` +
-        (d.timeshift_installed ? '' : `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'install_package', name:'timeshift'})">${t('backup.install_timeshift')}</button>`);
+    const tsOn = !!(d.timeshift && d.timeshift.configured && (d.timeshift.schedule || []).length);
+    $('backupTimeshift').innerHTML = `<div class="ts-line"><span class="ts-dot ${ts.state}"></span><span>${escapeHtml(ts.text)}</span></div>
+        <p class="text-muted setting-note">${t('backup.timeshift.enable_hint')}</p>
+        <div class="fw-actions">${!d.timeshift_installed ? `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'install_package', name:'timeshift'})">${t('backup.install_timeshift')}</button>`
+            : tsOn ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'timeshift_disable'})">${t('backup.timeshift.disable')}</button>`
+                   : `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'timeshift_enable'})">${t('backup.timeshift.enable')}</button>`}</div>`;
     if (document.activeElement !== $('backupSources')) $('backupSources').value = (d.sources || []).join('\n');
     if (document.activeElement !== $('backupExcludes')) $('backupExcludes').value = (d.excludes || []).join('\n');
     $('backupRetention').value = d.retention || 8;

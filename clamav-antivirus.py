@@ -2035,6 +2035,28 @@ class ClamAVAntivirusApp:
             if avail:
                 subprocess.Popen(["xdg-open", os.path.join(target, backup.BACKUP_DIRNAME, backup._hostuser())])
 
+    def act_timeshift_enable(self, _data):
+        resp = DaemonClient.request("timeshift_enable")
+        if resp.get("ok"):
+            self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.timeshift_enabled")})
+            if self.popups_enabled("info"):
+                self.popup("success", self.T("backup.timeshift.title"), self.T("msg.timeshift_enabled"), timeout=15)
+        else:
+            key = "msg.timeshift_missing" if resp.get("error") == "timeshift_missing" else None
+            self.send_to_js("operationResult", {"status": "error", "message": self.T(key) if key else self.daemon_error(resp)})
+        self.act_backup_status({"refresh": True})
+        GLib.timeout_add_seconds(90, lambda: self.act_backup_status({"refresh": True}) or False)
+
+    def act_timeshift_disable(self, _data):
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.timeshift_disabled")})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+            self.act_backup_status({"refresh": True})
+            return False
+        self.run_admin("timeshift_disable", {}, done)
+
     def act_backup_open_timeshift(self, _data):
         for cmd in (["timeshift-launcher"], ["pkexec", "timeshift-gtk"]):
             if shutil.which(cmd[0]) and (cmd[0] != "pkexec" or shutil.which("timeshift-gtk")):

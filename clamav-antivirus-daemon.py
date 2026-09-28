@@ -736,6 +736,39 @@ def ssh_port():
     return 22
 
 
+TIMESHIFT_CONF = "/etc/timeshift/timeshift.json"
+TIMESHIFT_CRON = "/etc/cron.d/timeshift-hourly"
+
+
+def timeshift_best_practice_config(existing=None):
+    """Configuration Timeshift recommandée : instantanés du système sur le disque principal, quotidiens (5),
+    hebdomadaires (3), mensuels (2) ; mode btrfs si la racine est un sous-volume @, sinon rsync en excluant les
+    fichiers des utilisateurs (leurs réglages cachés sont conservés). Les documents relèvent de la sauvegarde."""
+    r = run_quiet(["findmnt", "-no", "FSTYPE,UUID,OPTIONS", "/"], timeout=10)
+    parts = (r.stdout or "").split()
+    fstype, uuid_root, options = (parts + ["", "", ""])[:3]
+    btrfs = fstype == "btrfs" and "subvol=/@" in options
+    cfg = dict(existing or {})
+    cfg.update({
+        "backup_device_uuid": uuid_root, "parent_device_uuid": "", "do_first_run": "false",
+        "btrfs_mode": "true" if btrfs else "false", "include_btrfs_home": "false", "stop_cron_emails": "true",
+        "schedule_monthly": "true", "schedule_weekly": "true", "schedule_daily": "true", "schedule_hourly": "false", "schedule_boot": "false",
+        "count_monthly": "2", "count_weekly": "3", "count_daily": "5", "count_hourly": "6", "count_boot": "5",
+        "exclude": [] if btrfs else ["+ /root/.**", "/root/**", "+ /home/*/.**", "/home/*/**"],
+        "exclude-apps": cfg.get("exclude-apps") or [],
+    })
+    return cfg, btrfs
+
+
+def timeshift_write_config(cfg):
+    os.makedirs(os.path.dirname(TIMESHIFT_CONF), exist_ok=True)
+    tmp = TIMESHIFT_CONF + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, TIMESHIFT_CONF)
+
+
 def collect_timeshift_status(list_snapshots=True):
     """Instantanés système Timeshift : installé, configuré, planification, dernier instantané (lecture root)."""
     ts = {"checked_at": now_iso(), "installed": shutil.which("timeshift") is not None, "configured": False,
@@ -2643,6 +2676,15 @@ class Daemon:
                 self.system_status_running = False
 
     # ── Sécurité réseau (UFW / SSH) ──────────────────────────────────────
+    def _timeshift_first_snapshot(self):
+        """Premier instantané juste après l'activation (quelques minutes), puis état rafraîchi."""
+        r = run_quiet(["timeshift", "--check", "--scripted"], timeout=1800)
+        if r.returncode != 0 or "snapshot" not in ((r.stdout or "") + (r.stderr or "")).lower():
+            r = run_quiet(["timeshift", "--create", "--scripted", "--tags", "D", "--comments", "ClamAV Antivirus GUI"], timeout=1800)
+        self.write_log(f"timeshift first snapshot → {r.returncode}")
+        self.refresh_backup(force=True)
+        self.refresh_overall()
+
     def refresh_backup(self, force=False):
         """État Timeshift, au plus une fois par heure (timeshift --list peut monter le disque de sauvegarde)."""
         with self.security_lock:
@@ -3126,6 +3168,8 @@ class Daemon:
             return not req.get("enabled")
         if cmd == "firewall_profile":
             return req.get("profile") in ("home", "enterprise")   # ils ouvrent des ports au réseau local ; Public : libre
+        if cmd == "timeshift_disable":
+            return True
         if cmd == "ssh_set":
             return bool(req.get("enabled"))
         if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools",
@@ -3366,6 +3410,39 @@ class Daemon:
 
         if cmd == "backup_status":
             return {"ok": True, "timeshift": self.refresh_backup(force=bool(req.get("refresh")))}
+
+        if cmd in ("timeshift_enable", "timeshift_disable"):
+            # Activer : sans mot de passe (protège le système). Désactiver : administrateur (voir admin_required).
+            if os.geteuid() != 0:
+                return {"ok": False, "error": "root_required"}
+            if not shutil.which("timeshift"):
+                return {"ok": False, "error": "timeshift_missing"}
+            try:
+                with open(TIMESHIFT_CONF, encoding="utf-8") as f:
+                    existing = json.load(f)
+            except (OSError, ValueError):
+                existing = {}
+            if cmd == "timeshift_enable":
+                cfg, btrfs = timeshift_best_practice_config(existing)
+                timeshift_write_config(cfg)
+                with open(TIMESHIFT_CRON, "w") as f:
+                    f.write("SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n@hourly root timeshift --check\n")
+                os.chmod(TIMESHIFT_CRON, 0o644)
+                self.write_log(f"timeshift enabled ({'btrfs' if btrfs else 'rsync'}, daily 5 / weekly 3 / monthly 2)")
+                threading.Thread(target=self._timeshift_first_snapshot, daemon=True).start()
+                self.refresh_backup(force=True)
+                return {"ok": True, "mode": "btrfs" if btrfs else "rsync", "started": True}
+            for k in ("schedule_monthly", "schedule_weekly", "schedule_daily", "schedule_hourly", "schedule_boot"):
+                existing[k] = "false"
+            timeshift_write_config(existing)
+            try:
+                os.remove(TIMESHIFT_CRON)
+            except OSError:
+                pass
+            self.write_log("timeshift schedules disabled")
+            self.refresh_backup(force=True)
+            self.refresh_overall()
+            return {"ok": True}
 
         if cmd == "install_package":
             name = str(req.get("name") or "")
