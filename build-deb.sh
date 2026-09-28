@@ -8,7 +8,7 @@
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.17.0"
+VERSION="1.17.1"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -41,6 +41,7 @@ cp "${SCRIPT_DIR}/clamav_common.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_backup.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_extras.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_harden.py"                "${PKG_DIR}/opt/${APP_NAME}/"
+cp "${SCRIPT_DIR}/clamav-antivirus-tray"           "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav-scan-nemo.sh"             "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/systemd/"*.service               "${PKG_DIR}/lib/systemd/system/"
 cp "${SCRIPT_DIR}/systemd/"*.timer                 "${PKG_DIR}/lib/systemd/system/"
@@ -65,6 +66,7 @@ find "${PKG_DIR}" -type f -exec chmod 644 {} +
 chmod +x "${PKG_DIR}/opt/${APP_NAME}/clamav-antivirus.py"
 chmod +x "${PKG_DIR}/opt/${APP_NAME}/clamav-antivirus-daemon.py"
 chmod +x "${PKG_DIR}/opt/${APP_NAME}/clamav-antivirus-unlock"
+chmod +x "${PKG_DIR}/opt/${APP_NAME}/clamav-antivirus-tray"
 chmod +x "${PKG_DIR}/opt/${APP_NAME}/clamav-scan-nemo.sh"
 
 # ── Integrity manifest (sha256 of every packaged file), signed with the Dukiwi key if present ──
@@ -158,7 +160,8 @@ systemctl enable clamav-antivirus-update.timer 2>/dev/null || true
 systemctl restart clamav-antivirus-daemon.service 2>/dev/null || true
 systemctl start clamav-antivirus-update.timer 2>/dev/null || true
 
-# Relancer les GUI ouvertes pour charger la nouvelle version (elles redémarrent via le tray/autostart)
+# Relancer les GUI ouvertes pour charger la nouvelle version : le service utilisateur (Restart=always) ou la
+# surveillance du service root relancent le bouclier dans chaque session graphique active
 pkill -f "/opt/clamav-antivirus/clamav-antivirus.py" 2>/dev/null || true
 
 # Update desktop database

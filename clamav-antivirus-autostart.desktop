@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=ClamAV Antivirus GUI (tray)
 Comment=Bouclier ClamAV Antivirus GUI dans la barre des tâches
-Exec=/opt/clamav-antivirus/clamav-antivirus.py --tray
+Exec=/opt/clamav-antivirus/clamav-antivirus-tray
 Icon=/opt/clamav-antivirus/icons/logo.svg
 Terminal=false
 Type=Application

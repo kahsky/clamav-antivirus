@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.17.0)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.17.1)
 
 ---
 
@@ -125,6 +125,11 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 - **Failles sans correctif possible expliquées** — une base intégrée (TunnelVision CVE-2024-3661…) affiche sous
   la faille ce qu'elle est (défaut de conception, statut « deferred » d'Ubuntu) et si elle vous concerne (VPN
   configuré ou non) ; la checklist compte les CVE distinctes, pas une fois par paquet.
+- **Bouclier permanent** — le tray est lancé par `clamav-antivirus-tray` dans un service utilisateur transitoire
+  systemd (`Restart=always`) : tué, il revient en une seconde ; le service root vérifie en plus toutes les 20 s
+  que chaque session graphique active a son bouclier et le relance sinon. « Quitter » demande l'authentification
+  administrateur (pkexec), arrête proprement le service utilisateur et prévient le service root de ne pas relancer
+  dans cette session (une nouvelle ouverture de session le relance).
 - **Consentement explicite** — à la première utilisation (après l'avertissement légal), une page entière demande
   si l'on accepte le relevé anonyme hebdomadaire : à quoi il sert, ce qui n'est jamais envoyé, et l'exemple exact
   de ce qui partirait de cet ordinateur (commande `telemetry_preview`, rien n'est transmis). Réponse obligatoire,
@@ -286,7 +291,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.17.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.17.0_all.deb)
+[Télécharger clamav-antivirus_1.17.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.17.1_all.deb)
 
 ---
 
@@ -317,12 +322,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.17.0_all.deb`
+Résultat : `clamav-antivirus_1.17.1_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.17.0_all.deb
+sudo dpkg -i clamav-antivirus_1.17.1_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

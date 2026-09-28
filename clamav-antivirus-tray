@@ -1,0 +1,16 @@
+#!/bin/sh
+# ClamAV Antivirus GUI — lance le bouclier (tray) dans un service utilisateur transitoire relancé automatiquement
+# s'il est tué (Restart=always). « Quitter » (administrateur) arrête proprement ce service.
+# Variables de test : CLAMAV_ANTIVIRUS_TRAY_UNIT (nom d'unité), CLAMAV_ANTIVIRUS_TRAY_CMD (commande).
+UNIT="${CLAMAV_ANTIVIRUS_TRAY_UNIT:-clamav-antivirus-tray}"
+CMD="${CLAMAV_ANTIVIRUS_TRAY_CMD:-/usr/bin/python3 /opt/clamav-antivirus/clamav-antivirus.py --tray}"
+if command -v systemd-run >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    if systemctl --user is-active --quiet "$UNIT.service"; then
+        exit 0
+    fi
+    systemctl --user reset-failed "$UNIT.service" >/dev/null 2>&1
+    exec systemd-run --user --quiet --unit="$UNIT" --collect \
+        -p Restart=always -p RestartSec=1 -p KillMode=process \
+        --description="ClamAV Antivirus GUI (tray)" /bin/sh -c "exec $CMD"
+fi
+exec $CMD

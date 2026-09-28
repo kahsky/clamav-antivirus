@@ -1006,7 +1006,7 @@ class TrayIcon:
         self.app.show_tab("system")
 
     def on_quit(self, _):
-        Gtk.main_quit()
+        self.app.request_quit()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2785,7 +2785,40 @@ class ClamAVAntivirusApp:
             subprocess.Popen(["xdg-open", url])
 
     def act_quit(self, _data):
-        Gtk.main_quit()
+        self.request_quit()
+
+    def request_quit(self):
+        """Fermer le bouclier est réservé à un administrateur : authentification pkexec, puis arrêt propre du service
+        utilisateur (sinon il serait relancé) et information du service système (pas de relance dans cette session)."""
+        if getattr(self, "_quitting", False):
+            return
+        self._quitting = True
+
+        def worker():
+            try:
+                r = subprocess.run(["pkexec", UNLOCK_HELPER], capture_output=True, text=True, timeout=300)
+                ok = r.returncode == 0
+            except Exception:  # noqa: BLE001
+                ok = False
+            GLib.idle_add(self._quit_done, ok)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _quit_done(self, ok):
+        self._quitting = False
+        if not ok:
+            self.popup("warning", self.T("tray.quit_denied_title"), self.T("tray.quit_denied_body"), timeout=12)
+            return False
+        try:
+            DaemonClient.request("tray_quit")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if subprocess.run(["systemctl", "--user", "is-active", "--quiet", "clamav-antivirus-tray.service"], timeout=10).returncode == 0:
+                subprocess.Popen(["systemctl", "--user", "stop", "--no-block", "clamav-antivirus-tray.service"])
+        except Exception:  # noqa: BLE001
+            pass
+        GLib.timeout_add(300, Gtk.main_quit)
+        return False
 
     # ── Callbacks des opérations pkexec ─────────────────────────────────
     def operation_callback(self, status, key_or_text, params):

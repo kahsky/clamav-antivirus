@@ -1220,6 +1220,32 @@ VALID_POLICY = ("allow", "deny", "reject")
 NETWORK_SKIP_TYPES = ("loopback", "vpn", "wireguard", "tun", "tap", "bridge", "dummy", "ip-tunnel")
 
 
+TRAY_LAUNCHER = "/opt/clamav-antivirus/clamav-antivirus-tray"
+
+
+def graphical_sessions():
+    """Sessions graphiques locales actives : [{id, user, uid, type}] (loginctl)."""
+    out = []
+    r = run_quiet(["loginctl", "list-sessions", "--no-legend"], timeout=10)
+    for ln in (r.stdout or "").splitlines():
+        parts = ln.split()
+        if not parts:
+            continue
+        sid = parts[0]
+        s = run_quiet(["loginctl", "show-session", sid, "-p", "Type", "-p", "State", "-p", "Name", "-p", "Remote", "-p", "Class"], timeout=10)
+        props = dict(kv.split("=", 1) for kv in (s.stdout or "").splitlines() if "=" in kv)
+        if props.get("State") != "active" or props.get("Type") not in ("x11", "wayland") or props.get("Remote") == "yes" \
+                or props.get("Class", "user") != "user":
+            continue
+        try:
+            uid = pwd.getpwnam(props.get("Name", "")).pw_uid
+        except KeyError:
+            continue
+        if uid >= 1000:
+            out.append({"id": sid, "user": props.get("Name"), "uid": uid, "type": props.get("Type")})
+    return out
+
+
 def network_identity():
     """Réseau courant : {key, name, type, device}. Clé stable = connexion NetworkManager qui porte la route par défaut
     (uuid), sinon adresse MAC de la passerelle. None hors ligne."""
@@ -3052,6 +3078,9 @@ class Daemon:
         self.timeshift_enabling = False
         self.hardening_running = False
         self.integrity_progress = None         # {"tools": {outil: {percent, detail, state, warnings}}, "current", "started_at"}
+        self.tray_stopped = {}                 # uid → {ids de sessions} où l'administrateur a quitté le bouclier
+        self.tray_launched = {}                # uid → dernier lancement (anti-rafale)
+        self.last_tray_check = 0.0
         self.last_integrity_emit = 0.0
         self.current_network = None            # réseau courant {key, name, type, device}, None hors ligne
         self.network_lock = threading.Lock()
@@ -4069,14 +4098,41 @@ class Daemon:
 
     # ── Réseau courant et profil mémorisé par réseau ──────────────────────
     def network_loop(self):
-        """Surveille le réseau courant (route par défaut, connexion NetworkManager) toutes les 10 s."""
+        """Surveille le réseau courant (route par défaut, connexion NetworkManager) toutes les 10 s,
+        et le bouclier (tray) de chaque session graphique toutes les 20 s."""
         time.sleep(8)
         while not self.shutdown.is_set():
             try:
                 self.check_network()
             except Exception as e:  # noqa: BLE001
                 log(f"Réseau : {e}")
+            try:
+                if time.time() - self.last_tray_check >= 20:
+                    self.last_tray_check = time.time()
+                    self.check_tray()
+            except Exception as e:  # noqa: BLE001
+                log(f"Tray : {e}")
             self.shutdown.wait(10)
+
+    def check_tray(self):
+        """Le bouclier doit être présent dans chaque session graphique active : s'il a été tué, il est relancé
+        dans la session (service utilisateur transitoire), sauf si un administrateur l'a quitté dans cette session."""
+        if os.geteuid() != 0 or TEST_MODE or not os.path.exists(TRAY_LAUNCHER):
+            return
+        for s in graphical_sessions():
+            uid = s["uid"]
+            if s["id"] in (self.tray_stopped.get(uid) or set()):
+                continue
+            r = run_quiet(["pgrep", "-u", str(uid), "-f", "clamav-antivirus.py"], timeout=10)
+            if r.returncode == 0:
+                continue
+            if time.time() - self.tray_launched.get(uid, 0) < 30:
+                continue
+            self.tray_launched[uid] = time.time()
+            env = {"XDG_RUNTIME_DIR": f"/run/user/{uid}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus", "HOME": pwd.getpwuid(uid).pw_dir}
+            cmd = ["runuser", "-u", s["user"], "--", "env"] + [f"{k}={v}" for k, v in env.items()] + [TRAY_LAUNCHER]
+            rr = run_quiet(cmd, timeout=30)
+            self.write_log(f"tray relaunched for {s['user']} (session {s['id']}) → {rr.returncode}")
 
     def network_info(self):
         known = self.state.get("network_profiles") or {}
@@ -5394,6 +5450,13 @@ class Daemon:
             self.write_log(f"✘ untrusted program: {exe}")
             self.broadcast({"event": "trusted", "programs": programs, "acknowledged": self.state.get("acknowledged_persistence") or []})
             return {"ok": True, "programs": programs}
+
+        if cmd == "tray_quit":
+            # « Quitter » autorisé par un administrateur : ne pas relancer le bouclier dans cette session
+            ids = {s["id"] for s in graphical_sessions() if s["uid"] == uid} if not TEST_MODE else {"test"}
+            self.tray_stopped[uid] = ids
+            self.write_log(f"tray quit by uid {uid} (sessions {sorted(ids)})")
+            return {"ok": True, "sessions": sorted(ids)}
 
         if cmd == "telemetry_preview":
             # Aperçu de la charge utile telle qu'elle serait envoyée (rien n'est transmis)
