@@ -2916,6 +2916,42 @@ def integrity_ack_key(tool, text):
     return f"{tool}:{hashlib.sha1(re.sub(r'\s+', ' ', (text or '').strip()).encode()).hexdigest()[:16]}"
 
 
+LYNIS_RULES_VERSION = 1
+
+
+def classify_lynis_warning(test, text):
+    """Verdict intégré pour un avertissement Lynis connu (l'état réel est vérifié) ; None si inconnu."""
+    if test == "TIME-3185":
+        # Lynis exige un fichier témoin touché il y a moins de 2048 s ; systemd-timesyncd espace ses alignements
+        # jusqu'à exactement 2048 s une fois l'heure stable → faux positif fréquent. L'état réel fait foi.
+        r = run_quiet(["timedatectl", "show", "-p", "NTP", "-p", "NTPSynchronized", "--value"], timeout=15)
+        vals = (r.stdout or "").split()
+        ntp_on, synced = (vals + ["", ""])[0] == "yes", (vals + ["", ""])[1] == "yes"
+        if synced:
+            return {"path": test, "verdict": "benign", "reason": "time_synced"}
+        if not ntp_on:
+            return {"path": test, "verdict": "unknown", "reason": "ntp_off", "fix": "TIME-3104"}
+        return {"path": test, "verdict": "unknown", "reason": "time_stale", "fix": "TIME-3185"}
+    if test == "KRNL-5788":
+        return {"path": test, "verdict": "unknown", "reason": "reboot"}
+    return None
+
+
+def lynis_analysis(warnings):
+    """Avertissements Lynis « TEST: texte » → {warnings, benign, notes} comme pour chkrootkit."""
+    out, benign, notes = [], [], {}
+    for w in warnings or []:
+        test = w.split(":", 1)[0].strip() if ":" in w else ""
+        note = classify_lynis_warning(test, w) if re.fullmatch(r"[A-Z]{3,5}-\d{4}", test) else None
+        if note and note["verdict"] == "benign":
+            benign.append({"text": w, "notes": [note]})
+            continue
+        if note:
+            notes[w] = [note]
+        out.append(w)
+    return {"warnings": out[:80], "benign": benign[:40], "notes": notes}
+
+
 def run_integrity_checks(collect_verified=False, cancel_event=None, progress=None):
     """Lynis (audit de durcissement), unhide (processus et ports cachés), chkrootkit, debsums et fichiers de
     l'application. Avec collect_verified, retourne aussi l'ensemble (hashes) des fichiers système vérifiés
@@ -2952,7 +2988,9 @@ def run_integrity_checks(collect_verified=False, cancel_event=None, progress=Non
             if name == "lynis":
                 rep = parse_lynis_report()
                 result["lynis"] = rep
-                lines = list(rep.get("warnings") or [])
+                la = lynis_analysis(rep.get("warnings") or [])
+                lines = la["warnings"]
+                entry["benign"], entry["notes"], entry["rules"] = la["benign"], la["notes"], LYNIS_RULES_VERSION
             elif name in ("unhide", "unhide-tcp"):
                 lines = [ln for ln in lines if "HIDDEN" in ln.upper() and "Found" in ln]
             elif name == "chkrootkit":
@@ -4210,6 +4248,24 @@ class Daemon:
                 log("Vérification d'intégrité relancée (outils modifiés)")
                 threading.Thread(target=self.run_integrity, daemon=True).start()
             else:
+                # Avertissements Lynis d'un relevé antérieur : reclassés sur place (état réel vérifié), sans relancer l'audit
+                ly = (stored.get("tools") or {}).get("lynis") or {}
+                if ly.get("ran") and ly.get("rules") != LYNIS_RULES_VERSION:
+                    try:
+                        la = lynis_analysis(ly.get("all_warnings") or ly.get("warnings") or [])
+                        integ = dict(stored)
+                        tools = dict(integ.get("tools") or {})
+                        tools["lynis"] = dict(ly, all_warnings=list(la["warnings"]), warnings=list(la["warnings"]),
+                                              benign=la["benign"], notes=la["notes"], rules=LYNIS_RULES_VERSION)
+                        integ["tools"] = tools
+                        self.apply_integrity_acks(integ)
+                        self.state.update(integrity=integ)
+                        stored = integ
+                        self.broadcast({"event": "integrity", "integrity": self.integrity_payload()})
+                        self.refresh_overall()
+                        log(f"Avertissements Lynis reclassés : {len(la['benign'])} faux positif(s) connu(s)")
+                    except Exception as e:  # noqa: BLE001
+                        log(f"Reclassement Lynis : {e}")
                 # Relevé chkrootkit incomplet (en-tête sans ses chemins, versions < 1.12.1) ou sans classification
                 chk = (stored.get("tools") or {}).get("chkrootkit") or {}
                 old_style = any(str(w).rstrip().endswith(":") for w in (chk.get("all_warnings") or chk.get("warnings") or []))
@@ -4355,8 +4411,10 @@ class Daemon:
         if not integ:
             return
         tools = dict(integ.get("tools") or {})
-        tools["lynis"] = {"installed": True, "ran": True, "rc": r.returncode, "warnings": list(rep["warnings"])[:80],
-                          "all_warnings": list(rep["warnings"])[:80]}
+        la = lynis_analysis(rep.get("warnings") or [])
+        tools["lynis"] = {"installed": True, "ran": True, "rc": r.returncode, "warnings": list(la["warnings"]),
+                          "all_warnings": list(la["warnings"]), "benign": la["benign"], "notes": la["notes"],
+                          "rules": LYNIS_RULES_VERSION}
         integ["tools"], integ["lynis"] = tools, rep
         self.apply_integrity_acks(integ)
         self.state.update(integrity=integ)

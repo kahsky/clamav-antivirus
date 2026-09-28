@@ -81,6 +81,7 @@ CATALOG = {
     "NAME-4404": {"kind": "apply", "fn": "hosts"},
     "SSH-7408": {"kind": "apply", "fn": "sshd", "caution": True},
     "TIME-3104": {"kind": "apply", "fn": "ntp", "no_revert": True},
+    "TIME-3185": {"kind": "apply", "fn": "ntp_restart", "no_revert": True},
     "FILE-7524": {"kind": "apply", "fn": "file_perms"},
     "PKGS-7420": {"kind": "gui", "action": "auto_updates_enable"},
     "FIRE-4512": {"kind": "gui", "action": "firewall"},
@@ -492,7 +493,21 @@ def revert_sshd(_prev):
 
 def apply_ntp(_ctx):
     _check(_run(["timedatectl", "set-ntp", "true"]), "timedatectl")
+    _run(["systemctl", "restart", "systemd-timesyncd"])
     return "synchronisation de l'heure activée", {}
+
+
+def apply_ntp_restart(_ctx):
+    """Synchronisation activée et service relancé ; attend un alignement effectif (20 s au plus)."""
+    _check(_run(["timedatectl", "set-ntp", "true"]), "timedatectl")
+    _run(["systemctl", "restart", "systemd-timesyncd"])
+    import time as _t
+    for _ in range(0 if DRY else 10):
+        r = _run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"])
+        if (r.stdout or "").strip() == "yes":
+            return "heure synchronisée (systemd-timesyncd relancé)", {}
+        _t.sleep(2)
+    return "systemd-timesyncd relancé ; alignement en attente (serveur de temps joignable ?)", {}
 
 
 def apply_file_perms(ctx):

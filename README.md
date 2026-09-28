@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.15.1)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.15.3)
 
 ---
 
@@ -125,6 +125,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 - **Failles sans correctif possible expliquées** — une base intégrée (TunnelVision CVE-2024-3661…) affiche sous
   la faille ce qu'elle est (défaut de conception, statut « deferred » d'Ubuntu) et si elle vous concerne (VPN
   configuré ou non) ; la checklist compte les CVE distinctes, pas une fois par paquet.
+- **Avertissements Lynis classés** — l'état réel est vérifié avant d'alerter (TIME-3185 : NTP actif et horloge
+  alignée = faux positif connu, sinon « Régler » relance la synchronisation ; KRNL-5788 : redémarrage à faire) ;
+  le relevé existant est reclassé au démarrage.
 - **Progression de l'intégrité visible** — la sortie de chaque outil est lue en continu : sections Lynis, tests
   chkrootkit, fichiers debsums, phases unhide donnent un pourcentage et l'étape en cours, affichés outil par
   outil dans le scan (phase intégrité) et dans la carte Intégrité (événement `integrity_progress`).
@@ -269,7 +272,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.15.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.15.1_all.deb)
+[Télécharger clamav-antivirus_1.15.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.15.3_all.deb)
 
 ---
 
@@ -300,12 +303,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.15.1_all.deb`
+Résultat : `clamav-antivirus_1.15.3_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.15.1_all.deb
+sudo dpkg -i clamav-antivirus_1.15.3_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
