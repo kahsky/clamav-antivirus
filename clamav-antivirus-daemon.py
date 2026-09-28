@@ -276,7 +276,9 @@ class Job:
         self.resume = resume
         self.auto = auto            # lancé par le système (première installation, reprise)
         self.usb = usb              # dict décrivant le support USB analysé, ou None
-        self.integrity = integrity  # analyse complète : vérification d'intégrité (rootkits, paquets) après le scan
+        self.integrity = integrity  # analyse complète : vérification d'intégrité (rootkits, paquets) AVANT le scan
+        self.skipped = 0            # fichiers système vérifiés par debsums, ignorés par l'antivirus
+        self.integrity_warnings = None
         self.requested_by = requested_by
         self.created_at = time.time()
         self.started_at = None
@@ -305,6 +307,8 @@ class Job:
             "auto": self.auto,
             "usb": self.usb,
             "integrity": self.integrity,
+            "skipped": self.skipped,
+            "integrity_warnings": self.integrity_warnings,
             "phase": self.phase,
             "scanned": self.scanned,
             "total": self.total,
@@ -1830,13 +1834,56 @@ def collect_persistence():
 # Intégrité : rkhunter, chkrootkit, debsums + fichiers de l'application
 # ═══════════════════════════════════════════════════════════════════════════
 
-def run_integrity_checks():
-    result = {"checked_at": now_iso(), "tools": {}, "app": app_integrity(), "warnings": 0}
+def debsums_verified_paths(failed_lines):
+    """Empreintes (hash) des fichiers de paquets dont debsums a confirmé l'intégrité :
+    entrées de /var/lib/dpkg/info/*.md5sums, moins les conffiles (non vérifiés sans -a) et les fichiers signalés."""
+    failed = set()
+    for ln in failed_lines or []:
+        for m in re.finditer(r"(/[^\s]+)", ln):
+            failed.add(m.group(1))
+    conffiles = set()
+    info = "/var/lib/dpkg/info"
+    try:
+        names = os.listdir(info)
+    except OSError:
+        return set()
+    for n in names:
+        if n.endswith(".conffiles"):
+            try:
+                with open(os.path.join(info, n), encoding="utf-8", errors="replace") as f:
+                    conffiles.update(ln.strip() for ln in f if ln.strip())
+            except OSError:
+                pass
+    verified = set()
+    for n in names:
+        if not n.endswith(".md5sums"):
+            continue
+        try:
+            with open(os.path.join(info, n), encoding="utf-8", errors="replace") as f:
+                for ln in f:
+                    parts = ln.rstrip("\n").split("  ", 1)
+                    if len(parts) == 2:
+                        path = "/" + parts[1]
+                        if path not in conffiles and path not in failed:
+                            verified.add(hash(path))
+        except OSError:
+            continue
+    return verified
+
+
+def run_integrity_checks(collect_verified=False, cancel_event=None):
+    """rkhunter, chkrootkit, debsums et fichiers de l'application. Avec collect_verified, retourne aussi
+    l'ensemble (hashes) des fichiers système vérifiés par debsums, que l'antivirus peut ignorer."""
+    result = {"checked_at": now_iso(), "tools": {}, "app": app_integrity(), "warnings": 0, "verified_files": 0}
+    verified = set()
     tools = {"rkhunter": ["rkhunter", "--check", "--sk", "--nocolors", "--rwo"],
              "chkrootkit": ["chkrootkit", "-q"],
              "debsums": ["debsums", "-s"]}
     for name, cmd in tools.items():
         entry = {"installed": shutil.which(cmd[0]) is not None, "ran": False, "warnings": [], "rc": None}
+        if cancel_event is not None and cancel_event.is_set():
+            result["tools"][name] = entry
+            continue
         if entry["installed"] and os.geteuid() == 0:
             r = run_quiet(cmd, timeout=1800)
             entry["ran"] = True
@@ -1849,11 +1896,14 @@ def run_integrity_checks():
                 lines = [ln for ln in lines if "INFECTED" in ln or "Warning" in ln or "suspicious" in ln.lower()]
             elif name == "debsums":
                 lines = [ln for ln in lines if ln and not ln.startswith("debsums:") or "FAILED" in ln or "REPLACED" in ln][:80]
+                if collect_verified:
+                    verified = debsums_verified_paths(out)
+                    result["verified_files"] = len(verified)
             entry["warnings"] = lines[:80]
         result["tools"][name] = entry
         result["warnings"] += len(entry["warnings"])
     result["warnings"] += len(result["app"]["modified"]) + len(result["app"]["missing"])
-    return result
+    return (result, verified) if collect_verified else result
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2015,11 +2065,9 @@ class Daemon:
             "status": status, "msg_key": key, "msg_params": params,
             "message": t("en", key, **params), "summary": summary or {},
             "auto": job.auto, "usb": job.usb, "integrity": getattr(job, "integrity", False),
+            "integrity_warnings": getattr(job, "integrity_warnings", None), "skipped": getattr(job, "skipped", 0),
             "elapsed": time.time() - (job.started_at or time.time()),
         })
-        # Analyse complète : enchaîner la vérification d'intégrité (rootkits, paquets, fichiers de l'application)
-        if job.kind == "scan" and getattr(job, "integrity", False) and status not in ("cancelled", "error"):
-            threading.Thread(target=self.run_integrity, kwargs={"after_scan": True}, daemon=True).start()
 
     # ── Scan ─────────────────────────────────────────────────────────────
     def _save_progress(self, job, in_progress=True):
@@ -2045,8 +2093,9 @@ class Daemon:
         except Exception:
             return {}
 
-    def _count_files(self, job, cache):
-        """Phase inventaire : find → fichier cache, en streaming (peu de mémoire)."""
+    def _count_files(self, job, cache, skip=None):
+        """Phase inventaire : find → fichier cache, en streaming (peu de mémoire).
+        `skip` : hashes des fichiers système vérifiés par debsums, exclus de l'analyse antivirus."""
         job.phase = "counting"
         job.found = 0
         self.emit_progress(job)
@@ -2060,6 +2109,9 @@ class Daemon:
                 if job.cancel_event.is_set():
                     break
                 if line.strip():
+                    if skip and hash(line.rstrip("\n")) in skip:
+                        job.skipped += 1
+                        continue
                     out.write(line)
                     job.found += 1
                     if time.time() - last_emit >= PROGRESS_INTERVAL:
@@ -2100,11 +2152,25 @@ class Daemon:
             else:
                 job.resume = False
 
+        skip = None
         if not resumed:
             label = "usb " if job.usb else ("auto " if job.auto else "")
             self.write_log(f"▶ scan {label}{job.path}")
             self.emit_line("info", f"▶ {job.path}")
-            total = self._count_files(job, cache)
+            if job.integrity and not job.usb:
+                # Analyse complète : intégrité d'abord (rootkits, paquets, fichiers de l'application) ;
+                # les fichiers système confirmés intacts par debsums sont ensuite ignorés par l'antivirus.
+                job.phase = "integrity"
+                self.emit_progress(job)
+                self.emit_line("info", "▶ integrity (rkhunter, chkrootkit, debsums)")
+                result, skip = run_integrity_checks(collect_verified=True, cancel_event=job.cancel_event)
+                if not job.cancel_event.is_set():
+                    self._store_integrity(result, after_scan=True)
+                    job.integrity_warnings = result.get("warnings", 0)
+                    self.write_log(f"integrity: {result.get('warnings', 0)} warning(s), {len(skip)} verified system files")
+                    self.emit_line("info", f"✓ integrity: {result.get('warnings', 0)} warning(s), {len(skip)} verified files skipped")
+            total = self._count_files(job, cache, skip)
+            skip = None
             if job.cancel_event.is_set():
                 if job.cancelled_by_user:
                     self._forget_auto(job)
@@ -2233,6 +2299,7 @@ class Daemon:
             "denied": job.denied, "errors": job.errors,
             "duration": time.time() - (job.started_at or time.time()),
             "threats": job.threats[-50:], "auto": job.auto, "usb": job.usb,
+            "skipped": job.skipped, "integrity_warnings": job.integrity_warnings,
         }
 
     def _record_scan(self, job, status):
@@ -2503,23 +2570,25 @@ class Daemon:
         self.refresh_overall()
         return checklist
 
+    def _store_integrity(self, result, after_scan=False):
+        self.last_integrity = time.time()
+        self.state.update(integrity=result, last_integrity=now_iso())
+        if result["warnings"]:
+            self.publish_alert({"kind": "integrity", "severity": "warn", "time": now_iso(),
+                                "title": str(result["warnings"]), "detail": ", ".join(
+                                    [n for n, t in result["tools"].items() if t["warnings"]] +
+                                    (["app"] if result["app"]["modified"] or result["app"]["missing"] else [])),
+                                "pid": 0, "comm": "", "exe": "", "count": 0, "top_dir": "", "reasons": [], "sample": []})
+        self.broadcast({"event": "integrity", "integrity": result, "after_scan": after_scan})
+        self.refresh_overall()
+
     def run_integrity(self, after_scan=False):
         if self.integrity_running:
             return False
         self.integrity_running = True
         try:
-            self.last_integrity = time.time()
             self.broadcast({"event": "integrity_running"})
-            result = run_integrity_checks()
-            self.state.update(integrity=result, last_integrity=now_iso())
-            if result["warnings"]:
-                self.publish_alert({"kind": "integrity", "severity": "warn", "time": now_iso(),
-                                    "title": str(result["warnings"]), "detail": ", ".join(
-                                        [n for n, t in result["tools"].items() if t["warnings"]] +
-                                        (["app"] if result["app"]["modified"] or result["app"]["missing"] else [])),
-                                    "pid": 0, "comm": "", "exe": "", "count": 0, "top_dir": "", "reasons": [], "sample": []})
-            self.broadcast({"event": "integrity", "integrity": result, "after_scan": after_scan})
-            self.refresh_overall()
+            self._store_integrity(run_integrity_checks(), after_scan=after_scan)
             return True
         finally:
             self.integrity_running = False

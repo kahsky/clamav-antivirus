@@ -1342,11 +1342,8 @@ class ClamAVAntivirusApp:
                                             "available": True})
             self.act_get_alerts({})
         elif et == "integrity" and ev.get("after_scan"):
-            result = ev.get("integrity") or {}
-            self.send_to_js("securityData", {"type": "integrity", "data": result, "available": True, "after_scan": True})
-            if not result.get("warnings") and self.popups_enabled("scan"):
-                self.popup("success", self.T("popup.integrity_ok.title"), self.T("popup.integrity_ok.body"), timeout=14,
-                           on_activate=lambda: self.show_tab("security"))
+            # intégrité vérifiée au début d'une analyse complète : le bilan arrive avec la fin du scan
+            self.send_to_js("securityData", {"type": "integrity", "data": ev.get("integrity") or {}, "available": True, "after_scan": True})
         elif et in ("vulns", "checklist", "integrity", "persistence", "app_update", "integrity_running", "suspended"):
             self.send_to_js("securityData", {"type": et, "data": ev.get(et) or ev.get("update") or {},
                                              "available": True})
@@ -1388,7 +1385,8 @@ class ClamAVAntivirusApp:
                                          "auto": ev.get("auto"), "path": ev.get("path"),
                                          "usb": ev.get("usb")})
             if not ev.get("usb"):
-                self.notify_scan_result(status, message, ev.get("summary", {}), integrity=bool(ev.get("integrity")))
+                self.notify_scan_result(status, message, ev.get("summary", {}), integrity=bool(ev.get("integrity")),
+                                        integrity_warnings=ev.get("integrity_warnings"), skipped=ev.get("skipped") or 0)
         else:
             self.updating = False
             ok = status == "success"
@@ -1403,15 +1401,17 @@ class ClamAVAntivirusApp:
         self.send_status()
         self.tray.update_status()
 
-    def notify_scan_result(self, status, message, summary, integrity=False):
+    def notify_scan_result(self, status, message, summary, integrity=False, integrity_warnings=None, skipped=0):
         T = self.T
         path = (summary or {}).get("path") or ""
         if status == "clean" and not self.popups_enabled("scan"):
             return
+        if integrity and integrity_warnings is not None:
+            message += "\n" + (T("popup.scan.integrity_warn", n=integrity_warnings) if integrity_warnings else T("popup.scan.integrity_ok"))
+        if skipped:
+            message += "\n" + T("scan.note.skipped", n=skipped)
         if status == "clean":
-            if integrity:
-                message = message + "\n" + T("popup.scan.integrity_pending")
-            self.popup("success", T("popup.scan.clean_title"), message, timeout=12,
+            self.popup("success", T("popup.integrity_ok.title") if integrity else T("popup.scan.clean_title"), message, timeout=12,
                        meta=path, on_activate=lambda: self.show_tab("scan"))
         elif status == "infected":
             self.popup("danger", T("popup.scan.infected_title"), message, meta=path,

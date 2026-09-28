@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.9.0)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.9.1)
 
 ---
 
@@ -80,11 +80,12 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   planification automatique quotidienne/hebdomadaire/mensuelle dès que la destination est branchée,
   historique, consignes de restauration. Fichiers jamais sauvegardés ou Timeshift non planifié : voyant
   jaune (désactivable dans Paramètres). Tout tourne avec les droits de l'utilisateur, sans mot de passe.
-- **Analyse complète** — « Analyser mon ordinateur » (vue simple, tableau de bord, tray) enchaîne le
-  scan antivirus de tout le disque puis la vérification d'intégrité : rkhunter, chkrootkit, debsums et
-  fichiers de l'application ; un popup conclut « Analyse complète terminée » ou signale les
-  avertissements. En vue avancée, l'onglet Scanner garde le scan seul, l'onglet Sécurité la
-  vérification seule, et un bouton « Tout analyser (fichiers + intégrité) » fait les deux. rkhunter,
+- **Analyse complète** — « Analyser mon ordinateur » (vue simple, tableau de bord, tray) commence par
+  la vérification d'intégrité (rkhunter, chkrootkit, debsums, fichiers de l'application), puis lance le
+  scan antivirus en **ignorant les fichiers système que debsums a confirmés identiques à leur paquet**
+  (plusieurs centaines de milliers de fichiers), d'où une analyse bien plus rapide. Le popup final
+  résume menaces, intégrité et nombre de fichiers ignorés. En vue avancée, l'onglet Scanner propose
+  « Scan complet (intégrité + fichiers) », « Fichiers uniquement » et « Intégrité uniquement ». rkhunter,
   chkrootkit et debsums sont désormais des dépendances du paquet ; rkhunter est initialisé à
   l'installation et remis à jour après chaque passage d'apt (`APT_AUTOGEN`).
 - **Installer les mises à jour** — le bouton « Mettre à jour » (vue simple) et « Installer les mises à
@@ -155,7 +156,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.9.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.9.0_all.deb)
+[Télécharger clamav-antivirus_1.9.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.9.1_all.deb)
 
 ---
 
@@ -186,12 +187,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.9.0_all.deb`
+Résultat : `clamav-antivirus_1.9.1_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.9.0_all.deb
+sudo dpkg -i clamav-antivirus_1.9.1_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

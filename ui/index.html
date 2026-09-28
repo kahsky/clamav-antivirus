@@ -224,7 +224,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.9.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.9.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -486,6 +486,7 @@
 
                     <ol class="scan-phases" id="scanPhases">
                         <li data-phase="prepare"><span class="phase-dot"></span><span data-i18n="scan.phase.prepare">Préparation</span></li>
+                        <li data-phase="integrity" hidden><span class="phase-dot"></span><span data-i18n="scan.phase.integrity">Intégrité</span></li>
                         <li data-phase="counting"><span class="phase-dot"></span><span data-i18n="scan.phase.counting">Inventaire</span></li>
                         <li data-phase="scanning"><span class="phase-dot"></span><span data-i18n="scan.phase.scanning">Analyse</span></li>
                         <li data-phase="done"><span class="phase-dot"></span><span data-i18n="scan.phase.done">Terminé</span></li>
@@ -506,15 +507,15 @@
                     </div>
 
                     <div class="scan-hero-actions">
-                        <button class="btn btn-full-scan" id="btnFullScan" onclick="startFullSystemScan()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/>
-                            </svg>
-                            <span data-i18n="scan.btn.full">Scan complet du système</span>
+                        <button class="btn btn-full-scan" id="btnFullAnalysis" onclick="startFullSystemScan(true)" data-i18n-title="scan.full_analysis_hint" title="Intégrité d'abord (rkhunter, chkrootkit, debsums), puis analyse antivirus des fichiers non vérifiés">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/></svg>
+                            <span data-i18n="scan.btn.full_analysis">Scan complet (intégrité + fichiers)</span>
                         </button>
-                        <button class="btn btn-primary" id="btnFullAnalysis" onclick="startFullSystemScan(true)" data-i18n-title="scan.full_analysis_hint" title="Scan antivirus complet, puis rkhunter, chkrootkit, debsums et fichiers de l'application">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M8 12h8M12 8v8"/></svg>
-                            <span data-i18n="scan.btn.full_analysis">Tout analyser (fichiers + intégrité)</span>
+                        <button class="btn btn-secondary" id="btnFullScan" onclick="startFullSystemScan(false)" data-i18n-title="scan.files_only_hint" title="Analyse antivirus de tous les fichiers, sans vérification d'intégrité">
+                            <span data-i18n="scan.btn.full">Fichiers uniquement</span>
+                        </button>
+                        <button class="btn btn-secondary" id="btnIntegrityOnly" onclick="runIntegrityOnly()" data-i18n-title="scan.integrity_only_hint" title="rkhunter, chkrootkit, debsums et fichiers de l'application, sans analyse antivirus">
+                            <span data-i18n="scan.btn.integrity_only">Intégrité uniquement</span>
                         </button>
                         <button class="btn btn-danger" id="btnCancelScan" onclick="cancelScan()" hidden>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>

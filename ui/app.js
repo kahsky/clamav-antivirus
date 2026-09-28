@@ -334,7 +334,7 @@ function onSecurityData(data) {
     if (type === 'integrity_running') { $('btnIntegrityRun').disabled = true; $('integrityList').innerHTML = `<p class="text-muted">${t('security.integrity.running')}</p>`; return; }
     if (type === 'suspended') { if (lastStatus) { lastStatus.suspended = data.data; renderSimpleView(); } return; }
     if (data.available === false) { renderSecurityUnavailable(type); return; }
-    if (type === 'integrity' && data.after_scan && data.data) setHeroNote((data.data.warnings || 0) ? t('scan.note.integrity_warn', { n: data.data.warnings }) : t('scan.note.integrity_ok'));
+    if (type === 'integrity' && data.after_scan && data.data && scan.running) setHeroNote((data.data.warnings || 0) ? t('scan.note.integrity_warn', { n: data.data.warnings }) : t('scan.note.integrity_ok'));
     secData[type] = data.data || null;
     if (type === 'vulns') { renderVulns(data.refreshing); }
     else if (type === 'checklist') renderChecklist();
@@ -646,7 +646,7 @@ function syncSimpleScan() {
     box.hidden = !scan.running;
     if (!scan.running) return;
     const pct = scanPercent();
-    $('simpleScanTitle').textContent = scan.phase === 'counting' ? t('dash.live.counting') : t('topbar.scanning', { path: scanTargetLabel() });
+    $('simpleScanTitle').textContent = scan.phase === 'counting' ? t('dash.live.counting') : scan.phase === 'integrity' ? t('scan.integrity_running') : t('topbar.scanning', { path: scanTargetLabel() });
     $('simpleScanCount').textContent = scan.phase === 'scanning' ? `${Math.floor(pct)} % · ${$('statEta').textContent}` : t('history.files', { n: formatNumber(scan.found) });
     $('simpleScanFill').style.width = `${pct}%`;
 }
@@ -1286,6 +1286,7 @@ function renderAlerts(available = true) {
 // ─── Scan : démarrage / annulation ──────────────────────────────────────────
 
 function startFullSystemScan(withIntegrity = false) {
+    scan.integrity = !!withIntegrity;
     if (scan.running) { showToast(t('toast.scan_running'), 'info'); if (viewMode === 'advanced') switchTab('scan'); return; }
     toggleInitialScanPrompt(false);
     if (viewMode === 'advanced') switchTab('scan');
@@ -1357,6 +1358,7 @@ function prepareScanUI(path) {
 // ─── Scan : événements du backend ───────────────────────────────────────────
 
 function onScanStarted(data) {
+    if (data && data.integrity != null) scan.integrity = !!data.integrity;
     if (!scan.running) prepareScanUI(data.path);
     scan.source = data.source;
     scan.path = data.path || scan.path;
@@ -1395,6 +1397,7 @@ function applyProgress(p) {
 }
 
 function onScanProgress(data) {
+    if (data && data.integrity != null) scan.integrity = !!data.integrity;
     if (!scan.running) { prepareScanUI(data.path); scan.source = data.source; }
     applyProgress(data);
     renderScanHero();
@@ -1432,7 +1435,11 @@ function onScanDone(data) {
 
     const toastType = data.status === 'infected' ? 'error' : (data.status === 'clean' ? 'success' : 'info');
     showToast(data.message, toastType);
-    if (data.integrity && (data.status === 'clean' || data.status === 'infected')) setHeroNote(t('scan.note.integrity_pending'));
+    const sum = data.summary || {};
+    const notes = [];
+    if (data.integrity && data.integrity_warnings != null) notes.push(data.integrity_warnings ? t('scan.note.integrity_warn', { n: data.integrity_warnings }) : t('scan.note.integrity_ok'));
+    if (sum.skipped) notes.push(t('scan.note.skipped', { n: formatNumber(sum.skipped) }));
+    if (notes.length) setHeroNote(notes.join(' · '));
 
     sendToBackend({ action: 'check_status' });
     if (data.status === 'infected') sendToBackend({ action: 'get_quarantine' });
@@ -1473,14 +1480,15 @@ function renderScanHero() {
     $('scanRingFill').style.strokeDashoffset = RING_CIRC * (1 - pct / 100);
     $('scanRingPct').textContent = scan.running && scan.phase !== 'scanning' && scan.total === 0 ? '…' : `${Math.floor(pct)} %`;
     $('scanRingSub').textContent = scan.running
-        ? (scan.phase === 'counting' ? t('scan.ring.counting_files', { n: formatNumber(scan.found) }) : (scan.phase === 'prepare' ? t('scan.ring.starting') : t('scan.ring.analysis')))
+        ? (scan.phase === 'counting' ? t('scan.ring.counting_files', { n: formatNumber(scan.found) }) : scan.phase === 'integrity' ? t('scan.ring.integrity') : (scan.phase === 'prepare' ? t('scan.ring.starting') : t('scan.ring.analysis')))
         : (scan.result ? t('scan.ring.done') : '');
 
     let title, sub;
     if (scan.running) {
-        title = scan.phase === 'counting' ? t('scan.counting') : scan.phase === 'prepare' ? t('scan.preparing') : t('scan.running');
+        title = scan.phase === 'counting' ? t('scan.counting') : scan.phase === 'integrity' ? t('scan.integrity_running') : scan.phase === 'prepare' ? t('scan.preparing') : t('scan.running');
         sub = scan.phase === 'scanning'
             ? t('scan.sub.scanning', { path: scanTargetLabel(), scanned: formatNumber(scan.scanned), total: formatNumber(scan.total) })
+            : scan.phase === 'integrity' ? t('scan.sub.integrity')
             : (scan.phase === 'counting' ? t('scan.sub.counting', { path: scanTargetLabel(), found: formatNumber(scan.found) }) : scanTargetLabel());
     } else if (scan.result) {
         const r = scan.result;
@@ -1496,9 +1504,10 @@ function renderScanHero() {
     $('scanHeroTitle').textContent = title;
     $('scanHeroSub').textContent = sub;
 
-    const order = ['prepare', 'counting', 'scanning', 'done'];
+    const order = ['prepare', 'integrity', 'counting', 'scanning', 'done'];
     const idx = order.indexOf(scan.phase);
     document.querySelectorAll('#scanPhases li').forEach(li => {
+        if (li.dataset.phase === 'integrity') li.hidden = !scan.integrity;
         const i = order.indexOf(li.dataset.phase);
         li.classList.toggle('done', scan.phase !== 'idle' && i < idx);
         li.classList.toggle('active', scan.phase !== 'idle' && i === idx && (scan.running || scan.phase === 'done'));
@@ -1641,7 +1650,7 @@ function syncTopbar() {
     const pct = scanPercent();
     $('scanTopbarFill').style.width = `${pct}%`;
     $('scanTopbarFill').classList.toggle('indeterminate', scan.phase !== 'scanning');
-    $('scanTopbarTitle').textContent = scan.phase === 'counting' ? t('scan.phase.counting') : (scan.phase === 'prepare' ? t('scan.phase.prepare') : t('topbar.scanning', { path: scanTargetLabel() }));
+    $('scanTopbarTitle').textContent = scan.phase === 'counting' ? t('scan.phase.counting') : scan.phase === 'integrity' ? t('scan.phase.integrity') : (scan.phase === 'prepare' ? t('scan.phase.prepare') : t('topbar.scanning', { path: scanTargetLabel() }));
     $('scanTopbarCount').textContent = scan.phase === 'scanning'
         ? `${Math.floor(pct)} % — ${formatNumber(scan.scanned)} / ${formatNumber(scan.total)}`
         : (scan.phase === 'counting' ? t('history.files', { n: formatNumber(scan.found) }) : '');
@@ -1654,7 +1663,7 @@ function syncDashboardLive() {
     card.hidden = !scan.running;
     if (!scan.running) return;
     const pct = scanPercent();
-    $('dashScanTitle').textContent = scan.phase === 'counting' ? t('dash.live.counting') : t('topbar.scanning', { path: scanTargetLabel() });
+    $('dashScanTitle').textContent = scan.phase === 'counting' ? t('dash.live.counting') : scan.phase === 'integrity' ? t('scan.integrity_running') : t('topbar.scanning', { path: scanTargetLabel() });
     $('dashScanCount').textContent = scan.phase === 'scanning' ? `${Math.floor(pct)} % — ${formatNumber(scan.scanned)} / ${formatNumber(scan.total)}` : t('history.files', { n: formatNumber(scan.found) });
     $('dashProgressFill').style.width = `${pct}%`;
     $('dashCurrentFile').textContent = rtlPath(scan.file);
@@ -2367,4 +2376,12 @@ function backupAddCloud() {
 function backupSaveContent() {
     sendToBackend({ action: 'backup_set', sources: $('backupSources').value.split('\n'), excludes: $('backupExcludes').value.split('\n'),
                     retention: parseInt($('backupRetention').value, 10) || 8, schedule: $('backupSchedule').value });
+}
+
+
+/** Intégrité seule (rkhunter, chkrootkit, debsums, fichiers de l'application), sans analyse antivirus. */
+function runIntegrityOnly() {
+    loadSecurityData('integrity', false, true);
+    showToast(t('scan.integrity_running'), 'info');
+    setHeroNote(t('scan.integrity_running'));
 }
