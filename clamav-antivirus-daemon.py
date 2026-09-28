@@ -690,6 +690,34 @@ def ssh_port():
     return 22
 
 
+def collect_timeshift_status(list_snapshots=True):
+    """Instantanés système Timeshift : installé, configuré, planification, dernier instantané (lecture root)."""
+    ts = {"checked_at": now_iso(), "installed": shutil.which("timeshift") is not None, "configured": False,
+          "schedule": [], "mode": "", "device": "", "snapshots": None, "last": None, "error": ""}
+    if not ts["installed"]:
+        return ts
+    try:
+        with open("/etc/timeshift/timeshift.json", encoding="utf-8") as f:
+            cfg = json.load(f)
+        ts["configured"] = True
+        ts["mode"] = "btrfs" if str(cfg.get("btrfs_mode", "")).lower() == "true" else "rsync"
+        ts["device"] = cfg.get("backup_device_uuid", "") or ""
+        ts["schedule"] = [k for k in ("boot", "hourly", "daily", "weekly", "monthly")
+                          if str(cfg.get(f"schedule_{k}", "")).lower() == "true"]
+    except (OSError, ValueError):
+        ts["configured"] = False
+    if ts["configured"] and list_snapshots and os.geteuid() == 0:
+        r = run_quiet(["timeshift", "--list", "--scripted"], timeout=120)
+        names = sorted(set(re.findall(r"\b(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\b", (r.stdout or ""))))
+        if r.returncode == 0 or names:
+            ts["snapshots"] = len(names)
+            if names:
+                ts["last"] = datetime.strptime(names[-1], "%Y-%m-%d_%H-%M-%S").isoformat(timespec="seconds")
+        else:
+            ts["error"] = ((r.stderr or "") + (r.stdout or "")).strip()[-200:]
+    return ts
+
+
 def collect_security_status():
     """État du pare-feu UFW et du service SSH."""
     ufw = {"installed": shutil.which("ufw") is not None, "active": False, "enabled": False,
@@ -2326,6 +2354,21 @@ class Daemon:
                 self.system_status_running = False
 
     # ── Sécurité réseau (UFW / SSH) ──────────────────────────────────────
+    def refresh_backup(self, force=False):
+        """État Timeshift, au plus une fois par heure (timeshift --list peut monter le disque de sauvegarde)."""
+        with self.security_lock:
+            cached = self.state.get("timeshift") or {}
+            try:
+                age = time.time() - datetime.fromisoformat(cached.get("checked_at", "")).timestamp()
+            except ValueError:
+                age = 1e9
+            if not force and cached and age < 3600:
+                return cached
+        ts = collect_timeshift_status()
+        self.state.update(timeshift=ts)
+        self.broadcast({"event": "timeshift", "timeshift": ts})
+        return ts
+
     def refresh_security(self, force=False, broadcast=True):
         with self.security_lock:
             if not force and self.security and time.time() - self.last_security < 60:
@@ -2395,6 +2438,11 @@ class Daemon:
         self.daily_running = True
         try:
             self.last_daily = time.time()
+            # Instantanés système (Timeshift)
+            try:
+                self.refresh_backup(force=True)
+            except Exception as e:  # noqa: BLE001
+                log(f"Timeshift : {e}")
             # Failles ouvertes
             vulns = collect_vulnerabilities(self.state.get("vulns"))
             self.state.update(vulns=vulns)
@@ -2579,6 +2627,17 @@ class Daemon:
             raise_to("yellow", "unknown_persistence")
         if not self.monitor.active and not TEST_MODE:
             raise_to("yellow", "monitor_inactive")
+        # Disponibilité (CIA) : instantanés système Timeshift
+        ts = self.state.get("timeshift") or {}
+        if self.settings.get("backup_check") and ts.get("checked_at"):
+            if not ts.get("installed") or not ts.get("configured") or not ts.get("schedule"):
+                raise_to("yellow", "timeshift_off")
+            elif ts.get("last"):
+                try:
+                    if (time.time() - datetime.fromisoformat(ts["last"]).timestamp()) > 30 * 86400:
+                        raise_to("yellow", "timeshift_old")
+                except ValueError:
+                    pass
         return {"color": color, "reasons": reasons}
 
     def refresh_overall(self):
@@ -2605,7 +2664,7 @@ class Daemon:
         if cmd == "ssh_set":
             return bool(req.get("enabled"))
         if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools",
-                   "install_phased"):
+                   "install_phased", "install_package"):
             return True
         if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence", "system_upgrade"):
             return bool(self.settings.get("family_mode"))
@@ -2687,6 +2746,7 @@ class Daemon:
             "usb_pending": self.usb.pending_list(),
             "settings": self.settings.snapshot(),
             "security": self.security or self.refresh_security(broadcast=False),
+            "timeshift": self.state.get("timeshift"),
             "overall": self.overall,
             "unlocked": self.is_unlocked(uid) if uid >= 0 else False,
             "family_mode": bool(self.settings.get("family_mode")),
@@ -2838,6 +2898,21 @@ class Daemon:
                     threading.Thread(target=self.run_integrity, daemon=True).start()
                 return {"ok": True, "running": True, "started": started, "integrity": self.state.get("integrity")}
             return {"ok": True, "running": self.integrity_running, "integrity": self.state.get("integrity")}
+
+        if cmd == "backup_status":
+            return {"ok": True, "timeshift": self.refresh_backup(force=bool(req.get("refresh")))}
+
+        if cmd == "install_package":
+            name = str(req.get("name") or "")
+            if name not in ("rclone", "timeshift"):
+                return {"ok": False, "error": "forbidden", "forbidden": True}
+            if TEST_MODE:
+                return {"ok": True, "detail": "test_mode"}
+            r = run_quiet(["systemd-run", "--unit", f"clamav-antivirus-pkg-{int(time.time())}", "--collect", "--quiet",
+                           "-p", "Environment=DEBIAN_FRONTEND=noninteractive",
+                           "/bin/sh", "-c", f"apt-get install -y {name}"], timeout=30)
+            return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else "command_failed",
+                    "detail": ((r.stderr or "") + (r.stdout or "")).strip()[-200:]}
 
         if cmd == "install_tools":
             if TEST_MODE:

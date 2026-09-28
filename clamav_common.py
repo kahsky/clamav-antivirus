@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.8.4"
+VERSION = "1.9.0"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -93,6 +93,8 @@ DEFAULT_SETTINGS = {
     "geoip_lookup": True,
     # Clé ip-api.com Pro (optionnelle) : HTTPS et sans limite ; vide = service gratuit (15 requêtes groupées/min, HTTP)
     "geoip_api_key": "",
+    # Disponibilité : vérifier les sauvegardes (Timeshift + fichiers de l'utilisateur) dans l'état global
+    "backup_check": True,
     # Vérification d'intégrité hebdomadaire (rkhunter, chkrootkit, debsums, fichiers de l'app)
     "integrity_weekly": True,
     "integrity_day": 6,

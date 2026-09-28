@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.8.4)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.9.0)
 
 ---
 
@@ -70,6 +70,16 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   passe, sauvegardes, faux support, ingénierie sociale, Wi-Fi public, mot de passe admin, réaction
   à une attaque, extensions. Un **conseil du jour** apparaît en popup au démarrage (bouton
   « Lire plus » ouvre la leçon ; désactivable dans Paramètres). Contenu dans `ui/awareness.js`.
+- **Sauvegardes (disponibilité, le « A » du triptyque CIA)** — tuile « Sauvegardes » en vue simple et
+  page complète en vue avancée. Le service lit l'état de **Timeshift** (installé, planification, dernier
+  instantané) ; l'application copie les dossiers personnels (Documents, Images, Vidéos, Musique, Bureau,
+  modifiables) vers une **clé USB / un disque externe** (instantanés rsync incrémentaux avec liens durs,
+  rétention réglable, miroir simple sur FAT/NTFS), un **dossier** (NAS) ou un **cloud** via rclone
+  (S3 compatible, Infomaniak Swiss Backup S3 ou Swift, kDrive WebDAV, remote rclone existant ; archivage
+  des fichiers remplacés). Assistant minimal en vue simple (« Sauvegarder ici » sur le support détecté),
+  planification automatique quotidienne/hebdomadaire/mensuelle dès que la destination est branchée,
+  historique, consignes de restauration. Fichiers jamais sauvegardés ou Timeshift non planifié : voyant
+  jaune (désactivable dans Paramètres). Tout tourne avec les droits de l'utilisateur, sans mot de passe.
 - **Analyse complète** — « Analyser mon ordinateur » (vue simple, tableau de bord, tray) enchaîne le
   scan antivirus de tout le disque puis la vérification d'intégrité : rkhunter, chkrootkit, debsums et
   fichiers de l'application ; un popup conclut « Analyse complète terminée » ou signale les
@@ -145,7 +155,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.8.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.8.4_all.deb)
+[Télécharger clamav-antivirus_1.9.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.9.0_all.deb)
 
 ---
 
@@ -176,12 +186,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.8.4_all.deb`
+Résultat : `clamav-antivirus_1.9.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.8.4_all.deb
+sudo dpkg -i clamav-antivirus_1.9.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
@@ -220,6 +230,7 @@ localement avec les droits de l'utilisateur.
 | `/lib/udev/rules.d/80-clamav-antivirus-usb.rules` | Désactive le montage automatique udisks des périphériques USB **uniquement** quand le socket du service existe |
 | `ui/i18n.js`                             | Traductions FR/EN/DE/IT (JSON) partagées par la page et Python    |
 | `ui/awareness.js`                        | Leçons de sensibilisation FR/EN/DE/IT (popup « conseil du jour » et page Bonnes pratiques) |
+| `clamav_backup.py`                       | Moteur de sauvegarde utilisateur (rsync incrémental, rclone cloud, détection des supports) |
 
 Réglages système (page Paramètres, fichier `/var/lib/clamav-antivirus/settings.json`,
 valeurs par défaut dans `DEFAULT_SETTINGS` de `clamav_common.py`) : seuil et fenêtre d'envoi

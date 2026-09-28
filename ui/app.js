@@ -143,6 +143,10 @@ function onBackendMessage(msg) {
         case 'securityStatus':  onSecurityStatus(data); break;
         case 'settingsData':    onSettingsData(data); break;
         case 'trustedList':     onTrustedList(data); break;
+        case 'backupStatus':    onBackupStatus(data); break;
+        case 'backupProgress':  onBackupProgress(data); break;
+        case 'backupDone':      onBackupDone(data); break;
+        case 'backupTimeshift': if (backupData) { backupData.timeshift = data; renderBackupTab(); renderBackupWizard(); } if (lastStatus && lastStatus.backup) { lastStatus.backup.timeshift = data; renderSimpleView(); } break;
         case 'securityData':    onSecurityData(data); break;
         case 'overall':         overall = data; renderSimpleView(); renderAdmin(); break;
         case 'error':           showToast(data.message, 'error'); break;
@@ -172,6 +176,7 @@ function switchTab(tabId) {
         panel.classList.toggle('active', panel.id === `tab-${tabId}`);
     });
     syncTopbar();
+    if (tabId === 'backup') loadBackup();
 
     if (tabId === 'dashboard') {
         sendToBackend({ action: 'check_status' });
@@ -602,6 +607,11 @@ function simpleOverall() {
     rows.push({ state: thrState, label: t('simple.row.threats'), value: thrValue,
         action: thrState !== 'ok' ? { label: t('popup.btn.details'), fn: danger ? "setViewMode('advanced'); switchTab('system')" : "setViewMode('advanced'); switchTab('quarantine')" } : null });
 
+    // Sauvegardes (disponibilité)
+    const bk = backupRowInfo();
+    bump(bk.state === 'neutral' ? 'ok' : bk.state);
+    rows.push({ state: bk.state, label: t('simple.row.backup'), value: bk.value, action: bk.action });
+
     return { worst, rows };
 }
 
@@ -611,7 +621,9 @@ function renderSimpleView() {
     let { worst, rows } = simpleOverall();
     if (overall && overall.color) {
         const map = { green: 'ok', yellow: 'warn', blue: 'warn', red: 'danger' };
-        worst = map[overall.color] || worst;
+        const rank = { ok: 0, warn: 1, danger: 2 };
+        const o = map[overall.color] || 'ok';
+        worst = (rank[o] || 0) >= (rank[worst] || 0) ? o : worst;   // le pire des deux : service + vue (sauvegardes)
     }
     view.dataset.state = worst;
     $('simpleTitle').textContent = t(`simple.title.${worst}`);
@@ -827,6 +839,7 @@ function onSettingsData(data) {
         $('geoipStats').textContent = g ? t('settings.geoip.stats', { n: g.requests_24h || 0, cached: g.cached || 0, provider: t(g.provider === 'pro' ? 'settings.geoip.pro' : 'settings.geoip.free') }) + (g.last_error ? ` · ${t('settings.geoip.error', { error: g.last_error })}` : '') : '';
     }
     $('setIntegrityWeekly').checked = sys.integrity_weekly !== false;
+    if ($('setBackupCheck')) $('setBackupCheck').checked = sys.backup_check !== false;
     $('setIntegrityDay').value = String(sys.integrity_day ?? 6);
     $('setIntegrityHour').value = sys.integrity_hour ?? 13;
     $('setAppUpdateCheck').checked = sys.app_update_check !== false;
@@ -863,6 +876,7 @@ function saveSettings() {
         geoip_lookup: $('setGeoip').checked,
         geoip_api_key: $('setGeoipKey') ? $('setGeoipKey').value.trim() : '',
         integrity_weekly: $('setIntegrityWeekly').checked,
+        backup_check: $('setBackupCheck') ? $('setBackupCheck').checked : true,
         integrity_day: parseInt($('setIntegrityDay').value, 10),
         integrity_hour: parseInt($('setIntegrityHour').value, 10) || 0,
         app_update_check: $('setAppUpdateCheck').checked,
@@ -1949,6 +1963,8 @@ function simulateBackend(data) {
     switch (data.action) {
         case 'check_status':
             reply('statusUpdate', {
+                backup: { timeshift: { installed: true, configured: DEV_OK, schedule: DEV_OK ? ['daily'] : [], snapshots: DEV_OK ? 5 : null, last: DEV_OK ? new Date(Date.now() - 86400e3).toISOString() : null },
+                          user: DEV_OK ? { state: 'ok', last: new Date(Date.now() - 2 * 86400e3).toISOString(), age_days: 2, dest_label: 'SANDISK 32G', destinations: 1 } : { state: 'none', last: null, destinations: 0 }, running: null },
                 lang, color: 'green', message: 'Protected — signatures up to date (2 h)', installed: true, fully_installed: true,
                 last_update: new Date(Date.now() - 2 * 3600e3).toISOString(),
                 last_scan: { date: new Date(Date.now() - 86400e3).toISOString(), path: '/', files: 1234567, infected: 0, duration: 5400, status: 'clean', source: 'daemon', auto: true },
@@ -2000,6 +2016,20 @@ function simulateBackend(data) {
             break;
         case 'system_upgrade':
             reply('operationResult', { status: 'info', message: t('msg.system_upgrading') });
+            break;
+        case 'backup_status':
+            reply('backupStatus', { timeshift: { installed: true, configured: false, schedule: [], snapshots: null, last: null },
+                drives: [{ devnode: '/dev/sdb1', label: 'SANDISK 32G', model: 'SanDisk Ultra', mountpoint: '/media/user/SANDISK', uuid: 'AB12-CD34', fstype: 'vfat', size: 32e9, free: 21e9, writable: true, transport: 'usb' }],
+                destinations: [{ id: 'd1', type: 'local', label: 'SANDISK 32G', mountpoint: '/media/user/SANDISK', uuid: 'AB12-CD34', fstype: 'vfat', last: new Date(Date.now() - 3 * 86400e3).toISOString(), last_ok: true, available: true },
+                               { id: 'd2', type: 'cloud', label: 'swissbackup (Infomaniak Swiss Backup (S3))', remote: 'swissbackup:mon-bucket', provider: 'infomaniak_s3', last: null, last_ok: null, available: true }],
+                user: { state: 'ok', last: new Date(Date.now() - 3 * 86400e3).toISOString(), age_days: 3, dest_label: 'SANDISK 32G', destinations: 2, schedule: 'weekly', due: false, sources: 5 },
+                sources: ['/home/user/Documents', '/home/user/Images', '/home/user/Vidéos', '/home/user/Musique', '/home/user/Bureau'], excludes: ['.cache', 'node_modules', '*.tmp'], retention: 8, schedule: 'weekly',
+                history: [{ ok: true, date: new Date(Date.now() - 3 * 86400e3).toISOString(), dest_label: 'SANDISK 32G', type: 'local', files: 1234, bytes: 2.3e9, duration: 95, auto: false }], rclone: false, remotes: [], running: null, hostuser: 'pc-user', timeshift_installed: true });
+            break;
+        case 'backup_run': case 'backup_quick':
+            reply('backupProgress', { dest_id: data.dest_id || 'd1', dest_label: 'SANDISK 32G', pct: 0, text: '' }, 100);
+            reply('backupProgress', { dest_id: data.dest_id || 'd1', dest_label: 'SANDISK 32G', pct: 42, text: '1.2G 42% 35MB/s 0:00:20' }, 900);
+            reply('backupDone', { ok: true, dest_label: 'SANDISK 32G', files: 1234, bytes: 2.3e9, duration: 95 }, 2500);
             break;
         case 'get_settings':
             reply('settingsData', { stats: { geoip: { requests_24h: 14, cached: 37, provider: 'free', last_error: '' } }, available: true, system: { upload_monitor: true, upload_alert_gb: 5, upload_window_hours: 1, burst_monitor: true, burst_info_threshold: 50, burst_danger_threshold: 25, burst_window_sec: 15, usb_auto_scan: true, usb_auto_scan_max_gib: 128, update_hour: 7, update_minute: 0, weekly_scan: false, weekly_scan_day: 6, weekly_scan_hour: 12 },
@@ -2097,6 +2127,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderLegal();
     if (params.get('legal') === '1') { legalAccepted = false; openLegal(); }
     if (params.get('learn') === '1') showAwareness();
+    if (params.get('backup') === '1') setTimeout(openBackupWizard, 400);   // dev : assistant de sauvegarde
     if (params.get('lesson')) setTimeout(() => openLesson(params.get('lesson')), 300);   // dev : ouvre une leçon
     if (location.hash && $(`tab-${location.hash.slice(1)}`)) { setViewMode('advanced', false); switchTab(location.hash.slice(1)); }
     sendToBackend({ action: 'check_status' });
@@ -2104,3 +2135,236 @@ document.addEventListener('DOMContentLoaded', () => {
     sendToBackend({ action: 'get_quarantine' });
     setInterval(() => { if (currentTab === 'dashboard' && !scan.running) sendToBackend({ action: 'check_status' }); }, 60000);
 });
+
+
+// ─── Sauvegardes (disponibilité : le « A » du triptyque CIA) ────────────────
+
+let backupData = null;        // dernier backupStatus (onglet avancé + assistant)
+let backupRunning = null;     // {dest_id, dest_label, pct, text} pendant une sauvegarde
+
+function loadBackup(refresh = false) { sendToBackend({ action: 'backup_status', refresh }); }
+
+function onBackupStatus(data) {
+    backupData = data || null;
+    backupRunning = (data && data.running) || null;
+    if (lastStatus) lastStatus.backup = { timeshift: data.timeshift, user: data.user, running: backupRunning };
+    renderBackupTab();
+    renderBackupWizard();
+    renderSimpleView();
+    updateBackupProgress();
+}
+
+function onBackupProgress(d) {
+    backupRunning = d;
+    if (lastStatus && lastStatus.backup) lastStatus.backup.running = d;
+    updateBackupProgress();
+    renderSimpleView();
+}
+
+function onBackupDone(d) {
+    backupRunning = null;
+    if (lastStatus && lastStatus.backup) lastStatus.backup.running = null;
+    updateBackupProgress();
+    loadBackup();
+}
+
+function fmtBytes(n) {
+    n = Number(n || 0);
+    const units = ['o', 'Kio', 'Mio', 'Gio', 'Tio'];
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return `${i ? n.toFixed(1) : n} ${units[i]}`;
+}
+
+function tsSchedLabel(ts) {
+    const names = { boot: t('day.boot') !== 'day.boot' ? t('day.boot') : 'boot', hourly: t('backup.schedule.hourly') !== 'backup.schedule.hourly' ? t('backup.schedule.hourly') : 'hourly', daily: t('backup.schedule.daily'), weekly: t('backup.schedule.weekly'), monthly: t('backup.schedule.monthly') };
+    return (ts.schedule || []).map(k => names[k] || k).join(', ') || '—';
+}
+
+/** État Timeshift → {state:'ok'|'warn'|'danger'|'neutral', text}. */
+function timeshiftInfo(ts) {
+    if (!ts) return { state: 'neutral', text: t('backup.timeshift.unknown', { sched: '—' }) };
+    if (!ts.installed) return { state: 'warn', text: t('backup.timeshift.not_installed') };
+    if (!ts.configured || !(ts.schedule || []).length) return { state: 'warn', text: t('backup.timeshift.not_configured') };
+    const sched = tsSchedLabel(ts);
+    if (ts.snapshots == null) return { state: 'neutral', text: t('backup.timeshift.unknown', { sched }) };
+    if (!ts.last) return { state: 'warn', text: t('backup.timeshift.no_snapshot', { sched }) };
+    const age = (Date.now() - new Date(ts.last).getTime()) / 86400e3;
+    if (age > 30) return { state: 'warn', text: t('backup.timeshift.old', { rel: formatRelative(ts.last) }) };
+    return { state: 'ok', text: t('backup.timeshift.ok', { n: ts.snapshots, rel: formatRelative(ts.last), sched }) };
+}
+
+/** Ligne « Sauvegardes » de la vue simple. */
+function backupRowInfo() {
+    const b = (lastStatus && lastStatus.backup) || {};
+    const u = b.user || { state: 'none' };
+    const ts = timeshiftInfo(b.timeshift);
+    const running = b.running || backupRunning;
+    if (running) return { state: 'ok', value: t('simple.backup.running', { pct: Math.floor(running.pct || 0) }), action: null };
+    let state = 'ok', value;
+    if (u.state === 'ok') value = t('simple.backup.ok', { rel: formatRelative(u.last), dest: u.dest_label || '' });
+    else if (u.state === 'old') { state = 'warn'; value = t('simple.backup.old', { n: Math.round(u.age_days || 0) }); }
+    else if (u.state === 'missing') { state = 'warn'; value = t('simple.backup.missing'); }
+    else { state = 'warn'; value = t('simple.backup.none'); }
+    if (ts.state === 'warn' || ts.state === 'danger') { state = state === 'ok' ? 'warn' : state; value += ` · ${t('simple.backup.timeshift_off')}`; }
+    else if (ts.state === 'ok') value += ` · ${t('simple.backup.timeshift_ok')}`;
+    return { state, value, action: { label: t('simple.backup.btn'), fn: 'openBackupWizard()' } };
+}
+
+// ── Assistant (vue simple) ──
+function openBackupWizard() {
+    $('simpleBackup').hidden = false;
+    document.body.classList.add('awareness-open');
+    renderBackupWizard();
+    loadBackup(true);
+}
+
+function hideBackupWizard() {
+    $('simpleBackup').hidden = true;
+    document.body.classList.remove('awareness-open');
+}
+
+function driveIcon() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><circle cx="12" cy="17" r="2"/><path d="M8 6h8"/></svg>'; }
+function cloudIcon() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H7a4 4 0 0 1-.6-7.95A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 10z"/></svg>'; }
+
+function renderBackupWizard() {
+    const box = $('backupWizardBody');
+    if (!box || $('simpleBackup').hidden) return;
+    const d = backupData;
+    if (!d) { box.innerHTML = `<p class="text-muted">${t('sidebar.loading')}</p>`; return; }
+    const list = (d.sources || []).map(p => p.split('/').pop()).join(', ');
+    $('backupWizardIntro').textContent = t('backup.wizard.intro', { list });
+    const running = backupRunning;
+    let html = '';
+    if (running) {
+        html += `<div class="card backup-progress-card"><h4>${escapeHtml(t('backup.progress.title', { dest: running.dest_label || '' }))}</h4>
+            <div class="simple-scan-bar"><div class="simple-scan-fill" style="width:${Math.min(100, running.pct || 0)}%"></div></div>
+            <div class="text-muted backup-progress-text">${Math.floor(running.pct || 0)} % · ${escapeHtml(running.text || '')}</div>
+            <div class="log-actions-right"><button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'backup_cancel'})">${t('backup.progress.cancel')}</button></div></div>`;
+    }
+    html += `<h4>${t('backup.wizard.drives')} <button class="btn btn-secondary btn-sm" onclick="loadBackup(true)">${t('system.refresh')}</button></h4>`;
+    const drives = d.drives || [];
+    if (!drives.length) html += `<div class="backup-empty">${t('backup.wizard.no_drive')}</div>`;
+    drives.forEach((dr, i) => {
+        const known = (d.destinations || []).find(x => x.type === 'local' && dr.uuid && x.uuid === dr.uuid);
+        html += `<div class="backup-choice ${dr.writable ? '' : 'disabled'}">
+            <div class="backup-choice-icon">${driveIcon()}</div>
+            <div class="backup-choice-text"><span class="backup-choice-title">${escapeHtml(dr.label)}${dr.model && dr.model !== dr.label ? ` · ${escapeHtml(dr.model)}` : ''}</span>
+                <span class="backup-choice-sub">${escapeHtml(dr.mountpoint)} · ${t('backup.wizard.free', { free: fmtBytes(dr.free), size: fmtBytes(dr.size) })}${dr.writable ? '' : ` · ${t('backup.wizard.readonly')}`}${known && known.last ? ` · ${t('backup.dest.last', { rel: formatRelative(known.last) })}` : ''}</span></div>
+            <button class="btn btn-primary btn-sm" ${dr.writable && !running ? '' : 'disabled'} onclick="backupQuick(${i})">${t('backup.wizard.here')}</button></div>`;
+    });
+    const clouds = (d.destinations || []).filter(x => x.type !== 'local');
+    if (clouds.length) {
+        html += `<h4>${t('backup.wizard.clouds')}</h4>`;
+        clouds.forEach(c => {
+            html += `<div class="backup-choice ${c.available ? '' : 'disabled'}"><div class="backup-choice-icon">${cloudIcon()}</div>
+                <div class="backup-choice-text"><span class="backup-choice-title">${escapeHtml(c.label)}</span><span class="backup-choice-sub">${escapeHtml(c.remote || c.mountpoint || '')} · ${c.last ? t('backup.dest.last', { rel: formatRelative(c.last) }) : t('backup.dest.never')}</span></div>
+                <button class="btn btn-primary btn-sm" ${c.available && !running ? '' : 'disabled'} onclick="sendToBackend({action:'backup_run', dest_id:'${escapeJs(c.id)}'})">${t('backup.wizard.here')}</button></div>`;
+        });
+    }
+    html += `<p class="text-muted"><a href="#" class="credits-link" onclick="hideBackupWizard(); setViewMode('advanced'); switchTab('backup'); return false;">${t('backup.wizard.advanced')}</a></p>`;
+    const ts = timeshiftInfo(d.timeshift);
+    html += `<h4>${t('backup.wizard.timeshift')}</h4><div class="backup-choice"><div class="backup-choice-icon"><span class="ts-dot ${ts.state}"></span></div>
+        <div class="backup-choice-text"><span class="backup-choice-title">${escapeHtml(ts.text)}</span><span class="backup-choice-sub">${t('backup.wizard.timeshift_hint')}</span></div>
+        ${d.timeshift_installed ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'backup_open_timeshift'})">${t('backup.open_timeshift')}</button>` : `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'install_package', name:'timeshift'})">${t('backup.install_timeshift')}</button>`}</div>`;
+    box.innerHTML = html;
+}
+
+function backupQuick(i) {
+    const dr = backupData && backupData.drives && backupData.drives[i];
+    if (!dr) return;
+    sendToBackend({ action: 'backup_quick', drive: dr });
+}
+
+// ── Onglet avancé ──
+function renderBackupTab() {
+    const d = backupData;
+    if (!d || !$('backupTimeshift')) return;
+    const ts = timeshiftInfo(d.timeshift);
+    $('backupTimeshift').innerHTML = `<div class="ts-line"><span class="ts-dot ${ts.state}"></span><span>${escapeHtml(ts.text)}</span></div>` +
+        (d.timeshift_installed ? '' : `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'install_package', name:'timeshift'})">${t('backup.install_timeshift')}</button>`);
+    if (document.activeElement !== $('backupSources')) $('backupSources').value = (d.sources || []).join('\n');
+    if (document.activeElement !== $('backupExcludes')) $('backupExcludes').value = (d.excludes || []).join('\n');
+    $('backupRetention').value = d.retention || 8;
+    $('backupSchedule').value = d.schedule || 'weekly';
+    const dests = d.destinations || [];
+    $('backupDestList').innerHTML = dests.length ? dests.map(x => `
+        <div class="package-item ${x.available ? '' : 'held'}">
+            <span class="scope-badge ${x.type === 'cloud' ? 'scope-phased' : 'scope-user'}">${x.type === 'cloud' ? 'cloud' : x.type === 'path' ? 'dossier' : 'USB'}</span>
+            <span class="package-name">${escapeHtml(x.label)}</span>
+            <span class="package-versions" title="${escapeHtml(x.remote || x.mountpoint || '')}">${escapeHtml(x.remote || x.mountpoint || '')}</span>
+            <span class="alert-meta">${x.last ? t('backup.dest.last', { rel: formatRelative(x.last) }) : t('backup.dest.never')}${x.last_ok === false ? ` · ${t('backup.dest.failed')}` : ''} · ${x.available ? t('backup.dest.available') : t('backup.dest.unavailable')}</span>
+            <button class="btn btn-primary btn-sm" ${x.available && !backupRunning ? '' : 'disabled'} onclick="sendToBackend({action:'backup_run', dest_id:'${escapeJs(x.id)}'})">${t('backup.dest.run')}</button>
+            <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'backup_test', dest_id:'${escapeJs(x.id)}'})">${t('backup.dest.test')}</button>
+            ${x.type !== 'cloud' ? `<button class="btn btn-secondary btn-sm" ${x.available ? '' : 'disabled'} onclick="sendToBackend({action:'backup_open_folder', dest_id:'${escapeJs(x.id)}'})">${t('backup.dest.open')}</button>` : ''}
+            <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'backup_remove', dest_id:'${escapeJs(x.id)}'})">${t('backup.dest.remove')}</button>
+        </div>`).join('') : `<p class="text-muted">${t('backup.dest.none')}</p>`;
+    const sel = $('backupDriveSelect');
+    const drives = d.drives || [];
+    sel.innerHTML = drives.length ? drives.map((dr, i) => `<option value="${i}">${escapeHtml(dr.label)} · ${escapeHtml(dr.mountpoint)} · ${fmtBytes(dr.free)}</option>`).join('') : `<option value="">${t('backup.dest.no_drive')}</option>`;
+    $('backupRcloneNote').hidden = !!d.rclone;
+    cloudKindChanged();
+    const hist = d.history || [];
+    $('backupHistory').innerHTML = hist.length ? hist.map(h => `
+        <div class="package-item ${h.ok ? '' : 'security'}">
+            <span class="scope-badge ${h.ok ? 'scope-user' : 'scope-danger'}">${h.ok ? '✓' : (h.cancelled ? t('backup.history.cancelled') : '✕')}</span>
+            <span class="package-name">${formatDateTime(h.date)}</span>
+            <span class="package-versions">${escapeHtml(h.dest_label || '')}${h.auto ? ` · ${t('backup.history.auto')}` : ''}</span>
+            <span class="alert-meta">${h.ok ? t('backup.history.line', { files: formatNumber(h.files || 0), size: fmtBytes(h.bytes), duration: formatDuration(h.duration) }) : escapeHtml(h.error || '')}</span>
+        </div>`).join('') : `<p class="text-muted">${t('backup.history.none')}</p>`;
+    $('backupRestoreLocal').textContent = t('backup.restore.local', { hostuser: d.hostuser || '<hôte>-<utilisateur>' });
+    $('backupRestoreCloud').textContent = t('backup.restore.cloud', { hostuser: d.hostuser || '<hôte>-<utilisateur>' });
+    updateBackupProgress();
+}
+
+function updateBackupProgress() {
+    const card = $('backupProgressCard');
+    if (card) {
+        card.hidden = !backupRunning;
+        if (backupRunning) {
+            $('backupProgressTitle').textContent = t('backup.progress.title', { dest: backupRunning.dest_label || '' });
+            $('backupProgressFill').style.width = `${Math.min(100, backupRunning.pct || 0)}%`;
+            $('backupProgressText').textContent = `${Math.floor(backupRunning.pct || 0)} % · ${backupRunning.text || ''}`;
+        }
+    }
+    if ($('simpleBackup') && !$('simpleBackup').hidden) renderBackupWizard();
+}
+
+const CLOUD_FIELDS = { s3: ['name', 'endpoint', 'access_key', 'secret_key', 'bucket'], infomaniak_s3: ['name', 'endpoint', 'access_key', 'secret_key', 'bucket'],
+                       infomaniak_swift: ['name', 'auth', 'user', 'key', 'bucket'], kdrive: ['name', 'url', 'user', 'key'], existing: ['remote'] };
+
+function cloudKindChanged() {
+    const kind = $('cloudKind') ? $('cloudKind').value : 'infomaniak_s3';
+    const fields = CLOUD_FIELDS[kind] || [];
+    document.querySelectorAll('#backupCloudForm .cloud-f').forEach(el => { el.hidden = !fields.includes(el.dataset.f); });
+    $('cloudHint').textContent = kind.startsWith('infomaniak') ? t('backup.cloud.hint_infomaniak') : kind === 'kdrive' ? t('backup.cloud.hint_kdrive') : '';
+    if (kind === 'infomaniak_swift' && !$('cloudAuth').value) $('cloudAuth').value = 'https://swiss-backup03.infomaniak.com/identity/v3';
+}
+
+function backupAddDrive() {
+    const i = parseInt($('backupDriveSelect').value, 10);
+    const dr = backupData && backupData.drives && backupData.drives[i];
+    if (!dr) { showToast(t('backup.dest.no_drive'), 'error'); return; }
+    sendToBackend({ action: 'backup_add_local', drive: dr });
+}
+
+function backupAddPath() {
+    const p = ($('backupPathInput').value || '').trim();
+    if (!p) return;
+    sendToBackend({ action: 'backup_add_local', path: p });
+    $('backupPathInput').value = '';
+}
+
+function backupAddCloud() {
+    const kind = $('cloudKind').value;
+    const params = { endpoint: $('cloudEndpoint').value.trim(), access_key: $('cloudAccessKey').value.trim(), secret_key: $('cloudSecretKey').value,
+                     bucket: $('cloudBucket').value.trim(), container: $('cloudBucket').value.trim(), auth: $('cloudAuth').value.trim(),
+                     user: $('cloudUser').value.trim(), key: $('cloudKey').value, url: $('cloudUrl').value.trim(), pass: $('cloudKey').value };
+    sendToBackend({ action: 'backup_add_cloud', kind, name: $('cloudName').value.trim(), params, remote: $('cloudRemote').value.trim() });
+    $('cloudSecretKey').value = ''; $('cloudKey').value = '';
+}
+
+function backupSaveContent() {
+    sendToBackend({ action: 'backup_set', sources: $('backupSources').value.split('\n'), excludes: $('backupExcludes').value.split('\n'),
+                    retention: parseInt($('backupRetention').value, 10) || 8, schedule: $('backupSchedule').value });
+}

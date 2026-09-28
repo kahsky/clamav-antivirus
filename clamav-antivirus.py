@@ -42,6 +42,8 @@ from clamav_common import (  # noqa: E402
 )
 
 # Réglages propres à l'utilisateur (le reste est géré par le daemon)
+import clamav_backup as backup   # sauvegarde des fichiers de l'utilisateur (droits utilisateur)
+
 USER_DEFAULTS = {
     "view_mode": "simple",
     "popups": {"info": True, "upload": True, "scan": True, "update": True, "security": True, "tip": True},
@@ -959,6 +961,11 @@ class TrayIcon:
         overall = self.app.overall_state()
         icon_color = overall.get("color") if overall else color
         reasons = [self.app.T(f"overall.reason.{r}") for r in (overall or {}).get("reasons", [])[:4]]
+        bk = self.app.backup_summary()
+        if self.app.backup_check_enabled() and bk.get("state") in ("none", "missing", "old"):
+            if icon_color == "green":
+                icon_color = "yellow"           # disponibilité (CIA) : fichiers non sauvegardés
+            reasons.append(self.app.T(f"overall.reason.backup_{bk['state']}"))
         tooltip = message if not reasons else f"{message} — " + ", ".join(reasons)
         self.indicator.set_icon_full(os.path.join(ICONS_DIR, f"{OVERALL_ICON.get(icon_color, 'shield-green')}.svg"), tooltip)
         self.item_status.set_label(self.app.T("tray.status", message=tooltip if len(tooltip) < 90 else message))
@@ -1037,6 +1044,9 @@ class ClamAVAntivirusApp:
         else:
             self.window.present()
         GLib.timeout_add_seconds(25, self.show_daily_tip)
+        self.backup_runner = None
+        self.backup_progress = None
+        GLib.timeout_add_seconds(120, self._backup_first_check)
 
     # ── Conseil de sécurité du jour (sensibilisation) ───────────────────
     def show_daily_tip(self, force=False):
@@ -1322,6 +1332,11 @@ class ClamAVAntivirusApp:
                 self.last_daemon_status["overall"] = ev.get("overall")
             self.tray.update_status()
             self.send_to_js("overall", ev.get("overall") or {})
+        elif et == "timeshift":
+            if isinstance(self.last_daemon_status, dict):
+                self.last_daemon_status["timeshift"] = ev.get("timeshift")
+            self.send_to_js("backupTimeshift", ev.get("timeshift") or {})
+            self.tray.update_status()
         elif et == "trusted":
             self.send_to_js("trustedList", {"programs": ev.get("programs") or [], "acknowledged": ev.get("acknowledged") or [],
                                             "available": True})
@@ -1804,6 +1819,260 @@ class ClamAVAntivirusApp:
         save_state({"read_lessons": [x for x in (load_state().get("read_lessons") or []) if x != lid]})
         self.send_status()
 
+    # ── Sauvegardes (disponibilité) ────────────────────────────────────
+    def backup_summary(self):
+        try:
+            return backup.summary(backup.load_state())
+        except Exception:  # noqa: BLE001
+            return {"state": "none", "last": None, "destinations": 0}
+
+    def backup_check_enabled(self):
+        ds = self.last_daemon_status if isinstance(self.last_daemon_status, dict) else {}
+        settings = (ds or {}).get("settings") or {}
+        return bool(settings.get("backup_check", True))
+
+    def _backup_payload(self, drives=None):
+        st = backup.load_state()
+        drives = backup.detect_drives() if drives is None else drives
+        ds = self.last_daemon_status if isinstance(self.last_daemon_status, dict) else {}
+        dests = []
+        for d in st["destinations"]:
+            avail, target = backup.destination_available(d, drives)
+            dests.append(dict(d, available=avail, target=target))
+        return {"timeshift": (ds or {}).get("timeshift"), "user": backup.summary(st), "drives": drives,
+                "destinations": dests, "sources": st["sources"], "excludes": st["excludes"], "retention": st["retention"],
+                "schedule": st["schedule"], "history": st["history"][:20], "rclone": backup.rclone_path() is not None,
+                "remotes": backup.rclone_remotes() if backup.rclone_path() else [], "running": self.backup_progress,
+                "hostuser": backup._hostuser(), "timeshift_installed": shutil.which("timeshift") is not None}
+
+    def act_backup_status(self, data):
+        if data.get("refresh"):
+            DaemonClient.request("backup_status", refresh=True)
+            if isinstance(self.last_daemon_status, dict):
+                resp = DaemonClient.request("backup_status")
+                if resp.get("ok"):
+                    self.last_daemon_status["timeshift"] = resp.get("timeshift")
+        self.send_to_js("backupStatus", self._backup_payload())
+
+    def _start_backup(self, dest, auto=False):
+        if self.backup_runner and self.backup_runner.is_alive():
+            self.send_to_js("operationResult", {"status": "error", "message": self.T("msg.backup_running")})
+            return False
+        st = backup.load_state()
+        dest_id = dest.get("id")
+
+        def progress(pct, text):
+            GLib.idle_add(self._backup_progress_cb, dest_id, pct, text)
+
+        def done(result):
+            GLib.idle_add(self._backup_done, result)
+        self.backup_runner = backup.BackupRunner(dest, st, on_progress=progress, on_done=done, auto=auto)
+        self.backup_progress = {"dest_id": dest_id, "dest_label": dest.get("label", ""), "pct": 0, "text": "", "auto": auto}
+        self.backup_runner.start()
+        self.send_to_js("backupProgress", self.backup_progress)
+        if auto and self.popups_enabled("info"):
+            self.popup("info", self.T("popup.backup.start_title"), self.T("popup.backup.auto", dest=dest.get("label", "")), timeout=8)
+        else:
+            self.send_to_js("operationResult", {"status": "info", "message": self.T("msg.backup_started", dest=dest.get("label", ""))})
+        self.send_status()
+        return True
+
+    def _backup_progress_cb(self, dest_id, pct, text):
+        if self.backup_progress and self.backup_progress.get("dest_id") == dest_id:
+            self.backup_progress.update({"pct": round(pct, 1), "text": text})
+            self.send_to_js("backupProgress", self.backup_progress)
+        return False
+
+    def _backup_done(self, result):
+        st = backup.load_state()
+        backup.record_result(st, result)
+        backup.save_state(st)
+        self.backup_progress = None
+        self.backup_runner = None
+        self.send_to_js("backupDone", result)
+        self.send_to_js("backupStatus", self._backup_payload())
+        self.send_status()
+        self.tray.update_status()
+        T = self.T
+        if result.get("ok"):
+            msg = T("msg.backup_done", dest=result.get("dest_label", ""), files=result.get("files", 0),
+                    size=backup.format_size(result.get("bytes", 0)))
+            self.send_to_js("operationResult", {"status": "success", "message": msg})
+            if self.popups_enabled("info"):
+                self.popup("success", T("popup.backup.done_title"), msg, timeout=12, on_activate=lambda: self.show_tab("backup"))
+        elif result.get("cancelled"):
+            self.send_to_js("operationResult", {"status": "info", "message": T("msg.backup_cancelled")})
+        else:
+            err = result.get("error", "")
+            key = {"destination_unavailable": "msg.backup_dest_unavailable", "no_sources": "msg.no_sources"}.get(err)
+            detail = T(key) if key else f"{err} {result.get('detail', '')}".strip()
+            msg = T("msg.backup_failed", error=detail[:200])
+            self.send_to_js("operationResult", {"status": "error", "message": msg})
+            self.popup("warning", T("popup.backup.failed_title"), msg, timeout=20, on_activate=lambda: self.show_tab("backup"))
+        return False
+
+    def act_backup_run(self, data):
+        st = backup.load_state()
+        dest = next((d for d in st["destinations"] if d.get("id") == data.get("dest_id")), None)
+        if not dest:
+            self.send_to_js("operationResult", {"status": "error", "message": self.T("msg.backup_no_dest")})
+            return
+        self._start_backup(dest, auto=False)
+
+    def act_backup_quick(self, data):
+        """Vue simple : sauvegarder sur un support détecté (ajouté comme destination s'il est nouveau)."""
+        drive = data.get("drive") or {}
+        st = backup.load_state()
+        dest = next((d for d in st["destinations"] if d.get("type") == "local" and drive.get("uuid") and d.get("uuid") == drive.get("uuid")), None)
+        if not dest:
+            dest = backup.add_destination(st, {"type": "local", "label": drive.get("label") or drive.get("mountpoint", ""),
+                                               "mountpoint": drive.get("mountpoint", ""), "uuid": drive.get("uuid", ""),
+                                               "fstype": drive.get("fstype", ""), "devnode": drive.get("devnode", "")})
+            backup.save_state(st)
+        self._start_backup(dest, auto=False)
+
+    def act_backup_cancel(self, _data):
+        if self.backup_runner and self.backup_runner.is_alive():
+            self.backup_runner.cancel()
+
+    def act_backup_add_local(self, data):
+        st = backup.load_state()
+        if data.get("path"):
+            p = os.path.expanduser(data["path"].strip())
+            if not (os.path.isdir(p) and os.access(p, os.W_OK)):
+                self.send_to_js("operationResult", {"status": "error", "message": self.T("msg.backup_dest_unavailable")})
+                return
+            dest = backup.add_destination(st, {"type": "path", "label": data.get("label") or os.path.basename(p.rstrip("/")) or p,
+                                               "mountpoint": p})
+        else:
+            drive = data.get("drive") or {}
+            dest = backup.add_destination(st, {"type": "local", "label": drive.get("label") or drive.get("mountpoint", ""),
+                                               "mountpoint": drive.get("mountpoint", ""), "uuid": drive.get("uuid", ""),
+                                               "fstype": drive.get("fstype", ""), "devnode": drive.get("devnode", "")})
+        backup.save_state(st)
+        self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.backup_dest_added", label=dest["label"])})
+        self.send_to_js("backupStatus", self._backup_payload())
+        self.send_status()
+
+    def act_backup_add_cloud(self, data):
+        kind, name, params, remote = data.get("kind") or "", data.get("name") or "", data.get("params") or {}, (data.get("remote") or "").strip()
+
+        def worker():
+            if kind == "existing":
+                ok, detail = (True, remote) if remote else (False, "no_remote")
+            else:
+                ok, detail = backup.cloud_configure(kind, name, params)
+            target = detail if ok else ""
+            if ok:
+                ok, detail = backup.cloud_test(target)
+            GLib.idle_add(finish, ok, detail, target)
+
+        def finish(ok, detail, target):
+            if not ok:
+                key = "backup.cloud.rclone_missing" if detail == "rclone_missing" else None
+                self.send_to_js("operationResult", {"status": "error", "message": self.T(key) if key else self.T("msg.backup_test_failed", detail=detail[:200])})
+                return False
+            st = backup.load_state()
+            label = data.get("label") or (target.split(":")[0] + " (" + self.T(f"backup.cloud.{kind}" if kind != "existing" else "backup.cloud.existing") + ")")
+            dest = backup.add_destination(st, {"type": "cloud", "label": label[:60], "remote": target, "provider": kind})
+            backup.save_state(st)
+            self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.backup_dest_added", label=dest["label"])})
+            self.send_to_js("backupStatus", self._backup_payload())
+            self.send_status()
+            return False
+        self.send_to_js("operationResult", {"status": "info", "message": self.T("msg.backup_testing")})
+        threading.Thread(target=worker, daemon=True).start()
+
+    def act_backup_test(self, data):
+        st = backup.load_state()
+        dest = next((d for d in st["destinations"] if d.get("id") == data.get("dest_id")), None)
+        if not dest:
+            return
+
+        def worker():
+            if dest.get("type") == "cloud":
+                ok, detail = backup.cloud_test(dest.get("remote", ""))
+            else:
+                ok, detail = backup.destination_available(dest)
+                detail = "ok" if ok else "unavailable"
+            GLib.idle_add(lambda: self.send_to_js("operationResult", {"status": "success" if ok else "error",
+                          "message": self.T("msg.backup_test_ok") if ok else self.T("msg.backup_test_failed", detail=str(detail)[:200])}) or False)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def act_backup_remove(self, data):
+        st = backup.load_state()
+        backup.remove_destination(st, data.get("dest_id"))
+        backup.save_state(st)
+        self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.backup_dest_removed")})
+        self.send_to_js("backupStatus", self._backup_payload())
+        self.send_status()
+
+    def act_backup_set(self, data):
+        st = backup.load_state()
+        if isinstance(data.get("sources"), list):
+            st["sources"] = [os.path.expanduser(x.strip()) for x in data["sources"] if x and x.strip()][:50]
+        if isinstance(data.get("excludes"), list):
+            st["excludes"] = [x.strip() for x in data["excludes"] if x and x.strip()][:100]
+        try:
+            st["retention"] = max(1, min(100, int(data.get("retention", st["retention"]))))
+        except (TypeError, ValueError):
+            pass
+        if data.get("schedule") in backup.SCHEDULE_DAYS:
+            st["schedule"] = data["schedule"]
+        backup.save_state(st)
+        self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.backup_saved")})
+        self.send_to_js("backupStatus", self._backup_payload())
+        self.send_status()
+
+    def act_backup_open_folder(self, data):
+        st = backup.load_state()
+        dest = next((d for d in st["destinations"] if d.get("id") == data.get("dest_id")), None)
+        if dest and dest.get("type") != "cloud":
+            avail, target = backup.destination_available(dest)
+            if avail:
+                subprocess.Popen(["xdg-open", os.path.join(target, backup.BACKUP_DIRNAME, backup._hostuser())])
+
+    def act_backup_open_timeshift(self, _data):
+        for cmd in (["timeshift-launcher"], ["pkexec", "timeshift-gtk"]):
+            if shutil.which(cmd[0]) and (cmd[0] != "pkexec" or shutil.which("timeshift-gtk")):
+                subprocess.Popen(cmd)
+                return
+        self.send_to_js("operationResult", {"status": "error", "message": self.T("msg.timeshift_missing")})
+
+    def act_install_package(self, data):
+        name = data.get("name")
+
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "info", "message": self.T("msg.package_installing", name=name)})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("install_package", {"name": name}, done)
+
+    def _backup_first_check(self):
+        self.backup_scheduler()
+        GLib.timeout_add_seconds(1800, self.backup_scheduler)
+        return False
+
+    def backup_scheduler(self):
+        """Sauvegarde automatique (quotidienne/hebdomadaire/mensuelle) dès qu'une destination est disponible."""
+        try:
+            if self.backup_runner and self.backup_runner.is_alive():
+                return True
+            st = backup.load_state()
+            if not backup.summary(st).get("due"):
+                return True
+            drives = backup.detect_drives()
+            for dest in st["destinations"]:
+                avail, _ = backup.destination_available(dest, drives)
+                if avail:
+                    self._start_backup(dest, auto=True)
+                    break
+        except Exception as e:  # noqa: BLE001
+            print(f"backup scheduler: {e}", file=sys.stderr)
+        return True
+
     def act_show_tip(self, _data):
         self.show_daily_tip(force=True)
 
@@ -2065,6 +2334,7 @@ class ClamAVAntivirusApp:
             "upload_gb": (ds or {}).get("upload_gb", 0),
             "overall": (ds or {}).get("overall"),
             "read_lessons": load_state().get("read_lessons") or [],
+            "backup": {"timeshift": (ds or {}).get("timeshift"), "user": self.backup_summary(), "running": self.backup_progress},
             "unlocked": (ds or {}).get("unlocked", False),
             "family_mode": (ds or {}).get("family_mode", False),
             "admin_groups": (ds or {}).get("admin_groups", []),

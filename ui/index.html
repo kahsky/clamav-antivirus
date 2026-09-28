@@ -86,6 +86,14 @@
             </div>
             <div class="awareness-list" id="awarenessListSimple"></div>
         </div>
+        <div class="simple-awareness simple-backup" id="simpleBackup" hidden>
+            <div class="simple-awareness-head">
+                <button class="btn btn-secondary btn-sm" onclick="hideBackupWizard()">← <span data-i18n="awareness.back">Retour</span></button>
+                <h2 data-i18n="backup.wizard.title">Sauvegarder mes fichiers</h2>
+                <span class="text-muted" id="backupWizardIntro"></span>
+            </div>
+            <div class="backup-wizard" id="backupWizardBody"></div>
+        </div>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -150,6 +158,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
                 <span data-i18n="nav.awareness">Bonnes pratiques</span>
             </button>
+            <button class="nav-btn" data-tab="backup" onclick="switchTab('backup')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="8" rx="2"/><rect x="2" y="12" width="20" height="8" rx="2"/><circle cx="6" cy="8" r="1"/><circle cx="6" cy="16" r="1"/></svg>
+                <span data-i18n="nav.backup">Sauvegardes</span>
+            </button>
             <button class="nav-btn" data-tab="firewall" onclick="switchTab('firewall')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="18" height="4" rx="1"/><line x1="9" y1="4" x2="9" y2="8"/><line x1="15" y1="10" x2="15" y2="14"/><line x1="9" y1="16" x2="9" y2="20"/>
@@ -212,7 +224,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.8.4 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.9.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -847,6 +859,95 @@
             <div class="awareness-list" id="awarenessList"></div>
         </section>
 
+        <!-- ── SAUVEGARDES (disponibilité) ─────────────────────────── -->
+        <section class="tab-panel" id="tab-backup">
+            <div class="page-header">
+                <h1 data-i18n="backup.title">Sauvegardes</h1>
+                <p class="subtitle" data-i18n="backup.subtitle">Disponibilité : instantanés du système (Timeshift) et copie de vos fichiers sur un support ou un cloud</p>
+            </div>
+            <p class="text-muted alerts-intro" data-i18n="backup.cia">La sécurité, c'est aussi la disponibilité (le « A » de confidentialité, intégrité, accessibilité) : face à un rançongiciel, une panne ou un vol, seule une sauvegarde récente permet de retrouver vos données. Timeshift protège le système ; cette page copie vos dossiers personnels.</p>
+
+            <div class="card backup-progress-card" id="backupProgressCard" hidden>
+                <div class="card-title-row"><h4 id="backupProgressTitle"></h4><button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'backup_cancel'})" data-i18n="backup.progress.cancel">Annuler</button></div>
+                <div class="simple-scan-bar"><div class="simple-scan-fill" id="backupProgressFill" style="width:0%"></div></div>
+                <div class="text-muted backup-progress-text" id="backupProgressText"></div>
+            </div>
+
+            <div class="cards-grid">
+                <div class="card card-timeshift">
+                    <div class="card-title-row">
+                        <h4 data-i18n="backup.timeshift.title">Instantanés du système (Timeshift)</h4>
+                        <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'backup_open_timeshift'})" data-i18n="backup.open_timeshift">Ouvrir Timeshift</button>
+                    </div>
+                    <p class="text-muted alerts-intro" data-i18n="backup.timeshift.intro">Timeshift enregistre des instantanés du système (pas de vos documents) pour revenir en arrière après une mise à jour ratée ou une infection.</p>
+                    <div id="backupTimeshift"></div>
+                </div>
+                <div class="card card-backup-content">
+                    <div class="card-title-row"><h4 data-i18n="backup.content.title">Contenu et planification</h4></div>
+                    <label class="setting-col"><span data-i18n="backup.content.sources">Dossiers à sauvegarder (un par ligne)</span><textarea id="backupSources" class="input-field input-area" rows="5" spellcheck="false"></textarea></label>
+                    <label class="setting-col"><span data-i18n="backup.content.excludes">Exclusions (motifs rsync, un par ligne)</span><textarea id="backupExcludes" class="input-field input-area" rows="3" spellcheck="false"></textarea></label>
+                    <label class="setting-row"><span data-i18n="backup.content.retention">Sauvegardes conservées</span><input type="number" id="backupRetention" class="input-field input-sm" min="1" max="100"></label>
+                    <label class="setting-row"><span data-i18n="backup.content.schedule">Sauvegarde automatique</span>
+                        <select id="backupSchedule" class="lang-select"><option value="manual" data-i18n="backup.schedule.manual">Manuelle</option><option value="daily" data-i18n="backup.schedule.daily">Quotidienne</option><option value="weekly" data-i18n="backup.schedule.weekly">Hebdomadaire</option><option value="monthly" data-i18n="backup.schedule.monthly">Mensuelle</option></select></label>
+                    <p class="text-muted setting-note" data-i18n="backup.content.auto_hint">La sauvegarde automatique démarre quand l'application tourne et que la destination est branchée ou joignable.</p>
+                    <div class="log-actions-right"><button class="btn btn-primary btn-sm" onclick="backupSaveContent()" data-i18n="backup.content.save">Enregistrer</button></div>
+                </div>
+            </div>
+
+            <div class="card card-backup-dest">
+                <div class="card-title-row">
+                    <h4 data-i18n="backup.dest.title">Destinations</h4>
+                    <div class="log-actions-right"><button class="btn btn-secondary btn-sm" onclick="loadBackup(true)" data-i18n="system.refresh">Actualiser</button></div>
+                </div>
+                <div id="backupDestList" class="persistence-list"></div>
+                <div class="backup-add">
+                    <div class="backup-add-row">
+                        <label class="lang-plain"><select id="backupDriveSelect" aria-label="Drive"></select></label>
+                        <button class="btn btn-secondary btn-sm" onclick="backupAddDrive()" data-i18n="backup.dest.add_local">Ajouter ce support</button>
+                    </div>
+                    <div class="backup-add-row">
+                        <input type="text" id="backupPathInput" class="input-field input-sm input-wide" data-i18n-placeholder="backup.dest.path_placeholder" placeholder="/chemin/vers/le/dossier">
+                        <button class="btn btn-secondary btn-sm" onclick="backupAddPath()" data-i18n="backup.dest.add_path">Ajouter un dossier (NAS, autre disque)</button>
+                    </div>
+                    <details class="backup-cloud">
+                        <summary data-i18n="backup.dest.add_cloud">Ajouter un cloud</summary>
+                        <div id="backupCloudForm" class="backup-cloud-form">
+                            <p class="text-muted" id="backupRcloneNote" hidden><span data-i18n="backup.cloud.rclone_missing">rclone n'est pas installé : il est nécessaire pour les sauvegardes cloud.</span> <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'install_package', name:'rclone'})" data-i18n="backup.cloud.install_rclone">Installer rclone</button></p>
+                            <label class="setting-row"><span data-i18n="backup.cloud.provider">Fournisseur</span>
+                                <select id="cloudKind" class="lang-select" onchange="cloudKindChanged()">
+                                    <option value="infomaniak_s3" data-i18n="backup.cloud.infomaniak_s3">Infomaniak Swiss Backup (S3)</option>
+                                    <option value="infomaniak_swift" data-i18n="backup.cloud.infomaniak_swift">Infomaniak Swiss Backup (Swift)</option>
+                                    <option value="kdrive" data-i18n="backup.cloud.kdrive">Infomaniak kDrive (WebDAV)</option>
+                                    <option value="s3" data-i18n="backup.cloud.s3">S3 compatible (AWS, Wasabi, MinIO…)</option>
+                                    <option value="existing" data-i18n="backup.cloud.existing">Remote rclone existant</option>
+                                </select></label>
+                            <p class="text-muted setting-note" id="cloudHint"></p>
+                            <label class="setting-row cloud-f" data-f="name"><span data-i18n="backup.cloud.name">Nom</span><input type="text" id="cloudName" class="input-field input-sm" value="swissbackup"></label>
+                            <label class="setting-row cloud-f" data-f="endpoint"><span data-i18n="backup.cloud.endpoint">Point d'accès (endpoint)</span><input type="text" id="cloudEndpoint" class="input-field input-sm input-wide" placeholder="https://s3.swiss-backup03.infomaniak.com"></label>
+                            <label class="setting-row cloud-f" data-f="access_key"><span data-i18n="backup.cloud.access_key">Clé d'accès</span><input type="text" id="cloudAccessKey" class="input-field input-sm input-wide" autocomplete="off"></label>
+                            <label class="setting-row cloud-f" data-f="secret_key"><span data-i18n="backup.cloud.secret_key">Clé secrète</span><input type="password" id="cloudSecretKey" class="input-field input-sm input-wide" autocomplete="off"></label>
+                            <label class="setting-row cloud-f" data-f="bucket"><span data-i18n="backup.cloud.bucket">Bucket / conteneur</span><input type="text" id="cloudBucket" class="input-field input-sm"></label>
+                            <label class="setting-row cloud-f" data-f="auth"><span data-i18n="backup.cloud.auth">URL d'authentification</span><input type="text" id="cloudAuth" class="input-field input-sm input-wide" placeholder="https://swiss-backup03.infomaniak.com/identity/v3"></label>
+                            <label class="setting-row cloud-f" data-f="user"><span data-i18n="backup.cloud.user">Utilisateur</span><input type="text" id="cloudUser" class="input-field input-sm input-wide" autocomplete="off"></label>
+                            <label class="setting-row cloud-f" data-f="key"><span data-i18n="backup.cloud.key">Mot de passe</span><input type="password" id="cloudKey" class="input-field input-sm input-wide" autocomplete="off"></label>
+                            <label class="setting-row cloud-f" data-f="url"><span data-i18n="backup.cloud.url">URL WebDAV</span><input type="text" id="cloudUrl" class="input-field input-sm input-wide" placeholder="https://xxxx.connect.kdrive.infomaniak.com"></label>
+                            <label class="setting-row cloud-f" data-f="remote"><span data-i18n="backup.cloud.remote">Remote (nom:bucket/dossier)</span><input type="text" id="cloudRemote" class="input-field input-sm input-wide" placeholder="monremote:bucket/dossier"></label>
+                            <p class="text-muted setting-note" data-i18n="backup.cloud.secrets_note">Les identifiants sont enregistrés (obscurcis) dans ~/.config/rclone/rclone.conf, lisible par votre compte seulement.</p>
+                            <div class="log-actions-right"><button class="btn btn-primary btn-sm" onclick="backupAddCloud()" data-i18n="backup.cloud.save">Enregistrer et tester</button></div>
+                        </div>
+                    </details>
+                </div>
+            </div>
+
+            <div class="card card-backup-history">
+                <div class="card-title-row"><h4 data-i18n="backup.history.title">Historique</h4></div>
+                <div id="backupHistory" class="persistence-list"></div>
+                <h5 class="sub-title" data-i18n="backup.restore.title">Restaurer</h5>
+                <p class="text-muted" id="backupRestoreLocal"></p>
+                <p class="text-muted" id="backupRestoreCloud"></p>
+            </div>
+        </section>
+
         <!-- ── PARE-FEU & SSH ──────────────────────────────────────── -->
         <section class="tab-panel" id="tab-firewall">
             <div class="page-header">
@@ -960,6 +1061,7 @@
                     <label class="setting-row"><span data-i18n="settings.geoip_key">Clé API ip-api.com Pro (optionnelle)</span><input type="text" id="setGeoipKey" class="input-field input-sm input-key" placeholder="—" autocomplete="off" spellcheck="false"></label>
                     <p class="text-muted setting-note" id="geoipStats"></p>
                     <p class="text-muted setting-note" data-i18n="settings.geoip.note">Sans clé : service gratuit ip-api.com (HTTP, 15 requêtes groupées par minute, 100 adresses par requête, usage non commercial). Avec une clé Pro : HTTPS et sans limite. Chaque adresse n'est demandée qu'une fois par 24 h et le cache survit au redémarrage.</p>
+                    <label class="setting-row toggle"><span data-i18n="settings.backup_check">Vérifier les sauvegardes (Timeshift et fichiers) dans l'état global</span><input type="checkbox" id="setBackupCheck"></label>
                     <label class="setting-row toggle"><span data-i18n="settings.integrity_weekly">Vérification d'intégrité hebdomadaire</span><input type="checkbox" id="setIntegrityWeekly"></label>
                     <label class="setting-row"><span data-i18n="settings.schedule.weekly_day">Jour</span>
                         <select id="setIntegrityDay" class="lang-select"><option value="0" data-i18n="day.mon">Lundi</option><option value="1" data-i18n="day.tue">Mardi</option><option value="2" data-i18n="day.wed">Mercredi</option><option value="3" data-i18n="day.thu">Jeudi</option><option value="4" data-i18n="day.fri">Vendredi</option><option value="5" data-i18n="day.sat">Samedi</option><option value="6" data-i18n="day.sun">Dimanche</option></select></label>
