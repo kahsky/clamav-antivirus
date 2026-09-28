@@ -2771,3 +2771,9 @@ body.mode-simple { position: relative; }
 /* ── v1.8.3 : clé GeoIP ── */
 .input-key { width: 200px; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px; }
 .setting-note { font-size: 12px; line-height: 1.45; margin: 2px 0 6px; }
+
+/* ── v1.8.4 : analyse complète ── */
+.scan-hero-actions { flex-wrap: wrap; justify-content: center; gap: 10px; }
+#btnFullAnalysis svg { width: 18px; height: 18px; margin-right: 6px; }
+
+.vuln-prio-row { display: flex; align-items: center; gap: 12px; margin: 6px 0 4px; font-size: 13px; }

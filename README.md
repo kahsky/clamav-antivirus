@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.8.3)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.8.4)
 
 ---
 
@@ -70,6 +70,13 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   passe, sauvegardes, faux support, ingénierie sociale, Wi-Fi public, mot de passe admin, réaction
   à une attaque, extensions. Un **conseil du jour** apparaît en popup au démarrage (bouton
   « Lire plus » ouvre la leçon ; désactivable dans Paramètres). Contenu dans `ui/awareness.js`.
+- **Analyse complète** — « Analyser mon ordinateur » (vue simple, tableau de bord, tray) enchaîne le
+  scan antivirus de tout le disque puis la vérification d'intégrité : rkhunter, chkrootkit, debsums et
+  fichiers de l'application ; un popup conclut « Analyse complète terminée » ou signale les
+  avertissements. En vue avancée, l'onglet Scanner garde le scan seul, l'onglet Sécurité la
+  vérification seule, et un bouton « Tout analyser (fichiers + intégrité) » fait les deux. rkhunter,
+  chkrootkit et debsums sont désormais des dépendances du paquet ; rkhunter est initialisé à
+  l'installation et remis à jour après chaque passage d'apt (`APT_AUTOGEN`).
 - **Installer les mises à jour** — le bouton « Mettre à jour » (vue simple) et « Installer les mises à
   jour » (État du système) lancent `apt-get update` puis `apt-get upgrade` via le service, dans une unité
   systemd transitoire ; un popup confirme la fin. Les paquets **décalés** (phasing Ubuntu) ou **retenus**
@@ -138,7 +145,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.8.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.8.3_all.deb)
+[Télécharger clamav-antivirus_1.8.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.8.4_all.deb)
 
 ---
 
@@ -169,12 +176,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.8.3_all.deb`
+Résultat : `clamav-antivirus_1.8.4_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.8.3_all.deb
+sudo dpkg -i clamav-antivirus_1.8.4_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

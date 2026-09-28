@@ -267,7 +267,7 @@ class Job:
     _counter = 0
     _counter_lock = threading.Lock()
 
-    def __init__(self, kind, path=None, resume=False, auto=False, requested_by=None, usb=None):
+    def __init__(self, kind, path=None, resume=False, auto=False, requested_by=None, usb=None, integrity=False):
         with Job._counter_lock:
             Job._counter += 1
             self.id = Job._counter
@@ -276,6 +276,7 @@ class Job:
         self.resume = resume
         self.auto = auto            # lancé par le système (première installation, reprise)
         self.usb = usb              # dict décrivant le support USB analysé, ou None
+        self.integrity = integrity  # analyse complète : vérification d'intégrité (rootkits, paquets) après le scan
         self.requested_by = requested_by
         self.created_at = time.time()
         self.started_at = None
@@ -303,6 +304,7 @@ class Job:
             "resume": self.resume,
             "auto": self.auto,
             "usb": self.usb,
+            "integrity": self.integrity,
             "phase": self.phase,
             "scanned": self.scanned,
             "total": self.total,
@@ -1158,6 +1160,10 @@ def installed_sources():
         binary, source, sversion, version = parts[0], parts[1] or parts[0], parts[2] or parts[3], parts[3]
         entry = sources.setdefault(source, {"version": sversion, "binaries": []})
         entry["binaries"].append(binary)
+        # Plusieurs versions d'une même source peuvent coexister (noyaux linux-image-6.8.0-101/-139…) :
+        # la version qui compte est la plus récente, sinon des failles déjà corrigées ressortent.
+        if sversion != entry["version"] and version_gt(sversion, entry["version"]):
+            entry["version"] = sversion
     return sources
 
 
@@ -1178,7 +1184,7 @@ def osv_query(sources, ecosystem):
     return found
 
 
-def osv_details(ids, cache, ecosystem, max_workers=6):
+def osv_details(ids, cache, ecosystem, max_workers=8):
     """Détails OSV (mis en cache par id). Retourne {id: detail_simplifié}."""
     def fetch(vid):
         try:
@@ -1191,18 +1197,21 @@ def osv_details(ids, cache, ecosystem, max_workers=6):
                 priority = str(sev.get("score", "")).lower()
             elif sev.get("type", "").startswith("CVSS") and not cvss:
                 cvss = sev.get("score", "")
-        fixed, pro, affected_pkg = "", False, ""
+        # Une fiche OSV Ubuntu couvre plusieurs paquets sources (linux, linux-aws, linux-hwe-6.11…) :
+        # la version corrigée et la disponibilité (Ubuntu Pro) se lisent PAR PAQUET, jamais globalement.
+        fixed_by_pkg, pro_by_pkg = {}, {}
         for aff in d.get("affected") or []:
-            if aff.get("package", {}).get("ecosystem") != ecosystem:
+            pkg = aff.get("package", {})
+            if pkg.get("ecosystem") != ecosystem:
                 continue
-            affected_pkg = aff.get("package", {}).get("name", "")
+            name = pkg.get("name", "")
+            fixed_by_pkg.setdefault(name, "")
             for rng in aff.get("ranges") or []:
                 for ev in rng.get("events") or []:
                     if ev.get("fixed"):
-                        fixed = ev["fixed"]
-            avail = (aff.get("ecosystem_specific") or {}).get("availability", "")
-            if "Ubuntu Pro" in avail:
-                pro = True
+                        fixed_by_pkg[name] = ev["fixed"]
+            if "Ubuntu Pro" in (aff.get("ecosystem_specific") or {}).get("availability", ""):
+                pro_by_pkg[name] = True
         summary = d.get("summary") or (d.get("details") or "").strip().split("\n")[0]
         cve = ""
         for alias in [d.get("id", "")] + list(d.get("aliases") or []) + list(d.get("upstream") or []):
@@ -1213,12 +1222,13 @@ def osv_details(ids, cache, ecosystem, max_workers=6):
             cve = d["id"][7:]
         return vid, {"id": d.get("id", vid), "cve": cve, "modified": d.get("modified", ""),
                      "published": d.get("published", ""), "priority": priority, "cvss": cvss,
-                     "fixed": fixed, "pro": pro, "package": affected_pkg, "summary": summary[:240]}
+                     "fixed_by_pkg": fixed_by_pkg, "pro_by_pkg": pro_by_pkg, "summary": summary[:240]}
 
-    todo = [vid for vid in ids if vid not in cache]
-    out = {vid: cache[vid] for vid in ids if vid in cache}
+    usable = lambda vid: vid in cache and "fixed_by_pkg" in cache[vid]      # anciens caches (< 1.8.4) : re-téléchargés
+    todo = [vid for vid in ids if not usable(vid)]
+    out = {vid: cache[vid] for vid in ids if usable(vid)}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        for vid, detail in pool.map(fetch, todo[:800]):
+        for vid, detail in pool.map(fetch, todo[:3000]):
             if detail:
                 out[vid] = detail
     return out
@@ -1244,17 +1254,20 @@ def collect_vulnerabilities(previous=None):
                 d = details.get(vid)
                 if not d:
                     continue
-                if d["fixed"] and version_gt(d["fixed"], installed):
-                    status = "fix_available"
-                elif d["pro"]:
-                    status = "pro_only"
+                fixed = (d.get("fixed_by_pkg") or {}).get(source, "")
+                if fixed and not version_gt(fixed, installed):
+                    continue                    # déjà corrigée dans la version installée : ne pas l'afficher
+                if (d.get("pro_by_pkg") or {}).get(source):
+                    status = "pro_only"         # correctif réservé à Ubuntu Pro (esm)
+                elif fixed:
+                    status = "fix_available"    # une mise à jour l'installe
                 else:
-                    status = "unfixed"
+                    status = "unfixed"          # aucun correctif publié par Ubuntu pour ce paquet
                 result["counts"][status] += 1
                 pr = d["priority"] or "untriaged"
                 result["by_priority"][pr] = result["by_priority"].get(pr, 0) + 1
                 result["items"].append({"id": d["id"], "cve": d["cve"] or d["id"], "package": source,
-                                        "installed": installed, "fixed": d["fixed"], "status": status,
+                                        "installed": installed, "fixed": fixed, "status": status,
                                         "priority": pr, "cvss": d["cvss"], "summary": d["summary"],
                                         "url": f"https://ubuntu.com/security/{d['cve']}" if d["cve"] else f"https://osv.dev/vulnerability/{d['id']}"})
         result["items"].sort(key=lambda it: (PRIORITY_RANK.get(it["priority"], 6), it["status"] != "unfixed", it["package"]))
@@ -1973,9 +1986,12 @@ class Daemon:
             "event": "job_done", "id": job.id, "kind": job.kind, "path": job.path,
             "status": status, "msg_key": key, "msg_params": params,
             "message": t("en", key, **params), "summary": summary or {},
-            "auto": job.auto, "usb": job.usb,
+            "auto": job.auto, "usb": job.usb, "integrity": getattr(job, "integrity", False),
             "elapsed": time.time() - (job.started_at or time.time()),
         })
+        # Analyse complète : enchaîner la vérification d'intégrité (rootkits, paquets, fichiers de l'application)
+        if job.kind == "scan" and getattr(job, "integrity", False) and status not in ("cancelled", "error"):
+            threading.Thread(target=self.run_integrity, kwargs={"after_scan": True}, daemon=True).start()
 
     # ── Scan ─────────────────────────────────────────────────────────────
     def _save_progress(self, job, in_progress=True):
@@ -2439,7 +2455,7 @@ class Daemon:
         self.refresh_overall()
         return checklist
 
-    def run_integrity(self):
+    def run_integrity(self, after_scan=False):
         if self.integrity_running:
             return False
         self.integrity_running = True
@@ -2454,7 +2470,7 @@ class Daemon:
                                         [n for n, t in result["tools"].items() if t["warnings"]] +
                                         (["app"] if result["app"]["modified"] or result["app"]["missing"] else [])),
                                     "pid": 0, "comm": "", "exe": "", "count": 0, "top_dir": "", "reasons": [], "sample": []})
-            self.broadcast({"event": "integrity", "integrity": result})
+            self.broadcast({"event": "integrity", "integrity": result, "after_scan": after_scan})
             self.refresh_overall()
             return True
         finally:
@@ -2905,7 +2921,8 @@ class Daemon:
                 usb = self.usb.take_pending(req["usb_devnode"]) or {"devnode": req["usb_devnode"]}
                 usb = dict(usb, private_mount=False, mountpoint=os.path.normpath(path))
             job = self.enqueue(Job("scan", path=os.path.normpath(path),
-                                   resume=bool(req.get("resume")), requested_by=uid, usb=usb))
+                                   resume=bool(req.get("resume")), requested_by=uid, usb=usb,
+                                   integrity=bool(req.get("integrity"))))
             return {"ok": True, "job_id": job.id, "queued": False}
 
         if cmd == "update":

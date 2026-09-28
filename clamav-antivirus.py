@@ -977,7 +977,7 @@ class TrayIcon:
 
     def on_full_scan(self, _):
         self.app.window.present()
-        self.app.run_js('if(typeof startFullSystemScan==="function")startFullSystemScan();')
+        self.app.run_js('if(typeof startFullSystemScan==="function")startFullSystemScan(true);')
 
     def on_update(self, _):
         self.app.window.present()
@@ -1326,6 +1326,12 @@ class ClamAVAntivirusApp:
             self.send_to_js("trustedList", {"programs": ev.get("programs") or [], "acknowledged": ev.get("acknowledged") or [],
                                             "available": True})
             self.act_get_alerts({})
+        elif et == "integrity" and ev.get("after_scan"):
+            result = ev.get("integrity") or {}
+            self.send_to_js("securityData", {"type": "integrity", "data": result, "available": True, "after_scan": True})
+            if not result.get("warnings") and self.popups_enabled("scan"):
+                self.popup("success", self.T("popup.integrity_ok.title"), self.T("popup.integrity_ok.body"), timeout=14,
+                           on_activate=lambda: self.show_tab("security"))
         elif et in ("vulns", "checklist", "integrity", "persistence", "app_update", "integrity_running", "suspended"):
             self.send_to_js("securityData", {"type": et, "data": ev.get(et) or ev.get("update") or {},
                                              "available": True})
@@ -1367,7 +1373,7 @@ class ClamAVAntivirusApp:
                                          "auto": ev.get("auto"), "path": ev.get("path"),
                                          "usb": ev.get("usb")})
             if not ev.get("usb"):
-                self.notify_scan_result(status, message, ev.get("summary", {}))
+                self.notify_scan_result(status, message, ev.get("summary", {}), integrity=bool(ev.get("integrity")))
         else:
             self.updating = False
             ok = status == "success"
@@ -1382,12 +1388,14 @@ class ClamAVAntivirusApp:
         self.send_status()
         self.tray.update_status()
 
-    def notify_scan_result(self, status, message, summary):
+    def notify_scan_result(self, status, message, summary, integrity=False):
         T = self.T
         path = (summary or {}).get("path") or ""
         if status == "clean" and not self.popups_enabled("scan"):
             return
         if status == "clean":
+            if integrity:
+                message = message + "\n" + T("popup.scan.integrity_pending")
             self.popup("success", T("popup.scan.clean_title"), message, timeout=12,
                        meta=path, on_activate=lambda: self.show_tab("scan"))
         elif status == "infected":
@@ -1596,7 +1604,7 @@ class ClamAVAntivirusApp:
 
         # 1) Service système (root, sans mot de passe)
         if daemon_can_scan(path):
-            resp = DaemonClient.request("scan", path=path, resume=resume)
+            resp = DaemonClient.request("scan", path=path, resume=resume, integrity=bool(data.get("integrity")) and full)
             if resp.get("ok"):
                 return  # l'événement job_started déclenchera scanStarted
             if not resp.get("unavailable"):

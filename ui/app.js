@@ -19,6 +19,9 @@ let settingsData = null;
 let overall = null;
 let secData = { vulns: null, checklist: null, integrity: null, persistence: null, connections: null, app_update: null };
 let vulnFilter = 'unfixed';
+let vulnPrio = 'high';   // priorité minimale affichée : 'high' (critique + haute), 'medium', 'all'
+const VULN_PRIO_RANK = { critical: 0, high: 1, medium: 2, low: 3, negligible: 4, untriaged: 5 };
+function setVulnPrio(p) { vulnPrio = p; renderVulns(); }
 let legalAccepted = true;
 
 const RING_CIRC = 2 * Math.PI * 52;   // circonférence de l'anneau (r = 52)
@@ -326,6 +329,7 @@ function onSecurityData(data) {
     if (type === 'integrity_running') { $('btnIntegrityRun').disabled = true; $('integrityList').innerHTML = `<p class="text-muted">${t('security.integrity.running')}</p>`; return; }
     if (type === 'suspended') { if (lastStatus) { lastStatus.suspended = data.data; renderSimpleView(); } return; }
     if (data.available === false) { renderSecurityUnavailable(type); return; }
+    if (type === 'integrity' && data.after_scan && data.data) setHeroNote((data.data.warnings || 0) ? t('scan.note.integrity_warn', { n: data.data.warnings }) : t('scan.note.integrity_ok'));
     secData[type] = data.data || null;
     if (type === 'vulns') { renderVulns(data.refreshing); }
     else if (type === 'checklist') renderChecklist();
@@ -395,7 +399,11 @@ function renderVulns(refreshing = false) {
     ].map(([k, n, cls]) => `<div class="stat ${n && cls === 'danger' ? 'has-threats' : n && cls === 'warn' ? 'has-warning' : ''}"><span class="stat-value">${formatNumber(n)}</span><span class="stat-label">${t(`security.vulns.${k === 'pro_only' ? 'pro' : k}`)}</span></div>`).join('')
         + ['critical', 'high', 'medium', 'low'].map(pr => `<div class="stat"><span class="stat-value">${formatNumber(bp[pr] || 0)}</span><span class="stat-label">${t(`priority.${pr}`)}</span></div>`).join('')
         + `<div class="stat"><span class="stat-value">${formatNumber(v.sources || 0)}</span><span class="stat-label">${t('security.vulns.sources')}</span></div>`;
-    const items = (v.items || []).filter(i => i.status === vulnFilter);
+    const maxRank = vulnPrio === 'all' ? 99 : vulnPrio === 'medium' ? 2 : 1;
+    const items = (v.items || []).filter(i => i.status === vulnFilter && (VULN_PRIO_RANK[i.priority] ?? 5) <= maxRank);
+    const hidden = (v.items || []).filter(i => i.status === vulnFilter).length - items.length;
+    if ($('vulnPrio')) $('vulnPrio').value = vulnPrio;
+    if ($('vulnHidden')) $('vulnHidden').textContent = hidden > 0 ? t('security.vulns.hidden', { n: hidden }) : '';
     $('vulnList').innerHTML = items.length ? items.slice(0, 300).map(i => `
         <div class="cve-item vuln-${i.status} prio-${i.priority}">
             <div class="cve-head">
@@ -1263,14 +1271,14 @@ function renderAlerts(available = true) {
 
 // ─── Scan : démarrage / annulation ──────────────────────────────────────────
 
-function startFullSystemScan() {
+function startFullSystemScan(withIntegrity = false) {
     if (scan.running) { showToast(t('toast.scan_running'), 'info'); if (viewMode === 'advanced') switchTab('scan'); return; }
     toggleInitialScanPrompt(false);
     if (viewMode === 'advanced') switchTab('scan');
     prepareScanUI('/');
     const d = (lastStatus && lastStatus.daemon) || {};
     if (!d.available) setHeroNote(t('scan.note.service_off'));
-    sendToBackend({ action: 'scan', path: '/' });
+    sendToBackend({ action: 'scan', path: '/', integrity: !!withIntegrity });
 }
 
 function startScan(path) {
@@ -1410,6 +1418,7 @@ function onScanDone(data) {
 
     const toastType = data.status === 'infected' ? 'error' : (data.status === 'clean' ? 'success' : 'info');
     showToast(data.message, toastType);
+    if (data.integrity && (data.status === 'clean' || data.status === 'infected')) setHeroNote(t('scan.note.integrity_pending'));
 
     sendToBackend({ action: 'check_status' });
     if (data.status === 'infected') sendToBackend({ action: 'get_quarantine' });

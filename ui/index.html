@@ -65,7 +65,7 @@
 
         <div class="simple-actions">
             <div class="simple-buttons">
-                <button class="btn btn-full-scan btn-lg" id="simpleScanBtn" onclick="startFullSystemScan()">
+                <button class="btn btn-full-scan btn-lg" id="simpleScanBtn" onclick="startFullSystemScan(true)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/></svg>
                     <span data-i18n="simple.scan_now">Analyser mon ordinateur</span>
                 </button>
@@ -212,7 +212,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.8.3 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.8.4 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -316,7 +316,7 @@
                     <div class="card-body">
                         <h3 data-i18n="dash.initial.title">Première utilisation — analyse initiale recommandée</h3>
                         <p class="text-muted" data-i18n="dash.initial.body">Aucune analyse n'a encore été effectuée. Nous recommandons un scan complet pour vérifier l'intégrité de votre machine.</p>
-                        <button class="btn btn-primary" onclick="startFullSystemScan()" data-i18n="dash.initial.btn">Lancer le scan complet</button>
+                        <button class="btn btn-primary" onclick="startFullSystemScan(true)" data-i18n="dash.initial.btn">Lancer le scan complet</button>
                     </div>
                 </div>
 
@@ -371,7 +371,7 @@
                 </div>
 
                 <div class="card card-actions-col">
-                    <div class="card-action" onclick="startFullSystemScan()">
+                    <div class="card-action" onclick="startFullSystemScan(true)">
                         <div class="card-icon accent-blue">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/>
@@ -499,6 +499,10 @@
                                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/>
                             </svg>
                             <span data-i18n="scan.btn.full">Scan complet du système</span>
+                        </button>
+                        <button class="btn btn-primary" id="btnFullAnalysis" onclick="startFullSystemScan(true)" data-i18n-title="scan.full_analysis_hint" title="Scan antivirus complet, puis rkhunter, chkrootkit, debsums et fichiers de l'application">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M8 12h8M12 8v8"/></svg>
+                            <span data-i18n="scan.btn.full_analysis">Tout analyser (fichiers + intégrité)</span>
                         </button>
                         <button class="btn btn-danger" id="btnCancelScan" onclick="cancelScan()" hidden>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
@@ -790,6 +794,14 @@
                     <button class="seg-btn active" data-filter="unfixed" onclick="setVulnFilter('unfixed')" data-i18n="security.vulns.unfixed">Sans correctif</button>
                     <button class="seg-btn" data-filter="pro_only" onclick="setVulnFilter('pro_only')" data-i18n="security.vulns.pro">Ubuntu Pro</button>
                     <button class="seg-btn" data-filter="fix_available" onclick="setVulnFilter('fix_available')" data-i18n="security.vulns.fix_available">Correctif disponible</button>
+                </div>
+                <div class="vuln-prio-row">
+                    <label class="lang-plain"><select id="vulnPrio" onchange="setVulnPrio(this.value)" aria-label="Priority">
+                        <option value="high" data-i18n="security.vulns.prio.high">Critiques et hautes</option>
+                        <option value="medium" data-i18n="security.vulns.prio.medium">Moyennes et plus</option>
+                        <option value="all" data-i18n="security.vulns.prio.all">Toutes les priorités</option>
+                    </select></label>
+                    <span class="text-muted" id="vulnHidden"></span>
                 </div>
                 <div id="vulnList" class="vuln-list"><p class="text-muted" data-i18n="security.vulns.none_yet">Inventaire pas encore effectué.</p></div>
                 <div id="storeUpdates" class="store-updates"></div>
