@@ -1791,11 +1791,33 @@ def osv_details(ids, cache, ecosystem, max_workers=8):
     return out
 
 
+EMBEDDED_ENGINE_RE = re.compile(r"^mozjs\d*$")          # SpiderMonkey extrait de Firefox ESR (cjs, gjs, polkit)
+ENGINE_TERMS = re.compile(r"\b(SpiderMonkey|JavaScript engine|JS engine|JIT|garbage collect\w*|WebAssembly|wasm|"
+                          r"typed array|ArrayBuffer|regular expression|regex|JSON|BigInt|Intl)\b", re.I)
+
+
+def embedded_engine_users(binaries):
+    """Paquets installés qui dépendent du moteur (apt-cache rdepends), pour l'explication à l'utilisateur."""
+    def rdepends(pkg):
+        r = run_quiet(["apt-cache", "rdepends", "--installed", pkg], timeout=30)
+        return {ln.strip().lstrip("|").strip() for ln in (r.stdout or "").splitlines()[2:]
+                if ln.strip() and ":" not in ln and not ln.strip().lstrip("|").strip().startswith("libmozjs")}
+    direct = set()
+    for b in binaries:
+        if b.startswith("libmozjs"):
+            direct |= rdepends(b)
+    users = {u for u in direct if not u.startswith("lib")}
+    for lib in [u for u in direct if u.startswith("lib")]:      # libcjs0 → cjs, cinnamon… (un niveau de plus)
+        users |= {u for u in rdepends(lib) if not u.startswith("lib")}
+    return sorted(users or direct)[:12]
+
+
 def collect_vulnerabilities(previous=None):
     """Failles connues affectant les paquets installés : sans correctif, correctif Pro, ou correctif disponible."""
     ecosystem = ubuntu_osv_ecosystem()
     result = {"checked_at": now_iso(), "ok": True, "error": "", "ecosystem": ecosystem,
-              "sources": 0, "items": [], "counts": {"unfixed": 0, "pro_only": 0, "fix_available": 0, "kernel_pending": 0, "kernel_hwe_fixed": 0, "dormant": 0},
+              "sources": 0, "items": [], "counts": {"unfixed": 0, "pro_only": 0, "fix_available": 0, "kernel_pending": 0, "not_applicable": 0, "kernel_hwe_fixed": 0, "dormant": 0},
+              "embedded": {},
               "running_kernel": {}, "dormant_kernels": [],
               "by_priority": {}, "flatpak": [], "snap": [], "cache": {}}
     try:
@@ -1833,6 +1855,13 @@ def collect_vulnerabilities(previous=None):
                     status = "unfixed"          # aucun correctif publié par Ubuntu pour ce paquet
                 if status == "unfixed" and running_src and kernel_family(source) == kernel_family(running_src):
                     status = "kernel_pending"   # noyau en cours : correctif attendu d'Ubuntu, livré par les mises à jour
+                elif status == "unfixed" and EMBEDDED_ENGINE_RE.match(source) and not ENGINE_TERMS.search(d.get("summary") or ""):
+                    # Moteur JavaScript extrait de Firefox : Ubuntu y rattache toutes les failles du navigateur (« needed »)
+                    # sans jamais les corriger ; celles qui décrivent le navigateur (contenu web, médias, onglets…) ne
+                    # s'appliquent pas au moteur seul. Les failles propres au moteur (JIT, wasm, GC) restent « unfixed ».
+                    status = "not_applicable"
+                    if source not in result["embedded"]:
+                        result["embedded"][source] = {"users": embedded_engine_users(sources[source].get("binaries", []))}
                 is_dormant = source in dormant
                 if is_dormant:
                     result["counts"]["dormant"] += 1
@@ -1847,7 +1876,7 @@ def collect_vulnerabilities(previous=None):
                         hwe = f"{k} {fixed_hwe[k]}"
                         result["counts"]["kernel_hwe_fixed"] += 1
                 pr = d["priority"] or "untriaged"
-                if status != "kernel_pending":
+                if status not in ("kernel_pending", "not_applicable"):
                     result["by_priority"][pr] = result["by_priority"].get(pr, 0) + 1
                 result["items"].append({"id": d["id"], "cve": d["cve"] or d["id"], "package": source,
                                         "installed": installed, "fixed": fixed, "status": status, "hwe_fixed": hwe, "dormant": is_dormant,
@@ -4279,7 +4308,7 @@ class Daemon:
             "alerts_7d": {k: alerts.count(k) for k in set(alerts)},
             "trusted_programs": [anonymize_path(t.get("exe")) for t in (self.state.get("trusted_programs") or [])][:50],
             "acknowledged_persistence": [anonymize_path(k) for k in (self.state.get("acknowledged_persistence") or [])][:50],
-            "vulns": {k: vulns.get(k) for k in ("unfixed", "fix_available", "pro_only", "kernel_pending", "kernel_hwe_fixed")},
+            "vulns": {k: vulns.get(k) for k in ("unfixed", "fix_available", "pro_only", "kernel_pending", "not_applicable", "kernel_hwe_fixed")},
             "integrity_warnings": (self.state.get("integrity") or {}).get("warnings"),
             "timeshift": bool((self.state.get("timeshift") or {}).get("schedule")),
             "policy": bool(self.policy),

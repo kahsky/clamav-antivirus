@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.14.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.14.2 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -815,6 +815,7 @@
                     <button class="seg-btn" data-filter="pro_only" onclick="setVulnFilter('pro_only')" data-i18n="security.vulns.pro">Ubuntu Pro</button>
                     <button class="seg-btn" data-filter="fix_available" onclick="setVulnFilter('fix_available')" data-i18n="security.vulns.fix_available">Correctif disponible</button>
                     <button class="seg-btn" data-filter="kernel_pending" onclick="setVulnFilter('kernel_pending')" data-i18n="security.vulns.kernel_pending">Noyau (correctif attendu)</button>
+                    <button class="seg-btn" data-filter="not_applicable" onclick="setVulnFilter('not_applicable')" data-i18n="security.vulns.not_applicable">Non applicables (moteur intégré)</button>
                 </div>
                 <div class="vuln-prio-row">
                     <label class="lang-plain"><select id="vulnPrio" onchange="setVulnPrio(this.value)" aria-label="Priority">
@@ -826,6 +827,7 @@
                 </div>
                 <p class="text-muted alerts-intro hwe-note" id="vulnHweNote" hidden></p>
                 <p class="text-muted alerts-intro" id="vulnKernelNote" hidden></p>
+                <p class="text-muted alerts-intro" id="vulnNaNote" hidden></p>
                 <div id="vulnList" class="vuln-list"><p class="text-muted" data-i18n="security.vulns.none_yet">Inventaire pas encore effectué.</p></div>
                 <div id="storeUpdates" class="store-updates"></div>
             </div>
