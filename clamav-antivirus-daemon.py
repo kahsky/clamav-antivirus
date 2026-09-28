@@ -1819,6 +1819,7 @@ def reclassify_vulns(vulns):
     counts = dict(out.get("counts") or {})
     counts.setdefault("not_applicable", 0)
     embedded = dict(out.get("embedded") or {})
+    vendor = dict(out.get("vendor") or {})
     by_priority, items = {}, []
     r = run_quiet(["dpkg-query", "-W", "-f", "${Package}\n", "libmozjs*"], timeout=30)
     mozjs_bins = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
@@ -1831,11 +1832,18 @@ def reclassify_vulns(vulns):
             counts["not_applicable"] += 1
             if it["package"] not in embedded:
                 embedded[it["package"]] = {"users": embedded_engine_users(mozjs_bins)}
+        elif it.get("status") == "unfixed" and "linuxmint" in (it.get("installed") or ""):
+            it["status"] = "not_applicable"
+            counts["unfixed"] = max(0, int(counts.get("unfixed") or 0) - 1)
+            counts["not_applicable"] += 1
+            vendor[it["package"]] = it.get("installed") or ""
         if it.get("status") not in ("kernel_pending", "not_applicable") and not it.get("dormant"):
             pr = it.get("priority") or "untriaged"
             by_priority[pr] = by_priority.get(pr, 0) + 1
         items.append(it)
-    out.update(items=items, counts=counts, by_priority=by_priority, embedded=embedded)
+    counts["na_embedded"] = sum(1 for it in items if it.get("status") == "not_applicable" and it.get("package") in embedded)
+    counts["na_vendor"] = sum(1 for it in items if it.get("status") == "not_applicable" and it.get("package") in vendor)
+    out.update(items=items, counts=counts, by_priority=by_priority, embedded=embedded, vendor=vendor)
     return out
 
 
@@ -1843,8 +1851,9 @@ def collect_vulnerabilities(previous=None):
     """Failles connues affectant les paquets installés : sans correctif, correctif Pro, ou correctif disponible."""
     ecosystem = ubuntu_osv_ecosystem()
     result = {"checked_at": now_iso(), "ok": True, "error": "", "ecosystem": ecosystem,
-              "sources": 0, "items": [], "counts": {"unfixed": 0, "pro_only": 0, "fix_available": 0, "kernel_pending": 0, "not_applicable": 0, "kernel_hwe_fixed": 0, "dormant": 0},
-              "embedded": {},
+              "sources": 0, "items": [], "counts": {"unfixed": 0, "pro_only": 0, "fix_available": 0, "kernel_pending": 0, "not_applicable": 0, "na_embedded": 0, "na_vendor": 0,
+                         "kernel_hwe_fixed": 0, "dormant": 0},
+              "embedded": {}, "vendor": {},
               "running_kernel": {}, "dormant_kernels": [],
               "by_priority": {}, "flatpak": [], "snap": [], "cache": {}}
     try:
@@ -1887,8 +1896,15 @@ def collect_vulnerabilities(previous=None):
                     # sans jamais les corriger ; celles qui décrivent le navigateur (contenu web, médias, onglets…) ne
                     # s'appliquent pas au moteur seul. Les failles propres au moteur (JIT, wasm, GC) restent « unfixed ».
                     status = "not_applicable"
+                    result["counts"]["na_embedded"] += 1
                     if source not in result["embedded"]:
                         result["embedded"][source] = {"users": embedded_engine_users(sources[source].get("binaries", []))}
+                elif status == "unfixed" and "linuxmint" in installed:
+                    # Paquet construit par Linux Mint (Firefox, Thunderbird…) : le suivi CVE d'Ubuntu vise SA version,
+                    # pas celle-ci ; Mint livre les versions Mozilla à jour.
+                    status = "not_applicable"
+                    result["counts"]["na_vendor"] += 1
+                    result["vendor"][source] = installed
                 is_dormant = source in dormant
                 if is_dormant:
                     result["counts"]["dormant"] += 1
@@ -2627,6 +2643,14 @@ def parse_lynis_report(path="/var/log/lynis-report.dat", log_path="/var/log/lyni
     return rep
 
 
+CHK_RULES_VERSION = 3              # règles de classification intégrées ; un relevé plus ancien est refait au démarrage
+CHK_NOISE = ("RTNETLINK answers", "ip: ", "ifconfig:", "ls: ", "find: ", "grep: ", "netstat:", "ss: ", "Usage:",
+             "/usr/sbin/chkrootkit:", "chkrootkit:")   # messages d'outils système, pas des constats
+NETMGR_NAMES = {"NetworkManager", "wpa_supplicant", "iwd", "dhclient", "dhcpcd", "avahi-daemon", "systemd-networkd",
+                "dnsmasq", "libvirtd", "dockerd", "tcpdump", "dumpcap", "wireshark", "nmap", "arp-scan", "lldpd",
+                "connmand", "hostapd", "NetworkManager-dispatcher"}
+
+
 def parse_chkrootkit(out):
     """Sortie de chkrootkit -q → constats. Un « WARNING: … : » est suivi des chemins concernés sur les lignes
     suivantes (fichiers cachés, etc.) : ils restent attachés au constat au lieu d'être perdus."""
@@ -2636,7 +2660,8 @@ def parse_chkrootkit(out):
         if not s:
             prev_blank = True
             continue
-        if s.startswith("ROOTDIR") or s.lower().startswith(("not tested", "not infected", "not found", "nothing found")):
+        if s.startswith("ROOTDIR") or s.lower().startswith(("not tested", "not infected", "not found", "nothing found")) \
+                or s.startswith(CHK_NOISE):
             prev_blank = False
             continue
         # Se rattache au constat en cours : chemin ou ligne de tableau, ou en-tête terminé par « : » (liste annoncée)
@@ -2739,6 +2764,31 @@ def classify_tmp_paths(paths):
     return notes
 
 
+def classify_promisc(lines):
+    """Verdict intégré pour « Output from ifpromisc » : une interface Wi-Fi gérée par NetworkManager/wpa_supplicant
+    apparaît en PACKET SNIFFER (socket brute légitime). Processus connu ou livré par un paquet → bénin ; sinon à vérifier."""
+    notes, exes = [], []
+    for ln in lines:
+        s = ln.strip()
+        m = re.search(r"PACKET SNIFFER\((.*)\)", s)
+        if m:
+            for part in m.group(1).split(","):
+                exe = part.strip().split("[", 1)[0].strip()
+                if exe:
+                    exes.append(exe)
+        elif s.endswith(": PROMISC") or " PROMISC" in s:
+            notes.append({"path": s.split(":", 1)[0], "verdict": "unknown", "reason": "promisc"})
+    owners = dpkg_owners(exes)
+    for exe in exes:
+        if os.path.basename(exe) in NETMGR_NAMES:
+            notes.append({"path": exe, "verdict": "benign", "reason": "netmgr"})
+        elif exe in owners:
+            notes.append({"path": exe, "verdict": "benign", "reason": "dpkg", "package": owners[exe].split(", ")[0]})
+        else:
+            notes.append({"path": exe, "verdict": "unknown", "reason": "sniffer"})
+    return notes
+
+
 def chkrootkit_analysis(out):
     """Sortie de chkrootkit -q → {warnings, benign, notes} : les constats « suspicious files » dont tous les chemins
     sont bénins deviennent des faux positifs connus (non comptés) ; les autres gardent une note par chemin."""
@@ -2746,11 +2796,17 @@ def chkrootkit_analysis(out):
     for text in parse_chkrootkit(out):
         lines = text.splitlines()
         head = lines[0].lower()
-        classifier = classify_hidden_paths if "suspicious files" in head else classify_tmp_paths if "xor.ddos" in head else None
-        if classifier and len(lines) > 1:
+        verdicts = None
+        if len(lines) > 1:
             paths = [ln.strip() for ln in lines[1:] if ln.strip().startswith("/")]
-            verdicts = classifier(paths)
-            if paths and all(n["verdict"] == "benign" for n in verdicts):
+            if "suspicious files" in head:
+                verdicts = classify_hidden_paths(paths)
+            elif "xor.ddos" in head:
+                verdicts = classify_tmp_paths(paths)
+            elif "ifpromisc" in head:
+                verdicts = classify_promisc(lines[1:])
+        if verdicts is not None:
+            if verdicts and all(n["verdict"] == "benign" for n in verdicts):
                 benign.append({"text": text, "notes": verdicts})
                 continue
             notes[text] = verdicts
@@ -2794,7 +2850,7 @@ def run_integrity_checks(collect_verified=False, cancel_event=None):
             elif name == "chkrootkit":
                 chk = chkrootkit_analysis(out)
                 lines = chk["warnings"]
-                entry["benign"], entry["notes"] = chk["benign"], chk["notes"]
+                entry["benign"], entry["notes"], entry["rules"] = chk["benign"], chk["notes"], CHK_RULES_VERSION
             elif name == "debsums":
                 lines = [ln for ln in lines if ln and not ln.startswith("debsums:") or "FAILED" in ln or "REPLACED" in ln][:80]
                 if collect_verified:
@@ -2837,7 +2893,7 @@ class Daemon:
         self.load_central_allowlist()
         try:
             stored_vulns = self.state.get("vulns") or {}
-            if stored_vulns.get("items") and "not_applicable" not in (stored_vulns.get("counts") or {}):
+            if stored_vulns.get("items") and "na_vendor" not in (stored_vulns.get("counts") or {}):
                 self.state.update(vulns=reclassify_vulns(stored_vulns))
                 log("Failles : relevé reclassé (moteur JavaScript intégré)")
         except Exception as e:  # noqa: BLE001
@@ -3205,7 +3261,8 @@ class Daemon:
 
         job.phase = "scanning"
         self.emit_progress(job)
-        use_clamd = shutil.which("clamdscan") is not None and (clamd_ping() if TEST_MODE else ensure_clamd())
+        use_clamd = shutil.which("clamdscan") is not None and not os.environ.get("CLAMAV_ANTIVIRUS_NO_CLAMD") \
+            and (clamd_ping() if TEST_MODE else ensure_clamd())
         job.engine = "clamd" if use_clamd else "clamscan"
         self.emit_line("info", f"▶ {job.engine} × {job.total}"
                        + (f" · {job.cached} unchanged (already verified)" if job.cached else "")
@@ -3349,7 +3406,8 @@ class Daemon:
             prefix = prefix[:2]
         src = open(tmp_list)
         src_lock = threading.Lock()
-        state = {"rc": 0, "fatal": False, "last_emit": time.time(), "last_save": time.time()}
+        state = {"rc": 0, "fatal": False, "fallbacks": 0, "fallback_lock": threading.Lock(),
+                 "last_emit": time.time(), "last_save": time.time()}
         emit_lock = threading.Lock()
 
         def next_batch():
@@ -3385,28 +3443,23 @@ class Daemon:
                     f.write("".join(e[0] + "\n" for e in batch))
                 cmd = prefix + ["clamdscan", "--fdpass", "--no-summary", "--stdout",
                                 f"--move={SYSTEM_QUARANTINE_DIR}", f"--file-list={list_path}"]
-                try:
-                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-                except OSError as e:
-                    log(f"clamdscan : {e}")
-                    state["fatal"] = True
-                    break
-                with job.proc_lock:
-                    job.procs.append(proc)
-                clean, seen = [], 0
-                for raw in proc.stdout:
-                    line = raw.rstrip("\n")
-                    if line and self._scan_line(job, line, by_path, clean):
-                        seen += 1
-                        tick()
-                proc.wait()
-                with job.proc_lock:
-                    if proc in job.procs:
-                        job.procs.remove(proc)
-                if proc.returncode == 2 and seen == 0:
-                    state["fatal"] = True                  # clamd injoignable : aucun fichier traité
-                elif proc.returncode not in (0, 1):
-                    state["rc"] = proc.returncode
+                clean, seen, rc_b, tail = self._run_clamdscan_batch(job, cmd, by_path, tick)
+                if rc_b == 2 and seen == 0 and not job.cancel_event.is_set():
+                    # Lot refusé sans qu'aucun fichier ne soit traité (clamd injoignable, descripteur refusé…) :
+                    # attendre clamd et réessayer une fois, sinon ce lot passe par clamscan ; au 5e lot en échec,
+                    # le reste du scan bascule sur clamscan au lieu d'échouer.
+                    self.write_log(f"clamdscan batch failed (rc 2, {len(batch)} files): {tail[:200]}")
+                    if ensure_clamd(wait=60):
+                        clean, seen, rc_b, tail = self._run_clamdscan_batch(job, cmd, by_path, tick)
+                    if rc_b == 2 and seen == 0 and not job.cancel_event.is_set():
+                        state["fallbacks"] += 1
+                        with state["fallback_lock"]:
+                            rc_b = self._scan_batch_with_clamscan(job, batch, list_path + ".fb", scache)
+                        clean = []
+                        if state["fallbacks"] >= 5:
+                            state["fatal"] = True
+                if rc_b not in (0, 1, 2):
+                    state["rc"] = rc_b
                 self._record_clean(job, clean, scache)
             try:
                 os.remove(list_path)
@@ -3418,11 +3471,64 @@ class Daemon:
             th.start()
         for th in threads:
             th.join()
-        src.close()
         if state["fatal"] and not job.cancel_event.is_set():
-            self.write_log("clamd engine failed (no file processed)")
-            return 3
+            # clamd hors service : le reste de la liste par clamscan (plus lent, mais le scan aboutit)
+            rest, n = tmp_list + ".rest", 0
+            with open(rest, "w") as f:
+                for line in src:
+                    if line.strip():
+                        f.write(line)
+                        n += 1
+            src.close()
+            self.write_log(f"clamd engine unavailable: {n} remaining file(s) scanned with clamscan")
+            self.emit_line("info", f"▶ clamscan × {n} (clamd unavailable)")
+            job.engine = "clamscan"
+            rc = self._scan_with_clamscan(job, rest, scache) if n else 0
+            for p in (rest, rest + ".paths"):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            return 1 if job.infected else rc
+        src.close()
         return 1 if job.infected else state["rc"]
+
+    def _run_clamdscan_batch(self, job, cmd, by_path, tick):
+        """Un lot par clamdscan : (fichiers sains, fichiers traités, code retour, dernières lignes hors fichiers)."""
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        except OSError as e:
+            return [], 0, 2, str(e)
+        with job.proc_lock:
+            job.procs.append(proc)
+        clean, seen, tail = [], 0, []
+        for raw in proc.stdout:
+            line = raw.rstrip("\n")
+            if not line:
+                continue
+            if self._scan_line(job, line, by_path, clean):
+                seen += 1
+                tick()
+            else:
+                tail.append(line)
+        proc.wait()
+        with job.proc_lock:
+            if proc in job.procs:
+                job.procs.remove(proc)
+        return clean, seen, proc.returncode, " | ".join(tail[-3:])
+
+    def _scan_batch_with_clamscan(self, job, batch, list_path, scache):
+        """Repli pour un lot que clamd n'a pas pu traiter."""
+        with open(list_path, "w") as f:
+            f.write("".join("\t".join(str(x) for x in e) + "\n" for e in batch))
+        try:
+            return self._scan_with_clamscan(job, list_path, scache)
+        finally:
+            for p in (list_path, list_path + ".paths"):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
     def _scan_with_clamscan(self, job, tmp_list, scache):
         """Repli sans clamd : un seul clamscan sur la liste (base chargée une fois), mono-thread."""
@@ -3978,7 +4084,8 @@ class Daemon:
                 # Relevé chkrootkit incomplet (en-tête sans ses chemins, versions < 1.12.1) ou sans classification
                 chk = (stored.get("tools") or {}).get("chkrootkit") or {}
                 old_style = any(str(w).rstrip().endswith(":") for w in (chk.get("all_warnings") or chk.get("warnings") or []))
-                if os.geteuid() == 0 and not self.integrity_running and chk.get("ran") and (old_style or "benign" not in chk):
+                if os.geteuid() == 0 and not self.integrity_running and chk.get("ran") \
+                        and (old_style or chk.get("rules") != CHK_RULES_VERSION):
                     log("chkrootkit relancé (relevé incomplet)")
                     threading.Thread(target=self._chkrootkit_rescan, daemon=True).start()
             # Liste blanche centrale (signée), politique d'entreprise, télémétrie opt-in
@@ -4155,7 +4262,8 @@ class Daemon:
             return
         tools = dict(integ.get("tools") or {})
         tools["chkrootkit"] = {"installed": True, "ran": True, "rc": r.returncode, "warnings": list(chk["warnings"]),
-                               "all_warnings": list(chk["warnings"]), "benign": chk["benign"], "notes": chk["notes"]}
+                               "all_warnings": list(chk["warnings"]), "benign": chk["benign"], "notes": chk["notes"],
+                               "rules": CHK_RULES_VERSION}
         integ["tools"] = tools
         self.apply_integrity_acks(integ)
         self.state.update(integrity=integ)
@@ -4342,7 +4450,7 @@ class Daemon:
             "alerts_7d": {k: alerts.count(k) for k in set(alerts)},
             "trusted_programs": [anonymize_path(t.get("exe")) for t in (self.state.get("trusted_programs") or [])][:50],
             "acknowledged_persistence": [anonymize_path(k) for k in (self.state.get("acknowledged_persistence") or [])][:50],
-            "vulns": {k: vulns.get(k) for k in ("unfixed", "fix_available", "pro_only", "kernel_pending", "not_applicable", "kernel_hwe_fixed")},
+            "vulns": {k: vulns.get(k) for k in ("unfixed", "fix_available", "pro_only", "kernel_pending", "not_applicable", "na_embedded", "na_vendor", "kernel_hwe_fixed")},
             "integrity_warnings": (self.state.get("integrity") or {}).get("warnings"),
             "timeshift": bool((self.state.get("timeshift") or {}).get("schedule")),
             "policy": bool(self.policy),
@@ -4420,8 +4528,13 @@ class Daemon:
         if self.suspended:
             raise_to("red", "suspended_process")
         integ = self.state.get("integrity") or {}
-        if integ.get("warnings"):
-            raise_to("red", "integrity_warnings")
+        app = integ.get("app") or {}
+        rootkit_warns = sum(len(t.get("warnings") or []) for name, t in (integ.get("tools") or {}).items() if name != "lynis") \
+            + len(app.get("modified") or []) + len(app.get("missing") or [])
+        if rootkit_warns:
+            raise_to("red", "integrity_warnings")          # rootkits, fichiers de paquets ou de l'application modifiés
+        elif integ.get("warnings"):
+            raise_to("yellow", "hardening_warnings")       # avertissements Lynis seuls (durcissement) : pas une compromission
         vulns = self.state.get("vulns") or {}
         counts = vulns.get("counts") or {}
         if counts.get("unfixed") or counts.get("pro_only"):

@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.14.3)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.14.4)
 
 ---
 
@@ -119,7 +119,15 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   le navigateur (contenu web, médias, onglets…) sont classées « Non applicables (moteur intégré) » avec la
   liste des programmes qui l'utilisent ; celles propres au moteur (JIT, WebAssembly, ramasse-miettes) restent
   « Sans correctif » ; badge « moteur JS intégré, pas Firefox ni Thunderbird » sur ces lignes, relevé existant
-  reclassé au démarrage du service.
+  reclassé au démarrage du service. Les paquets construits par Linux Mint (version `+linuxmint`, Thunderbird,
+  Firefox…) sont hors du suivi CVE d'Ubuntu : leurs failles « needed » sont classées non applicables avec la
+  version installée en note.
+- **Moteur résilient** — un lot que clamd refuse (service injoignable, descripteur refusé) est réessayé après
+  attente de clamd, puis confié à clamscan ; au cinquième lot en échec, le reste du scan bascule sur clamscan
+  au lieu d'échouer. chkrootkit : lignes d'outils système (« RTNETLINK answers… ») ignorées, constat
+  « ifpromisc » classé (NetworkManager/wpa_supplicant sur le Wi-Fi = bénin, processus inconnu = à vérifier).
+  L'état global ne passe au rouge que pour des indices de compromission (rootkits, fichiers modifiés) ; les
+  avertissements Lynis seuls donnent du jaune.
 - **Activer Timeshift en un clic** — bouton dans l'onglet Sauvegardes et dans l'assistant de la vue
   simple, sans mot de passe : le service écrit la configuration recommandée (instantanés du système sur le
   disque principal, quotidiens 5, hebdomadaires 3, mensuels 2, mode btrfs si la racine est un sous-volume
@@ -255,7 +263,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.14.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.14.3_all.deb)
+[Télécharger clamav-antivirus_1.14.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.14.4_all.deb)
 
 ---
 
@@ -286,12 +294,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.14.3_all.deb`
+Résultat : `clamav-antivirus_1.14.4_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.14.3_all.deb
+sudo dpkg -i clamav-antivirus_1.14.4_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
