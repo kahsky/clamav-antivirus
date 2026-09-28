@@ -2763,3 +2763,11 @@ body.mode-simple { position: relative; }
 .lesson.read .lesson-read { display: inline-block; }
 .lesson.read .lesson-title { color: var(--text-secondary); }
 .lesson.read .lesson-num { background: rgba(34,197,94,0.18); }
+
+/* ── v1.8.2 : paquets retenus par apt ── */
+.scope-held { background: rgba(148,163,184,0.15); color: #94a3b8; }
+.package-item.held { border-color: rgba(148,163,184,0.3); }
+
+/* ── v1.8.3 : clé GeoIP ── */
+.input-key { width: 200px; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px; }
+.setting-note { font-size: 12px; line-height: 1.45; margin: 2px 0 6px; }

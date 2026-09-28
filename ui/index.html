@@ -212,7 +212,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.8.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.8.3 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -661,7 +661,8 @@
                 <span class="text-muted" id="systemChecked"></span>
                 <div class="log-actions-right">
                     <button class="btn btn-secondary" id="btnSystemRefresh" onclick="refreshSystemStatus()" data-i18n="system.refresh">Actualiser</button>
-                    <button class="btn btn-primary" onclick="sendToBackend({action:'open_update_manager'})" data-i18n="system.open_manager">Ouvrir le gestionnaire de mises à jour</button>
+                    <button class="btn btn-primary" onclick="sendToBackend({action:'system_upgrade'})" data-i18n="system.install_updates">Installer les mises à jour</button>
+                    <button class="btn btn-secondary" onclick="sendToBackend({action:'open_update_manager'})" data-i18n="system.open_manager">Ouvrir le gestionnaire de mises à jour</button>
                 </div>
             </div>
 
@@ -944,6 +945,9 @@
                     <label class="setting-row toggle"><span data-i18n="settings.auto_response">Suspendre automatiquement un programme jugé dangereux, puis demander</span><input type="checkbox" id="setAutoResponse"></label>
                     <label class="setting-row toggle"><span data-i18n="settings.connection_monitor">Surveiller les connexions sortantes</span><input type="checkbox" id="setConnectionMonitor"></label>
                     <label class="setting-row toggle"><span data-i18n="settings.geoip">Géolocaliser les adresses distantes (ip-api.com)</span><input type="checkbox" id="setGeoip"></label>
+                    <label class="setting-row"><span data-i18n="settings.geoip_key">Clé API ip-api.com Pro (optionnelle)</span><input type="text" id="setGeoipKey" class="input-field input-sm input-key" placeholder="—" autocomplete="off" spellcheck="false"></label>
+                    <p class="text-muted setting-note" id="geoipStats"></p>
+                    <p class="text-muted setting-note" data-i18n="settings.geoip.note">Sans clé : service gratuit ip-api.com (HTTP, 15 requêtes groupées par minute, 100 adresses par requête, usage non commercial). Avec une clé Pro : HTTPS et sans limite. Chaque adresse n'est demandée qu'une fois par 24 h et le cache survit au redémarrage.</p>
                     <label class="setting-row toggle"><span data-i18n="settings.integrity_weekly">Vérification d'intégrité hebdomadaire</span><input type="checkbox" id="setIntegrityWeekly"></label>
                     <label class="setting-row"><span data-i18n="settings.schedule.weekly_day">Jour</span>
                         <select id="setIntegrityDay" class="lang-select"><option value="0" data-i18n="day.mon">Lundi</option><option value="1" data-i18n="day.tue">Mardi</option><option value="2" data-i18n="day.wed">Mercredi</option><option value="3" data-i18n="day.thu">Jeudi</option><option value="4" data-i18n="day.fri">Vendredi</option><option value="5" data-i18n="day.sat">Samedi</option><option value="6" data-i18n="day.sun">Dimanche</option></select></label>

@@ -1297,6 +1297,15 @@ class ClamAVAntivirusApp:
             status = ev.get("status") or {}
             self.send_to_js("systemStatus", {"status": status, "refreshing": False, "available": True})
             self.maybe_notify_security(status)
+        elif et == "system_upgrade_done":
+            if ev.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "system", "message": self.T("msg.system_upgraded")})
+                if self.popups_enabled("update"):
+                    self.popup("success", self.T("popup.sysupgrade.title"), self.T("msg.system_upgraded"), timeout=12,
+                               on_activate=lambda: self.show_tab("system"))
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "system",
+                                                    "message": self.T("msg.system_upgrade_failed", detail=(ev.get("detail") or "")[-160:])})
         elif et == "system_status_refreshing":
             self.send_to_js("systemStatus", {"status": None, "refreshing": True, "available": True})
         elif et == "security_status":
@@ -1502,7 +1511,8 @@ class ClamAVAntivirusApp:
                "auth_cancelled": "msg.auth_cancelled", "root_required": "msg.daemon_root_required",
                "command_failed": "msg.security_failed", "not_ready": "msg.update_not_ready",
                "sha256_mismatch": "msg.update_bad_hash", "not_suspended": "msg.process_gone",
-               "nothing_phased": "msg.nothing_phased"}.get(err)
+               "nothing_phased": "msg.nothing_phased", "nothing_to_upgrade": "msg.nothing_to_upgrade",
+               "busy_upgrade": "msg.system_upgrading"}.get(err)
         if key:
             return self.T(key, path=resp.get("path", ""))
         return err or self.T("msg.daemon_unavailable")
@@ -1808,7 +1818,8 @@ class ClamAVAntivirusApp:
     def act_get_settings(self, _data):
         resp = DaemonClient.request("get_settings")
         self.send_to_js("settingsData", {"system": resp.get("settings") if resp.get("ok") else dict(DEFAULT_SETTINGS),
-                                         "user": user_settings(), "available": bool(resp.get("ok"))})
+                                         "user": user_settings(), "available": bool(resp.get("ok")),
+                                         "stats": resp.get("stats") if resp.get("ok") else None})
 
     def act_set_settings(self, data):
         user = data.get("user") or {}
@@ -1935,6 +1946,16 @@ class ClamAVAntivirusApp:
     def act_lock(self, _data):
         DaemonClient.request("lock")
         self.act_check_status({})
+
+    def act_system_upgrade(self, _data):
+        """« Mettre à jour » : apt update + apt upgrade par le service (les paquets décalés/retenus restent en attente)."""
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "info", "op": "system", "message": self.T("msg.system_upgrading")})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "system", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("system_upgrade", {}, done)
 
     def act_open_update_manager(self, _data):
         for cmd in (["mintupdate"], ["update-manager"], ["gnome-software", "--mode=updates"]):

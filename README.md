@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.8.1)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.8.3)
 
 ---
 
@@ -51,7 +51,11 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   correctif disponible, priorité Ubuntu et vecteur CVSS), mises à jour Flatpak/Snap, vérification
   d'intégrité (rkhunter, chkrootkit, debsums, fichiers de l'application vs manifeste signé).
 - **Connexions sortantes** — programmes connectés à Internet avec pays/opérateur, alerte pour un
-  programme inconnu du système ou une adresse des listes Feodo Tracker / SSLBL.
+  programme inconnu du système ou une adresse des listes Feodo Tracker / SSLBL. Géolocalisation via
+  ip-api.com : service gratuit par défaut (HTTP, 15 requêtes groupées/min, usage non commercial), au plus
+  une requête toutes les 5 s, une adresse demandée une fois par 24 h, cache persistant ; une clé
+  **ip-api.com Pro** (HTTPS, sans limite) se saisit dans Paramètres. Le nombre de requêtes sur 24 h est
+  affiché sous la clé.
 - **Persistance** — autostart, unités systemd, cron, `rc.local`, `ld.so.preload`, extensions
   Chrome/Firefox (hors store signalées) ; alerte à chaque nouvelle entrée.
 - **Réponse automatique** — un programme jugé dangereux est suspendu (SIGSTOP) et le popup propose
@@ -66,6 +70,12 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   passe, sauvegardes, faux support, ingénierie sociale, Wi-Fi public, mot de passe admin, réaction
   à une attaque, extensions. Un **conseil du jour** apparaît en popup au démarrage (bouton
   « Lire plus » ouvre la leçon ; désactivable dans Paramètres). Contenu dans `ui/awareness.js`.
+- **Installer les mises à jour** — le bouton « Mettre à jour » (vue simple) et « Installer les mises à
+  jour » (État du système) lancent `apt-get update` puis `apt-get upgrade` via le service, dans une unité
+  systemd transitoire ; un popup confirme la fin. Les paquets **décalés** (phasing Ubuntu) ou **retenus**
+  par apt (dépendances, « kept back ») ne comptent pas comme mises à jour manquantes : le voyant reste vert
+  avec la mention « on attend notre tour ». La détection simule `apt upgrade` en mémoire (python3-apt),
+  donc elle reflète exactement ce que la machine installerait.
 - **« C'est moi »** — chaque alerte (programme inconnu du système qui modifie des fichiers ou se
   connecte à Internet, entrée de démarrage inconnue, extension hors store) propose un bouton
   « C'est moi » : le programme ou l'entrée passe en liste d'approbation (Paramètres → Programmes
@@ -128,7 +138,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.8.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.8.1_all.deb)
+[Télécharger clamav-antivirus_1.8.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.8.3_all.deb)
 
 ---
 
@@ -159,12 +169,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.8.1_all.deb`
+Résultat : `clamav-antivirus_1.8.3_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.8.1_all.deb
+sudo dpkg -i clamav-antivirus_1.8.3_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

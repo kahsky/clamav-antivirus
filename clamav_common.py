@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.8.1"
+VERSION = "1.8.3"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -91,6 +91,8 @@ DEFAULT_SETTINGS = {
     # Connexions sortantes : programmes inconnus, listes d'IP malveillantes, géolocalisation
     "connection_monitor": True,
     "geoip_lookup": True,
+    # Clé ip-api.com Pro (optionnelle) : HTTPS et sans limite ; vide = service gratuit (15 requêtes groupées/min, HTTP)
+    "geoip_api_key": "",
     # Vérification d'intégrité hebdomadaire (rkhunter, chkrootkit, debsums, fichiers de l'app)
     "integrity_weekly": True,
     "integrity_day": 6,
@@ -128,6 +130,8 @@ def sanitize_settings(current, incoming):
                 value = int(float(value))
             elif isinstance(default, float):
                 value = float(value)
+            elif isinstance(default, str):
+                value = "".join(ch for ch in str(value).strip() if ch.isalnum() or ch in "-_")[:128]
         except (TypeError, ValueError):
             errors.append(f"invalid:{key}")
             continue

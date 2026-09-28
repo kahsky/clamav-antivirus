@@ -48,6 +48,8 @@ import sys
 import threading
 import time
 import urllib.request
+import urllib.error
+import urllib.parse
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -78,7 +80,16 @@ BLOCKLIST_URLS = {
 }
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_VULN_URL = "https://api.osv.dev/v1/vulns/"
-GEOIP_BATCH_URL = "http://ip-api.com/batch?fields=status,country,countryCode,org,isp,query"
+GEOIP_FIELDS = "status,country,countryCode,org,isp,query"
+GEOIP_FREE_URL = "http://ip-api.com/batch?fields=" + GEOIP_FIELDS        # gratuit : HTTP seulement, 15 requêtes groupées/min
+GEOIP_PRO_URL = "https://pro.ip-api.com/batch?key={key}&fields=" + GEOIP_FIELDS   # offre Pro : HTTPS, sans limite
+GEOIP_MIN_INTERVAL = 5          # secondes entre deux requêtes groupées (≤ 12/min, sous la limite gratuite)
+GEOIP_CACHE_MAX = 2000          # adresses gardées en cache (24 h), persistées dans l'état du service
+
+
+def geoip_url(key):
+    key = (key or "").strip()
+    return GEOIP_PRO_URL.format(key=urllib.parse.quote(key, safe="")) if key else GEOIP_FREE_URL
 UNLOCK_TTL = 900
 ADMIN_GROUPS = ("sudo", "admin", "wheel")
 USER_AGENT = f"clamav-antivirus/{VERSION}"
@@ -940,6 +951,11 @@ def collect_system_status(previous=None):
         status["ok"] = False
         status["error"] = f"python3-apt: {e}"
         return status
+    try:
+        cache.upgrade(dist_upgrade=False)   # simulation en mémoire (rien n'est installé) : ce qu'« apt upgrade » installerait vraiment
+        sim_ok = True
+    except Exception:  # noqa: BLE001
+        sim_ok = False
 
     packages = []
     for pkg in cache:
@@ -951,10 +967,16 @@ def collect_system_status(previous=None):
                 origins = cand.origins if cand else []
                 security = any((o.archive or "").endswith("-security") or (o.label or "") == "Debian-Security"
                                for o in origins)
+                phase = cand.record.get("Phased-Update-Percentage") if cand else None
+                # « apt upgrade » ne l'installerait pas : décalé (phasing) ou retenu (dépendances, « kept back »)
+                held = sim_ok and not pkg.marked_upgrade
+                category = "security" if security else "recommended"
+                if held:
+                    category = "phased" if phase is not None else "held"
                 packages.append({
                     "name": pkg.name, "installed": pkg.installed.version if pkg.installed else "",
                     "candidate": cand.version if cand else "", "security": security,
-                    "category": "security" if security else "recommended",
+                    "category": category, "phase": phase if category == "phased" else None,
                     "archive": origins[0].archive if origins else "", "cves": {},
                 })
                 continue
@@ -971,10 +993,11 @@ def collect_system_status(previous=None):
                     break
         except Exception:  # noqa: BLE001
             continue
-    status["upgradable"] = sum(1 for p in packages if p["category"] != "phased")
-    status["security"] = sum(1 for p in packages if p["security"] and p["category"] != "phased")
+    status["upgradable"] = sum(1 for p in packages if p["category"] in ("security", "recommended"))   # installables maintenant
+    status["security"] = sum(1 for p in packages if p["security"] and p["category"] != "phased")       # y compris retenus (à surveiller)
     status["recommended"] = sum(1 for p in packages if p["category"] == "recommended")
     status["phased"] = sum(1 for p in packages if p["category"] == "phased")
+    status["held"] = sum(1 for p in packages if p["category"] == "held")
 
     # CVE : changelog des paquets de sécurité (et du noyau), limité pour rester raisonnable
     prev_pkgs = {p["name"]: p for p in ((previous or {}).get("packages") or [])}
@@ -1000,7 +1023,7 @@ def collect_system_status(previous=None):
             cves.append({"id": cve, "package": p["name"], "candidate": p["candidate"],
                          "installed": p["installed"], "title": title,
                          "url": f"https://ubuntu.com/security/{cve}"})
-    status["packages"] = sorted(packages, key=lambda p: ({"security": 0, "recommended": 1, "phased": 2}[p["category"]], p["name"]))
+    status["packages"] = sorted(packages, key=lambda p: ({"security": 0, "recommended": 1, "phased": 2, "held": 3}.get(p["category"], 4), p["name"]))
     status["cves"] = cves
     status["cve_count"] = len(cves)
     return status
@@ -1433,7 +1456,13 @@ class ConnectionMonitor(threading.Thread):
         self.reported = {}         # pid -> last alert time
         self.blocklist = set()
         self.blocklist_loaded = 0
-        self.geo = {}              # ip -> {country, countryCode, org, isp, ts}
+        self.geo = {ip: v for ip, v in (daemon.state.get("geo_cache") or {}).items()
+                    if isinstance(v, dict) and time.time() - v.get("ts", 0) < 86400}   # ip -> {country, countryCode, org, ts}
+        self.geo_requests = []     # horodatages des requêtes (24 h glissantes)
+        self.geo_last_request = 0.0
+        self.geo_backoff_until = 0.0
+        self.geo_last_error = ""
+        self.geo_last_saved = time.time()
         self.current = {"checked_at": None, "processes": []}
         self.lock = threading.Lock()
 
@@ -1471,18 +1500,39 @@ class ConnectionMonitor(threading.Thread):
     def geolocate(self, ips):
         if not self.daemon_ref.settings.get("geoip_lookup"):
             return
-        todo = [ip for ip in ips if is_public_ip(ip) and (ip not in self.geo or time.time() - self.geo[ip]["ts"] > 86400)]
-        if not todo:
-            return
+        now = time.time()
+        todo = [ip for ip in ips if is_public_ip(ip) and (ip not in self.geo or now - self.geo[ip]["ts"] > 86400)]
+        if not todo or now < self.geo_backoff_until or now - self.geo_last_request < GEOIP_MIN_INTERVAL:
+            return                      # les adresses restantes seront traitées au prochain passage
+        self.geo_last_request = now
+        self.geo_requests = [t for t in self.geo_requests if now - t < 86400] + [now]
         try:
             data = json.dumps([{"query": ip} for ip in todo[:100]]).encode()
-            for entry in json.loads(http_get(GEOIP_BATCH_URL, timeout=20, data=data,
+            for entry in json.loads(http_get(geoip_url(self.daemon_ref.settings.get("geoip_api_key")), timeout=20, data=data,
                                              headers={"Content-Type": "application/json"})):
                 if entry.get("status") == "success":
                     self.geo[entry["query"]] = {"country": entry.get("country", ""), "countryCode": entry.get("countryCode", ""),
-                                                "org": entry.get("org") or entry.get("isp", ""), "ts": time.time()}
+                                                "org": entry.get("org") or entry.get("isp", ""), "ts": now}
+            self.geo_last_error = ""
+        except urllib.error.HTTPError as e:
+            self.geo_last_error = f"HTTP {e.code}"
+            self.geo_backoff_until = now + (300 if e.code in (401, 403) else 60)   # 429 : quota dépassé → pause 1 min
+            log(f"GeoIP : HTTP {e.code} (pause)")
         except Exception as e:  # noqa: BLE001
+            self.geo_last_error = str(e)[:120]
             log(f"GeoIP : {e}")
+        if len(self.geo) > GEOIP_CACHE_MAX:
+            for ip in sorted(self.geo, key=lambda k: self.geo[k]["ts"])[:len(self.geo) - GEOIP_CACHE_MAX]:
+                self.geo.pop(ip, None)
+        if now - self.geo_last_saved > 300:     # cache persisté (survit au redémarrage du service)
+            self.geo_last_saved = now
+            self.daemon_ref.state.update(geo_cache=self.geo)
+
+    def geoip_stats(self):
+        now = time.time()
+        return {"requests_24h": sum(1 for t in self.geo_requests if now - t < 86400), "cached": len(self.geo),
+                "provider": "pro" if (self.daemon_ref.settings.get("geoip_api_key") or "").strip() else "free",
+                "last_error": self.geo_last_error, "paused": now < self.geo_backoff_until}
 
     @staticmethod
     def parse_ss():
@@ -1800,6 +1850,7 @@ class Daemon:
         self.last_weekly_check = 0
         self.system_status_lock = threading.Lock()
         self.system_status_running = False
+        self.system_upgrade_running = False
         self.last_system_status = 0
 
     def current_job(self):
@@ -2214,6 +2265,27 @@ class Daemon:
             self.finish(job, "error", "msg.update.failed", {"code": rc})
 
     # ── État du système (apt / CVE) ──────────────────────────────────────
+    def _system_upgrade_worker(self, unit):
+        ok, detail = True, "test_mode"
+        try:
+            if unit:
+                r = run_quiet(["systemd-run", "--unit", unit, "--collect", "--quiet", "--wait", "--pipe",
+                               "-p", "Environment=DEBIAN_FRONTEND=noninteractive",
+                               "/bin/sh", "-c", "apt-get update -q && apt-get upgrade -y -q "
+                               "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"], timeout=3600)
+                ok, detail = r.returncode == 0, ((r.stderr or "") + (r.stdout or "")).strip()[-300:]
+            else:
+                time.sleep(2)
+            self.write_log(f"system upgrade → {'ok' if ok else 'FAILED'} {detail[-120:]}")
+        except Exception as e:  # noqa: BLE001
+            ok, detail = False, str(e)
+        finally:
+            with self.system_status_lock:
+                self.system_upgrade_running = False
+        self.refresh_system_status(force=True)
+        self.broadcast({"event": "system_upgrade_done", "ok": ok, "detail": detail})
+        self.refresh_overall()
+
     def refresh_system_status(self, force=False):
         with self.system_status_lock:
             if self.system_status_running:
@@ -2519,7 +2591,7 @@ class Daemon:
         if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools",
                    "install_phased"):
             return True
-        if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence"):
+        if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence", "system_upgrade"):
             return bool(self.settings.get("family_mode"))
         return False
 
@@ -2615,7 +2687,7 @@ class Daemon:
             "connections_active": self.connections.active,
             "alerts": (state.get("alerts") or [])[:10],
             "system_status": {k: sys_status.get(k) for k in
-                              ("checked_at", "ok", "upgradable", "security", "recommended", "phased", "cve_count",
+                              ("checked_at", "ok", "upgradable", "security", "recommended", "phased", "held", "cve_count",
                                "reboot_required", "os", "kernel", "lists_updated")} if sys_status else None,
         }
 
@@ -2760,6 +2832,20 @@ class Daemon:
             return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else "command_failed",
                     "detail": ((r.stderr or "") + (r.stdout or "")).strip()[-200:]}
 
+        if cmd == "system_upgrade":
+            # « Mettre à jour » : apt-get update && apt-get upgrade dans une unité transitoire, puis nouvel état du système
+            sysst = self.state.get("system_status") or {}
+            if not sysst.get("upgradable") and not req.get("force"):
+                return {"ok": False, "error": "nothing_to_upgrade"}
+            with self.system_status_lock:
+                if self.system_upgrade_running:
+                    return {"ok": False, "error": "busy_upgrade"}
+                self.system_upgrade_running = True
+            unit = None if TEST_MODE else f"clamav-antivirus-sysupgrade-{int(time.time())}"
+            threading.Thread(target=self._system_upgrade_worker, args=(unit,), daemon=True).start()
+            self.write_log("system upgrade requested" + (" (test mode)" if TEST_MODE else ""))
+            return {"ok": True, "detail": "test_mode" if TEST_MODE else ""}
+
         if cmd == "install_phased":
             sysst = self.state.get("system_status") or {}
             names = sorted({p["name"] for p in sysst.get("packages", []) if p.get("category") == "phased"})
@@ -2855,7 +2941,7 @@ class Daemon:
             return {"ok": True, "status": self.state.get("system_status")}
 
         if cmd == "get_settings":
-            return {"ok": True, "settings": self.settings.snapshot()}
+            return {"ok": True, "settings": self.settings.snapshot(), "stats": {"geoip": self.connections.geoip_stats()}}
 
         if cmd == "set_settings":
             changed, errors = self.settings.update(req.get("settings") or {})

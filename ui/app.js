@@ -574,13 +574,13 @@ function simpleOverall() {
     const sysState = systemState(sys);
     const sysRowState = sysState === 'security' ? 'danger' : (sysState === 'reboot' || sysState === 'updates') ? 'warn' : sysState === 'ok' ? 'ok' : 'neutral';
     bump(sysRowState === 'neutral' ? 'ok' : sysRowState);
-    const sysLabels = { unknown: t('dash.system.unknown'), ok: t('dash.system.uptodate'), updates: t('dash.system.updates', { n: sys ? sys.upgradable : 0 }), security: t('dash.system.security', { n: sys ? sys.security : 0, cves: sys ? (sys.cve_count || 0) : 0 }), reboot: t('dash.system.reboot') };
+    const sysLabels = { unknown: t('dash.system.unknown'), ok: systemOkLabel(sys), updates: t('dash.system.updates', { n: sys ? sys.upgradable : 0 }), security: t('dash.system.security', { n: sys ? sys.security : 0, cves: sys ? (sys.cve_count || 0) : 0 }), reboot: t('dash.system.reboot') };
     const vs = (lastStatus && lastStatus.vulns_summary) || null;
     const openVulns = vs && vs.counts ? (vs.counts.unfixed || 0) + (vs.counts.pro_only || 0) : 0;
     let sysValue = sysLabels[sysState];
     if (sysState === 'ok' && openVulns) sysValue = t('simple.vulns_open', { n: openVulns });
     rows.push({ state: sysRowState === 'ok' && openVulns ? 'warn' : sysRowState, label: t('simple.row.system'), value: sysValue,
-        action: (sysState === 'security' || sysState === 'updates') ? { label: t('simple.update_system'), fn: "sendToBackend({action:'open_update_manager'})" } : (openVulns ? { label: t('popup.btn.details'), fn: "setViewMode('advanced'); switchTab('security')" } : null) });
+        action: (sysState === 'security' || sysState === 'updates') ? { label: t('simple.update_system'), fn: "sendToBackend({action:'system_upgrade'})" } : (openVulns ? { label: t('popup.btn.details'), fn: "setViewMode('advanced'); switchTab('security')" } : null) });
 
     // Menaces / quarantaine
     const danger = alerts.find(a => a.severity === 'danger');
@@ -813,6 +813,11 @@ function onSettingsData(data) {
     $('setAutoResponse').checked = sys.auto_response !== false;
     $('setConnectionMonitor').checked = sys.connection_monitor !== false;
     $('setGeoip').checked = sys.geoip_lookup !== false;
+    if ($('setGeoipKey')) $('setGeoipKey').value = sys.geoip_api_key || '';
+    if ($('geoipStats')) {
+        const g = data.stats && data.stats.geoip;
+        $('geoipStats').textContent = g ? t('settings.geoip.stats', { n: g.requests_24h || 0, cached: g.cached || 0, provider: t(g.provider === 'pro' ? 'settings.geoip.pro' : 'settings.geoip.free') }) + (g.last_error ? ` · ${t('settings.geoip.error', { error: g.last_error })}` : '') : '';
+    }
     $('setIntegrityWeekly').checked = sys.integrity_weekly !== false;
     $('setIntegrityDay').value = String(sys.integrity_day ?? 6);
     $('setIntegrityHour').value = sys.integrity_hour ?? 13;
@@ -848,6 +853,7 @@ function saveSettings() {
         auto_response: $('setAutoResponse').checked,
         connection_monitor: $('setConnectionMonitor').checked,
         geoip_lookup: $('setGeoip').checked,
+        geoip_api_key: $('setGeoipKey') ? $('setGeoipKey').value.trim() : '',
         integrity_weekly: $('setIntegrityWeekly').checked,
         integrity_day: parseInt($('setIntegrityDay').value, 10),
         integrity_hour: parseInt($('setIntegrityHour').value, 10) || 0,
@@ -1080,6 +1086,14 @@ function systemState(st) {
     return 'ok';
 }
 
+/** « Système à jour », avec les paquets décalés (phasing) ou retenus par apt : on attend notre tour, tout reste vert. */
+function systemOkLabel(st) {
+    const parts = [];
+    if (st && st.phased) parts.push(t('dash.system.phased_note', { n: st.phased }));
+    if (st && st.held) parts.push(t('dash.system.held_note', { n: st.held }));
+    return t('dash.system.uptodate') + (parts.length ? ' · ' + parts.join(' · ') : '');
+}
+
 function renderSystemSummary() {
     const st = systemStatus;
     const state = systemState(st);
@@ -1088,7 +1102,7 @@ function renderSystemSummary() {
     if (count > 0) { badge.textContent = count; badge.style.display = ''; } else badge.style.display = 'none';
     const labels = {
         unknown: t('dash.system.unknown'),
-        ok: t('dash.system.uptodate'),
+        ok: systemOkLabel(st),
         updates: t('dash.system.updates', { n: st ? st.upgradable : 0 }),
         security: t('dash.system.security', { n: st ? st.security : 0, cves: st ? (st.cve_count || 0) : 0 }),
         reboot: t('dash.system.reboot'),
@@ -1154,13 +1168,13 @@ function renderSystemStatus() {
 
     const pkgs = (st.packages || []);
     const cat = (p) => p.category || (p.security ? 'security' : 'recommended');
-    const nSec = pkgs.filter(p => cat(p) === 'security').length, nRec = pkgs.filter(p => cat(p) === 'recommended').length, nPh = pkgs.filter(p => cat(p) === 'phased').length;
-    $('packageCounts').textContent = pkgs.length ? t('system.packages.counts', { security: nSec, recommended: nRec, phased: nPh }) : '';
+    const nSec = pkgs.filter(p => cat(p) === 'security').length, nRec = pkgs.filter(p => cat(p) === 'recommended').length, nPh = pkgs.filter(p => cat(p) === 'phased').length, nHeld = pkgs.filter(p => cat(p) === 'held').length;
+    $('packageCounts').textContent = pkgs.length ? t('system.packages.counts', { security: nSec, recommended: nRec, phased: nPh }) + (nHeld ? ' · ' + t('system.packages.held_count', { n: nHeld }) : '') : '';
     $('btnInstallPhased').hidden = !nPh;
     if (!pkgs.length) {
         $('packageList').innerHTML = `<div class="check-item check-ok"><span class="check-icon">✓</span><div class="check-text"><span class="check-title">${t('system.packages.all_ok')}</span><span class="check-detail">${t('system.packages.all_ok_hint')}</span></div></div>`;
     } else {
-        const badge = { security: ['scope-danger', t('system.pkg.security')], recommended: ['scope-system', t('system.pkg.recommended')], phased: ['scope-phased', t('system.pkg.phased')] };
+        const badge = { security: ['scope-danger', t('system.pkg.security')], recommended: ['scope-system', t('system.pkg.recommended')], phased: ['scope-phased', t('system.pkg.phased')], held: ['scope-held', t('system.pkg.held')] };
         $('packageList').innerHTML = pkgs.slice(0, 80).map(p => {
             const c = cat(p); const [cls, label] = badge[c] || badge.recommended;
             return `
@@ -1934,7 +1948,7 @@ function simulateBackend(data) {
                           { date: new Date(Date.now() - 3 * 86400e3).toISOString(), path: '/home', files: 236886, infected: 1, duration: 6756, status: 'infected', source: 'local' }],
                 daemon: { available: true, version: '1.8.0', first_scan_pending: false, queue: [], monitor_active: true, usb_active: true },
                 schedule: { next_update: new Date(new Date().setHours(31, 0, 0, 0)).toISOString(), timer_active: true },
-                system_status: DEV_OK ? { ok: true, upgradable: 0, security: 0, cve_count: 0, reboot_required: false, checked_at: new Date().toISOString() }
+                system_status: DEV_OK ? { ok: true, upgradable: 0, security: 0, cve_count: 0, phased: 0, held: 1, reboot_required: false, checked_at: new Date().toISOString() }
                                       : { ok: true, upgradable: 3, security: 2, cve_count: 5, reboot_required: false, checked_at: new Date().toISOString() },
                 security: { ufw: { installed: true, active: true, enabled: true, default_incoming: 'deny', default_outgoing: 'allow', rules: [{ number: 1, to: '22/tcp', action: 'ALLOW IN', from: 'Anywhere', v6: false }] }, ssh: { installed: true, active: false, enabled: false, port: 22, allowed_by_firewall: true } },
                 view_mode: (new URLSearchParams(location.search).get('view')) || 'advanced', upload_gb: 0.42,
@@ -1956,7 +1970,7 @@ function simulateBackend(data) {
             reply('systemStatus', { available: true, refreshing: false, status: {
                 checked_at: new Date().toISOString(), ok: true, os: 'Linux Mint 22.3', kernel: '6.8.0-139-generic', reboot_required: true, reboot_pkgs: ['linux-image-6.8.0-140-generic'],
                 lists_updated: new Date(Date.now() - 7200e3).toISOString(), upgradable: 3, security: 2, cve_count: 2,
-                packages: [{ name: 'openssl', installed: '3.0.13-0ubuntu3.13', candidate: '3.0.13-0ubuntu3.15', security: true, category: 'security', archive: 'noble-security' }, { name: 'libgd3', installed: '2.3.3-9ubuntu5', candidate: '2.3.3-13', security: false, category: 'recommended', archive: 'noble' }, { name: 'gnome-shell', installed: '46.0-0ubuntu1', candidate: '46.0-0ubuntu2', security: false, category: 'phased', phase: 20, archive: 'noble-updates' }], phased: 1,
+                packages: [{ name: 'openssl', installed: '3.0.13-0ubuntu3.13', candidate: '3.0.13-0ubuntu3.15', security: true, category: 'security', archive: 'noble-security' }, { name: 'libgd3', installed: '2.3.3-9ubuntu5', candidate: '2.3.3-13', security: false, category: 'held', archive: 'noble' }, { name: 'gnome-shell', installed: '46.0-0ubuntu1', candidate: '46.0-0ubuntu2', security: false, category: 'phased', phase: 20, archive: 'noble-updates' }], phased: 1, held: 1, recommended: 0,
                 cves: [{ id: 'CVE-2026-63072', package: 'openssl', installed: '3.0.13-0ubuntu3.13', candidate: '3.0.13-0ubuntu3.15', title: 'Heap Buffer Overflow in CMS Key Unwrapping', url: 'https://ubuntu.com/security/CVE-2026-63072' },
                        { id: 'CVE-2026-54874', package: 'openssl', installed: '3.0.13-0ubuntu3.13', candidate: '3.0.13-0ubuntu3.15', title: 'Excessive Memory Use Buffering DTLS Records', url: 'https://ubuntu.com/security/CVE-2026-54874' }] } });
             break;
@@ -1975,8 +1989,11 @@ function simulateBackend(data) {
         case 'trust_program': case 'untrust_program': case 'acknowledge_persistence':
             reply('operationResult', { status: 'success', message: data.action === 'trust_program' ? t('msg.program_trusted', { program: data.comm || data.exe }) : data.action === 'untrust_program' ? t('msg.program_untrusted') : t('msg.persistence_acknowledged') });
             break;
+        case 'system_upgrade':
+            reply('operationResult', { status: 'info', message: t('msg.system_upgrading') });
+            break;
         case 'get_settings':
-            reply('settingsData', { available: true, system: { upload_monitor: true, upload_alert_gb: 5, upload_window_hours: 1, burst_monitor: true, burst_info_threshold: 50, burst_danger_threshold: 25, burst_window_sec: 15, usb_auto_scan: true, usb_auto_scan_max_gib: 128, update_hour: 7, update_minute: 0, weekly_scan: false, weekly_scan_day: 6, weekly_scan_hour: 12 },
+            reply('settingsData', { stats: { geoip: { requests_24h: 14, cached: 37, provider: 'free', last_error: '' } }, available: true, system: { upload_monitor: true, upload_alert_gb: 5, upload_window_hours: 1, burst_monitor: true, burst_info_threshold: 50, burst_danger_threshold: 25, burst_window_sec: 15, usb_auto_scan: true, usb_auto_scan_max_gib: 128, update_hour: 7, update_minute: 0, weekly_scan: false, weekly_scan_day: 6, weekly_scan_hour: 12 },
                                     user: { language: lang, view_mode: viewMode, popups: { info: true, upload: true, scan: true, update: true, security: true } } });
             break;
         case 'set_view_mode':
