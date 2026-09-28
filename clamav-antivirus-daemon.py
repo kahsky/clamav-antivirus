@@ -2295,6 +2295,78 @@ def parse_chkrootkit(out):
     return [f for f in findings if not f.startswith("Checking")][:80]
 
 
+# Noms cachés légitimes dans /usr/lib et /lib (chkrootkit signale tout nom commençant par un point)
+HIDDEN_KNOWN = {
+    "debug": {".build-id", ".dwz"},                                   # symboles de débogage, vdso du noyau
+    "perl": {".packlist"},                                            # modules Perl
+    "devfile": {".gitignore", ".gitkeep", ".gitattributes", ".keep", ".placeholder", ".dirstamp", ".mkdir",
+                ".npmignore", ".npmrc", ".yarnrc", ".editorconfig", ".babelrc", ".eslintrc", ".eslintrc.js",
+                ".eslintrc.json", ".eslintignore", ".prettierrc", ".prettierignore", ".jshintrc", ".nycrc",
+                ".travis.yml", ".mailmap", ".flake8", ".pylintrc", ".coveragerc", ".dockerignore"},
+}
+HIDDEN_KNOWN_BY_NAME = {n: cat for cat, names in HIDDEN_KNOWN.items() for n in names}
+MODULE_TREES = ("/usr/lib/node_modules/", "/usr/lib/python3/dist-packages/", "/usr/lib/python3.", "/usr/local/lib/python3.",
+                "/usr/local/lib/node_modules/")
+
+
+def dpkg_owners(paths):
+    """{chemin: 'paquet, paquet'} pour les chemins livrés par un paquet installé (dpkg -S par lots)."""
+    owners = {}
+    paths = [p for p in paths if p.startswith("/")]
+    for i in range(0, len(paths), 200):
+        r = run_quiet(["dpkg", "-S"] + paths[i:i + 200], timeout=120)
+        for ln in (r.stdout or "").splitlines():
+            if ": " not in ln or ln.startswith("diversion"):
+                continue
+            pkgs, _, path = ln.rpartition(": ")
+            if path in paths and pkgs:
+                owners[path] = pkgs
+    return owners
+
+
+def _module_file(p):
+    """Petit fichier caché à l'intérieur d'un arbre de modules npm/Python (installé hors dpkg)."""
+    try:
+        return any(p.startswith(t) for t in MODULE_TREES) and os.path.isfile(p) and os.path.getsize(p) < 1_000_000
+    except OSError:
+        return False
+
+
+def classify_hidden_paths(paths):
+    """Verdict intégré pour chaque chemin caché signalé par chkrootkit : benign (livré par un paquet, nom connu,
+    fichier d'un module npm/Python) ou unknown (à vérifier). Le savoir est dans le programme, pas chez l'utilisateur."""
+    owners = dpkg_owners(paths)
+    notes = []
+    for p in paths:
+        name = os.path.basename(p.rstrip("/"))
+        if p in owners:
+            notes.append({"path": p, "verdict": "benign", "reason": "dpkg", "package": owners[p].split(", ")[0]})
+        elif name in HIDDEN_KNOWN_BY_NAME:
+            notes.append({"path": p, "verdict": "benign", "reason": HIDDEN_KNOWN_BY_NAME[name]})
+        elif _module_file(p):
+            notes.append({"path": p, "verdict": "benign", "reason": "module"})
+        else:
+            notes.append({"path": p, "verdict": "unknown", "reason": "unknown"})
+    return notes
+
+
+def chkrootkit_analysis(out):
+    """Sortie de chkrootkit -q → {warnings, benign, notes} : les constats « suspicious files » dont tous les chemins
+    sont bénins deviennent des faux positifs connus (non comptés) ; les autres gardent une note par chemin."""
+    warnings, benign, notes = [], [], {}
+    for text in parse_chkrootkit(out):
+        lines = text.splitlines()
+        if "suspicious files" in lines[0].lower() and len(lines) > 1:
+            paths = [ln.strip() for ln in lines[1:] if ln.strip().startswith("/")]
+            verdicts = classify_hidden_paths(paths)
+            if paths and all(n["verdict"] == "benign" for n in verdicts):
+                benign.append({"text": text, "notes": verdicts})
+                continue
+            notes[text] = verdicts
+        warnings.append(text)
+    return {"warnings": warnings[:80], "benign": benign[:40], "notes": notes}
+
+
 def integrity_ack_key(tool, text):
     """Clé d'un avertissement approuvé (« C'est normal ») : outil + empreinte du texte normalisé."""
     return f"{tool}:{hashlib.sha1(re.sub(r'\s+', ' ', (text or '').strip()).encode()).hexdigest()[:16]}"
@@ -2329,7 +2401,9 @@ def run_integrity_checks(collect_verified=False, cancel_event=None):
             elif name in ("unhide", "unhide-tcp"):
                 lines = [ln for ln in lines if "HIDDEN" in ln.upper() and "Found" in ln]
             elif name == "chkrootkit":
-                lines = parse_chkrootkit(out)
+                chk = chkrootkit_analysis(out)
+                lines = chk["warnings"]
+                entry["benign"], entry["notes"] = chk["benign"], chk["notes"]
             elif name == "debsums":
                 lines = [ln for ln in lines if ln and not ln.startswith("debsums:") or "FAILED" in ln or "REPLACED" in ln][:80]
                 if collect_verified:
@@ -3110,6 +3184,13 @@ class Daemon:
             if os.geteuid() == 0 and not self.integrity_running and set((stored.get("tools") or {}).keys()) != set(INTEGRITY_TOOLS):
                 log("Vérification d'intégrité relancée (outils modifiés)")
                 threading.Thread(target=self.run_integrity, daemon=True).start()
+            else:
+                # Relevé chkrootkit incomplet (en-tête sans ses chemins, versions < 1.12.1) ou sans classification
+                chk = (stored.get("tools") or {}).get("chkrootkit") or {}
+                old_style = any(str(w).rstrip().endswith(":") for w in (chk.get("all_warnings") or chk.get("warnings") or []))
+                if os.geteuid() == 0 and not self.integrity_running and chk.get("ran") and (old_style or "benign" not in chk):
+                    log("chkrootkit relancé (relevé incomplet)")
+                    threading.Thread(target=self._chkrootkit_rescan, daemon=True).start()
             # Liste blanche centrale (signée), politique d'entreprise, télémétrie opt-in
             try:
                 self.refresh_central_allowlist()
@@ -3271,6 +3352,26 @@ class Daemon:
         app = result.get("app") or {}
         result["warnings"] = total + len(app.get("modified") or []) + len(app.get("missing") or [])
         return result
+
+    def _chkrootkit_rescan(self):
+        """chkrootkit seul (moins d'une minute) quand le relevé stocké est incomplet ; classification intégrée."""
+        if self.integrity_running or not shutil.which("chkrootkit"):
+            return
+        r = run_quiet(["chkrootkit", "-q"], timeout=1800)
+        out = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+        chk = chkrootkit_analysis(out)
+        integ = dict(self.state.get("integrity") or {})
+        if not integ:
+            return
+        tools = dict(integ.get("tools") or {})
+        tools["chkrootkit"] = {"installed": True, "ran": True, "rc": r.returncode, "warnings": list(chk["warnings"]),
+                               "all_warnings": list(chk["warnings"]), "benign": chk["benign"], "notes": chk["notes"]}
+        integ["tools"] = tools
+        self.apply_integrity_acks(integ)
+        self.state.update(integrity=integ)
+        self.write_log(f"chkrootkit rescan → {len(chk['warnings'])} warning(s), {len(chk['benign'])} known false positive(s)")
+        self.broadcast({"event": "integrity", "integrity": self.integrity_payload()})
+        self.refresh_overall()
 
     def _store_integrity(self, result, after_scan=False):
         self.apply_integrity_acks(result)
