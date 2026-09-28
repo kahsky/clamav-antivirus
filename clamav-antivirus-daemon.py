@@ -1333,7 +1333,7 @@ def collect_vulnerabilities(previous=None):
     """Failles connues affectant les paquets installés : sans correctif, correctif Pro, ou correctif disponible."""
     ecosystem = ubuntu_osv_ecosystem()
     result = {"checked_at": now_iso(), "ok": True, "error": "", "ecosystem": ecosystem,
-              "sources": 0, "items": [], "counts": {"unfixed": 0, "pro_only": 0, "fix_available": 0},
+              "sources": 0, "items": [], "counts": {"unfixed": 0, "pro_only": 0, "fix_available": 0, "kernel_hwe_fixed": 0},
               "by_priority": {}, "flatpak": [], "snap": [], "cache": {}}
     try:
         sources = installed_sources()
@@ -1359,10 +1359,18 @@ def collect_vulnerabilities(previous=None):
                 else:
                     status = "unfixed"          # aucun correctif publié par Ubuntu pour ce paquet
                 result["counts"][status] += 1
+                # Noyau GA (linux 6.8) : la faille est souvent déjà corrigée dans un noyau HWE plus récent
+                hwe = ""
+                if status == "unfixed" and source == "linux":
+                    fixed_hwe = {k: v for k, v in (d.get("fixed_by_pkg") or {}).items() if k.startswith("linux-hwe-") and v}
+                    if fixed_hwe:
+                        k = sorted(fixed_hwe)[0]
+                        hwe = f"{k} {fixed_hwe[k]}"
+                        result["counts"]["kernel_hwe_fixed"] += 1
                 pr = d["priority"] or "untriaged"
                 result["by_priority"][pr] = result["by_priority"].get(pr, 0) + 1
                 result["items"].append({"id": d["id"], "cve": d["cve"] or d["id"], "package": source,
-                                        "installed": installed, "fixed": fixed, "status": status,
+                                        "installed": installed, "fixed": fixed, "status": status, "hwe_fixed": hwe,
                                         "priority": pr, "cvss": d["cvss"], "summary": d["summary"],
                                         "url": f"https://ubuntu.com/security/{d['cve']}" if d["cve"] else f"https://osv.dev/vulnerability/{d['id']}"})
         result["items"].sort(key=lambda it: (PRIORITY_RANK.get(it["priority"], 6), it["status"] != "unfixed", it["package"]))

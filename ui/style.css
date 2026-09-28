@@ -2830,3 +2830,5 @@ body.mode-simple { position: relative; }
 @media (max-width: 1100px) { .profile-grid { grid-template-columns: 1fr; } }
 /* boutons désactivés (scan ou vérification en cours) : visiblement inactifs */
 .btn:disabled, .btn[disabled] { opacity: .45; cursor: not-allowed; filter: grayscale(.35); box-shadow: none; }
+
+.hwe-note { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-left: 3px solid var(--accent-amber); padding-left: 10px; }

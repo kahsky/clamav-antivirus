@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.9.4)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.9.5)
 
 ---
 
@@ -77,6 +77,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   UFW renforcée. Les règles du profil sont taguées `cav-profile` et remplacées à chaque changement ; les
   règles personnelles restent, et en Public l'application signale celles ouvertes à tout Internet.
   Passer en Public ne demande rien ; Maison et Entreprise demandent l'authentification administrateur.
+- **Noyau HWE** — les failles du noyau 6.8 de Mint déjà corrigées dans un noyau HWE (6.11, 6.14) sont
+  marquées « corrigée dans le noyau HWE » et comptées ; la carte des failles explique comment installer
+  ce noyau (Gestionnaire de mises à jour → Noyaux Linux, ou `linux-generic-hwe-24.04`).
 - **Bouton « Régler »** — chaque contrôle de la checklist qui n'est pas au vert propose « Régler »
   (action directe : pare-feu, mise à jour, scan, paramètres, liste des ports…) ou « Comment faire »
   (explication pas à pas : chiffrement, Secure Boot, AppArmor, sudo, comptes…). La liste des ports
@@ -171,7 +174,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.9.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.9.4_all.deb)
+[Télécharger clamav-antivirus_1.9.5_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.9.5_all.deb)
 
 ---
 
@@ -202,12 +205,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.9.4_all.deb`
+Résultat : `clamav-antivirus_1.9.5_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.9.4_all.deb
+sudo dpkg -i clamav-antivirus_1.9.5_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

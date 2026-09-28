@@ -424,6 +424,12 @@ function renderVulns(refreshing = false) {
     const hidden = (v.items || []).filter(i => i.status === vulnFilter).length - items.length;
     if ($('vulnPrio')) $('vulnPrio').value = vulnPrio;
     if ($('vulnHidden')) $('vulnHidden').textContent = hidden > 0 ? t('security.vulns.hidden', { n: hidden }) : '';
+    const hweNote = $('vulnHweNote');
+    if (hweNote) {
+        const n = c.kernel_hwe_fixed || 0;
+        hweNote.hidden = !n;
+        if (n) hweNote.innerHTML = `${escapeHtml(t('security.vulns.hwe_note', { n: formatNumber(n) }))} <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'open_update_manager'})">${t('security.vulns.hwe_action')}</button>`;
+    }
     $('vulnList').innerHTML = items.length ? items.slice(0, 300).map(i => `
         <div class="cve-item vuln-${i.status} prio-${i.priority}">
             <div class="cve-head">
@@ -431,6 +437,7 @@ function renderVulns(refreshing = false) {
                 <span class="scope-badge prio-badge prio-${i.priority}">${t(`priority.${i.priority}`) !== `priority.${i.priority}` ? t(`priority.${i.priority}`) : escapeHtml(i.priority)}</span>
                 <span class="scope-badge scope-system">${escapeHtml(i.package)}</span>
                 <span class="cve-versions">${escapeHtml(i.installed)}${i.fixed ? ` → ${escapeHtml(i.fixed)}` : ''}</span>
+                ${i.hwe_fixed ? `<span class="scope-badge scope-phased" title="${escapeHtml(i.hwe_fixed)}">${t('security.vulns.hwe_badge', { pkg: escapeHtml(i.hwe_fixed.split(' ')[0]) })}</span>` : ''}
                 ${i.cvss ? `<span class="cve-versions">${escapeHtml(i.cvss)}</span>` : ''}
             </div>
             <div class="cve-title">${escapeHtml(i.summary || '')}</div>
