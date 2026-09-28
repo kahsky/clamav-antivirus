@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.9.1"
+VERSION = "1.9.2"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -95,6 +95,8 @@ DEFAULT_SETTINGS = {
     "geoip_api_key": "",
     # Disponibilité : vérifier les sauvegardes (Timeshift + fichiers de l'utilisateur) dans l'état global
     "backup_check": True,
+    # Profil réseau du pare-feu : "" (non choisi), "home", "public", "enterprise"
+    "firewall_profile": "",
     # Vérification d'intégrité hebdomadaire (rkhunter, chkrootkit, debsums, fichiers de l'app)
     "integrity_weekly": True,
     "integrity_day": 6,

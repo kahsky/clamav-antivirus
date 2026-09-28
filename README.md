@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.9.1)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.9.2)
 
 ---
 
@@ -70,6 +70,13 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   passe, sauvegardes, faux support, ingénierie sociale, Wi-Fi public, mot de passe admin, réaction
   à une attaque, extensions. Un **conseil du jour** apparaît en popup au démarrage (bouton
   « Lire plus » ouvre la leçon ; désactivable dans Paramètres). Contenu dans `ui/awareness.js`.
+- **Type de réseau (pare-feu)** — Maison, Public ou Entreprise, comme sur Windows. Public : aucune
+  connexion entrante. Maison : SSH (s'il est actif), impression CUPS, partage Samba, découverte mDNS et
+  KDE Connect autorisés depuis les plages privées (10/8, 172.16/12, 192.168/16, fe80::/10), selon ce qui
+  est installé. Entreprise : SSH, CUPS et Samba depuis le sous-réseau actuel seulement, journalisation
+  UFW renforcée. Les règles du profil sont taguées `cav-profile` et remplacées à chaque changement ; les
+  règles personnelles restent, et en Public l'application signale celles ouvertes à tout Internet.
+  Passer en Public ne demande rien ; Maison et Entreprise demandent l'authentification administrateur.
 - **Bouton « Régler »** — chaque contrôle de la checklist qui n'est pas au vert propose « Régler »
   (action directe : pare-feu, mise à jour, scan, paramètres, liste des ports…) ou « Comment faire »
   (explication pas à pas : chiffrement, Secure Boot, AppArmor, sudo, comptes…). La liste des ports
@@ -163,7 +170,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.9.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.9.1_all.deb)
+[Télécharger clamav-antivirus_1.9.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.9.2_all.deb)
 
 ---
 
@@ -194,12 +201,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.9.1_all.deb`
+Résultat : `clamav-antivirus_1.9.2_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.9.1_all.deb
+sudo dpkg -i clamav-antivirus_1.9.2_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

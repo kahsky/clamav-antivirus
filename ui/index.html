@@ -224,7 +224,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.9.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.9.2 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -976,6 +976,19 @@
                             <select id="fwDefaultOut" class="lang-select"><option value="allow" data-i18n="firewall.policy.allow">Autoriser</option><option value="deny" data-i18n="firewall.policy.deny">Bloquer</option><option value="reject" data-i18n="firewall.policy.reject">Rejeter</option></select>
                         </label>
                         <button class="btn btn-secondary btn-sm" onclick="firewallDefaults()" data-i18n="firewall.apply_defaults">Appliquer</button>
+                    </div>
+                    <div class="fw-profile">
+                        <div class="card-title-row">
+                            <h5 class="sub-title" data-i18n="firewall.profile.title">Type de réseau</h5>
+                            <span class="text-muted" id="fwProfileCurrent"></span>
+                        </div>
+                        <p class="text-muted setting-note" data-i18n="firewall.profile.intro">Choisissez où se trouve l'ordinateur : les règles du pare-feu sont appliquées en conséquence (connexions entrantes bloquées, sauf les services utiles depuis le réseau local en Maison ou Entreprise).</p>
+                        <div class="profile-grid">
+                            <button class="profile-btn" data-profile="home" onclick="setFirewallProfile('home')"><strong data-i18n="firewall.profile.home">Maison</strong><span data-i18n="firewall.profile.home_desc">Réseau privé de confiance : partage, impression et découverte autorisés depuis le réseau local.</span><small id="fwProfilePreview_home"></small></button>
+                            <button class="profile-btn" data-profile="public" onclick="setFirewallProfile('public')"><strong data-i18n="firewall.profile.public">Public</strong><span data-i18n="firewall.profile.public_desc">Café, hôtel, Wi-Fi inconnu : aucune connexion entrante, l'ordinateur est invisible.</span><small id="fwProfilePreview_public"></small></button>
+                            <button class="profile-btn" data-profile="enterprise" onclick="setFirewallProfile('enterprise')"><strong data-i18n="firewall.profile.enterprise">Entreprise</strong><span data-i18n="firewall.profile.enterprise_desc">Réseau géré : seuls SSH, impression et partage depuis le sous-réseau actuel, journalisation renforcée.</span><small id="fwProfilePreview_enterprise"></small></button>
+                        </div>
+                        <p class="text-muted setting-note" id="fwProfileWarning" hidden></p>
                     </div>
                 </div>
 

@@ -581,7 +581,7 @@ function simpleOverall() {
     let fwState = 'neutral', fwValue = t('simple.unknown'), fwAction = null;
     if (sec && sec.ufw) {
         if (!sec.ufw.installed) { fwState = 'warn'; fwValue = t('firewall.not_installed'); }
-        else if (sec.ufw.active) { fwState = 'ok'; fwValue = t('simple.fw.ok'); }
+        else if (sec.ufw.active) { fwState = 'ok'; fwValue = t('simple.fw.ok') + (sec.ufw.profile ? ` · ${t(`firewall.profile.${sec.ufw.profile}`)}` : ''); }
         else { fwState = 'warn'; fwValue = t('simple.fw.off'); fwAction = { label: t('simple.enable'), fn: 'firewallToggle(true)' }; }
     }
     bump(fwState === 'neutral' ? 'ok' : fwState);
@@ -669,10 +669,38 @@ function syncSimpleScan() {
 // ─── Pare-feu & SSH ─────────────────────────────────────────────────────────
 
 function onSecurityStatus(data) {
-    if (data.available === false) { securityStatus = null; renderSecurity(false); return; }
+    if (data.available === false) { securityStatus = null; renderSecurity(false); renderFirewallProfile(null); return; }
     securityStatus = data.security || null;
     renderSecurity(true);
+    renderFirewallProfile(securityStatus ? securityStatus.ufw : null);
     renderSimpleView();
+}
+
+// ─── Profil réseau du pare-feu : Maison / Public / Entreprise ───────────────
+
+function setFirewallProfile(profile) {
+    sendToBackend({ action: 'security_action', cmd: 'firewall_profile', profile });
+    showToast(t('firewall.profile.applying', { profile: t(`firewall.profile.${profile}`) }), 'info');
+}
+
+function renderFirewallProfile(ufw) {
+    const cur = (ufw && ufw.profile) || '';
+    document.querySelectorAll('.profile-btn').forEach(b => { b.classList.toggle('active', b.dataset.profile === cur); b.disabled = !ufw || !ufw.installed; });
+    if ($('fwProfileCurrent')) $('fwProfileCurrent').textContent = cur ? t('firewall.profile.current', { profile: t(`firewall.profile.${cur}`) }) : t('firewall.profile.none');
+    const profiles = (ufw && ufw.profiles) || {};
+    ['home', 'public', 'enterprise'].forEach(p => {
+        const el = $(`fwProfilePreview_${p}`);
+        if (!el) return;
+        const info = profiles[p];
+        if (!info) { el.textContent = ''; return; }
+        const svc = (info.services || []).map(x => t(`firewall.profile.svc.${x}`) !== `firewall.profile.svc.${x}` ? t(`firewall.profile.svc.${x}`) : x);
+        el.textContent = svc.length ? t('firewall.profile.preview', { services: svc.join(', '), nets: (info.nets || []).filter(n => !n.includes(':')).join(', ') }) : t('firewall.profile.preview_none');
+    });
+    const warn = $('fwProfileWarning');
+    if (!warn) return;
+    const open = ufw && ufw.active ? (ufw.rules || []).filter(r => /ALLOW/i.test(r.action || '') && !/OUT/i.test(r.action || '') && /anywhere/i.test(r.from || '') && !/cav-profile/.test(r.comment || '')) : [];
+    warn.hidden = !(cur === 'public' && open.length);
+    if (!warn.hidden) warn.textContent = t('firewall.profile.warning', { n: open.length, rules: open.map(r => r.to).join(', ') });
 }
 
 function sshPortValue() {
@@ -2024,7 +2052,8 @@ function simulateBackend(data) {
             break;
         case 'get_security':
             reply('securityStatus', { available: true, security: { checked_at: new Date().toISOString(),
-                ufw: { installed: true, active: true, enabled: true, default_incoming: 'deny', default_outgoing: 'allow', error: '', rules: [
+                ufw: { installed: true, active: true, enabled: true, default_incoming: 'deny', default_outgoing: 'allow', error: '', profile: 'home',
+                       profiles: { home: { services: ['cups', 'mdns'], nets: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fe80::/10'] }, public: { services: [], nets: [] }, enterprise: { services: ['cups'], nets: ['192.168.1.0/24', 'fe80::/10'] } }, rules: [
                     { number: 1, to: '22/tcp', action: 'ALLOW IN', from: 'Anywhere', v6: false, comment: 'SSH' },
                     { number: 2, to: '80,443/tcp', action: 'ALLOW IN', from: '192.168.1.0/24', v6: false, comment: '' },
                     { number: 3, to: '22/tcp', action: 'ALLOW IN', from: 'Anywhere', v6: true, comment: '' }] },

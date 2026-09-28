@@ -49,7 +49,7 @@ USER_DEFAULTS = {
     "popups": {"info": True, "upload": True, "scan": True, "update": True, "security": True, "tip": True},
 }
 DISCLAIMER_VERSION = 1
-SECURITY_COMMANDS = ("firewall_set", "firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "ssh_set")
+SECURITY_COMMANDS = ("firewall_set", "firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "ssh_set", "firewall_profile")
 UNLOCK_HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clamav-antivirus-unlock")
 OVERALL_ICON = {"green": "shield-green", "yellow": "shield-yellow", "blue": "shield-blue", "red": "shield-red"}
 
@@ -2147,9 +2147,14 @@ class ClamAVAntivirusApp:
 
     def _security_result(self, cmd, params, resp):
         if resp.get("ok"):
-            key = {"firewall_set": "msg.firewall_enabled" if params.get("enabled") else "msg.firewall_disabled",
-                   "ssh_set": "msg.ssh_enabled" if params.get("enabled") else "msg.ssh_disabled"}.get(cmd, "msg.security_applied")
-            self.send_to_js("operationResult", {"status": "success", "op": "security", "message": self.T(key)})
+            if cmd == "firewall_profile":
+                msg = self.T("msg.profile_applied", profile=self.T(f"firewall.profile.{params.get('profile', '')}"),
+                             n=resp.get("rules", 0))
+            else:
+                key = {"firewall_set": "msg.firewall_enabled" if params.get("enabled") else "msg.firewall_disabled",
+                       "ssh_set": "msg.ssh_enabled" if params.get("enabled") else "msg.ssh_disabled"}.get(cmd, "msg.security_applied")
+                msg = self.T(key)
+            self.send_to_js("operationResult", {"status": "success", "op": "security", "message": msg})
         else:
             self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
         self.act_get_security({"refresh": True})

@@ -35,6 +35,7 @@ import ctypes
 import grp
 import hashlib
 import ipaddress
+import glob
 import json
 import os
 import pwd
@@ -758,6 +759,68 @@ def collect_security_status():
 
 
 VALID_PROTO = ("tcp", "udp", "any")
+FIREWALL_PROFILES = ("home", "public", "enterprise")
+PROFILE_TAG = "cav-profile"                     # commentaire des règles gérées par le profil réseau
+PROFILE_PRIVATE_NETS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fe80::/10"]
+
+
+def unit_active(name):
+    r = run_quiet(["systemctl", "is-active", name], timeout=10)
+    return (r.stdout or "").strip() == "active"
+
+
+def local_subnets():
+    """Sous-réseaux IPv4 directement connectés (ip -j route, scope link), hors interfaces virtuelles."""
+    r = run_quiet(["ip", "-j", "route"], timeout=10)
+    nets = set()
+    try:
+        for rt in json.loads(r.stdout or "[]"):
+            dst, dev = rt.get("dst", ""), rt.get("dev", "")
+            if rt.get("scope") == "link" and "/" in dst and not dev.startswith(("lo", "docker", "br-", "veth", "virbr", "tun", "tap")):
+                nets.add(dst)
+    except ValueError:
+        pass
+    return sorted(nets)
+
+
+def profile_services(profile):
+    """Services autorisés depuis le réseau local par le profil, selon ce qui est installé sur la machine."""
+    if profile == "public":
+        return []
+    svc = []
+    if unit_active("ssh") or unit_active("sshd"):
+        svc.append("ssh")
+    if shutil.which("cupsd") or os.path.exists("/usr/sbin/cupsd"):
+        svc.append("cups")
+    if shutil.which("smbd") or os.path.exists("/usr/sbin/smbd"):
+        svc.append("samba")
+    if profile == "home":
+        svc.append("mdns")
+        if shutil.which("kdeconnectd") or glob.glob("/usr/lib/*/libexec/kdeconnectd") or glob.glob("/usr/libexec/kdeconnectd") \
+                or glob.glob("/home/*/.local/share/gnome-shell/extensions/gsconnect*"):
+            svc.append("kdeconnect")
+    return svc
+
+
+def profile_nets(profile):
+    if profile == "public":
+        return []
+    if profile == "enterprise":
+        return (local_subnets() or PROFILE_PRIVATE_NETS[:3]) + ["fe80::/10"]
+    return list(PROFILE_PRIVATE_NETS)
+
+
+def profile_rules(profile):
+    """Arguments ufw des règles du profil : autorisations limitées au réseau local, taguées PROFILE_TAG."""
+    ports = {"ssh": [(str(ssh_port()), "tcp")], "cups": [("631", "tcp")], "samba": [("139,445", "tcp"), ("137,138", "udp")],
+             "mdns": [("5353", "udp")], "kdeconnect": [("1714:1764", "tcp"), ("1714:1764", "udp")]}
+    rules = []
+    nets = profile_nets(profile)
+    for name in profile_services(profile):
+        for port, proto in ports[name]:
+            for net in nets:
+                rules.append(["allow", "from", net, "to", "any", "port", port, "proto", proto, "comment", f"{PROFILE_TAG} {name}"])
+    return rules
 VALID_ACTION = ("allow", "deny", "reject", "limit")
 VALID_POLICY = ("allow", "deny", "reject")
 
@@ -2490,11 +2553,35 @@ class Daemon:
             if not force and self.security and time.time() - self.last_security < 60:
                 return self.security
             self.security = collect_security_status()
+            try:
+                self.security["ufw"]["profile"] = self.settings.get("firewall_profile") or ""
+                self.security["ufw"]["profiles"] = {p: {"services": profile_services(p), "nets": profile_nets(p)} for p in FIREWALL_PROFILES}
+            except Exception as e:  # noqa: BLE001
+                log(f"Profil pare-feu : {e}")
             self.last_security = time.time()
             result = self.security
         if broadcast:
             self.broadcast({"event": "security_status", "security": result})
         return result
+
+    def apply_firewall_profile(self, profile):
+        """Retire les anciennes règles du profil, applique les politiques, ajoute les règles du profil, active UFW."""
+        r = run_quiet(["ufw", "status", "numbered"], timeout=30)
+        for rule in sorted(parse_ufw_numbered(r.stdout or ""), key=lambda x: -x["number"]):
+            if PROFILE_TAG in (rule.get("comment") or "") or PROFILE_TAG in (rule.get("raw") or ""):
+                self.ufw("delete", str(rule["number"]))
+        self.ufw("default", "deny", "incoming")
+        self.ufw("default", "allow", "outgoing")
+        errors = []
+        rules = profile_rules(profile)
+        for args in rules:
+            ok, text = self.ufw(*args)
+            if not ok:
+                errors.append(text[:80])
+        self.ufw("logging", "medium" if profile == "enterprise" else "low")
+        ok, text = self.ufw("enable")
+        self.write_log(f"firewall profile {profile}: {len(rules)} rule(s), {len(errors)} error(s)")
+        return ok and not errors, ("; ".join(errors) or text)[:300]
 
     def ufw(self, *args):
         r = run_quiet(["ufw", "--force"] + list(args), timeout=60)
@@ -2779,6 +2866,8 @@ class Daemon:
         """Actions réservées à un administrateur authentifié (pkexec → unlock)."""
         if cmd == "firewall_set":
             return not req.get("enabled")
+        if cmd == "firewall_profile":
+            return req.get("profile") in ("home", "enterprise")   # ils ouvrent des ports au réseau local ; Public : libre
         if cmd == "ssh_set":
             return bool(req.get("enabled"))
         if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools",
@@ -3165,6 +3254,22 @@ class Daemon:
 
         if cmd == "security_status":
             return {"ok": True, "security": self.refresh_security(force=bool(req.get("refresh")), broadcast=False)}
+
+        if cmd == "firewall_profile":
+            profile = str(req.get("profile") or "")
+            if profile not in FIREWALL_PROFILES:
+                return {"ok": False, "error": "invalid_profile"}
+            if os.geteuid() != 0:
+                return {"ok": False, "error": "root_required"}
+            if uid not in (0,) and uid < 1000:
+                return {"ok": False, "error": "forbidden"}
+            ok, text = self.apply_firewall_profile(profile)
+            if ok:
+                self.settings.update({"firewall_profile": profile})
+            self.refresh_security(force=True)
+            self.refresh_overall()
+            return {"ok": ok, "error": "" if ok else "command_failed", "detail": text, "profile": profile,
+                    "rules": len(profile_rules(profile))}
 
         if cmd in ("firewall_set", "firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "ssh_set"):
             if os.geteuid() != 0:
