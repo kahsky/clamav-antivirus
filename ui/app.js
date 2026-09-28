@@ -461,6 +461,10 @@ function renderIntegrity(running = false) {
     const missing = Object.keys(tools).filter(k => !tools[k].installed);
     $('btnInstallTools').hidden = !missing.length;
     let html = `<div class="text-muted">${t('system.checked', { date: formatDateTime(it.checked_at), rel: formatRelative(it.checked_at) })}</div>`;
+    if (it.lynis && it.lynis.index != null) {
+        const st = it.lynis.index >= 65 ? 'ok' : it.lynis.index >= 45 ? 'warn' : 'fail';
+        html += `<div class="check-item check-${st}"><span class="check-icon">${st === 'ok' ? '✓' : '!'}</span><div class="check-text"><span class="check-title">${t('security.integrity.lynis', { index: it.lynis.index })}</span><span class="check-detail">${t('security.integrity.lynis_detail', { warnings: (it.lynis.warnings || []).length, suggestions: it.lynis.suggestions || 0 })}</span></div></div>`;
+    }
     for (const [name, tl] of Object.entries(tools)) {
         const st = !tl.installed ? 'unknown' : (tl.warnings || []).length ? 'warn' : 'ok';
         html += `<div class="check-item check-${st}"><span class="check-icon">${st === 'ok' ? '✓' : st === 'warn' ? '!' : '?'}</span><div class="check-text"><span class="check-title">${escapeHtml(name)}</span><span class="check-detail">${!tl.installed ? t('security.integrity.not_installed') : (tl.warnings || []).length ? t('security.integrity.warnings', { n: tl.warnings.length }) : t('security.integrity.clean')}</span>${(tl.warnings || []).length ? `<details class="alert-sample"><summary>${t('popup.btn.details')}</summary>${tl.warnings.map(w => `<div>${escapeHtml(w)}</div>`).join('')}</details>` : ''}</div></div>`;
@@ -2141,7 +2145,7 @@ function simulateBackend(data) {
                     items: [{ key: 'firewall', status: 'ok', weight: 15, detail: 'deny/allow' }, { key: 'disk_encryption', status: 'warn', weight: 8, detail: '' }, { key: 'secure_boot', status: 'ok', weight: 5 }, { key: 'apparmor', status: 'ok', weight: 6 }, { key: 'auto_updates', status: 'warn', weight: 6 }, { key: 'security_updates', status: 'fail', weight: 12, detail: '2' }, { key: 'empty_passwords', status: 'ok', weight: 10 }, { key: 'nopasswd_sudo', status: 'ok', weight: 5 }, { key: 'open_ports', status: 'warn', weight: 8, detail: '22/tcp sshd' }, { key: 'signatures', status: 'ok', weight: 8, detail: '0 d' }, { key: 'realtime', status: 'ok', weight: 6 }, { key: 'open_vulns', status: 'warn', weight: 6, detail: '12 unfixed, 2 high/critical' }] },
                 vulns: { checked_at: now, ok: true, sources: 1480, counts: { unfixed: 12, pro_only: 3, fix_available: 5 }, by_priority: { high: 2, medium: 9, low: 9 }, flatpak: [{ id: 'org.gimp.GIMP', version: '3.2.7', name: 'GIMP' }], snap: [],
                     items: [{ id: 'UBUNTU-CVE-2026-32741', cve: 'CVE-2026-32741', package: 'libheif', installed: '1.17.6-1ubuntu4', fixed: '', status: 'unfixed', priority: 'high', cvss: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H', summary: 'Heap buffer overflow when decoding crafted HEIF images', url: 'https://ubuntu.com/security/CVE-2026-32741' }, { id: 'x', cve: 'CVE-2026-54369', package: 'acl', installed: '2.3.2-1build1.1', fixed: '', status: 'unfixed', priority: 'medium', cvss: '', summary: 'Race condition in setfacl', url: '#' }, { id: 'y', cve: 'CVE-2026-63072', package: 'openssl', installed: '3.0.13-0ubuntu3.13', fixed: '3.0.13-0ubuntu3.15', status: 'fix_available', priority: 'medium', cvss: '', summary: 'Heap Buffer Overflow in CMS Key Unwrapping', url: '#' }, { id: 'z', cve: 'CVE-2025-1234', package: 'libxml2', installed: '2.9.14', fixed: '2.9.14+esm1', status: 'pro_only', priority: 'low', cvss: '', summary: 'Use-after-free in xmlXPath', url: '#' }] },
-                integrity: { checked_at: now, warnings: 1, tools: { rkhunter: { installed: true, ran: true, warnings: ['Warning: The file properties have changed: /usr/bin/ss'] }, chkrootkit: { installed: false, warnings: [] }, debsums: { installed: true, ran: true, warnings: [] } }, app: { available: true, signed: true, verified: true, modified: [], missing: [], count: 27 } },
+                integrity: { checked_at: now, warnings: 1, tools: { lynis: { installed: true, ran: true, warnings: ['Warning: The file properties have changed: /usr/bin/ss'] }, chkrootkit: { installed: false, warnings: [] }, debsums: { installed: true, ran: true, warnings: [] } }, app: { available: true, signed: true, verified: true, modified: [], missing: [], count: 27 } },
                 persistence: { checked_at: now, counts: { items: 5, untrusted: 1, extensions: 2, ext_outside_store: 1 }, items: [{ kind: 'autostart', path: '/home/user/.config/autostart/Conky.desktop', name: 'Conky', exec: 'conky -d', user: 'user', trusted: false, owner: '' }, { kind: 'cron', path: '/etc/cron.daily/apt-compat', name: 'apt-compat', exec: '', trusted: true, owner: 'apt' }], extensions: [{ browser: 'chrome', user: 'user', id: 'abcd', name: 'uBlock Origin', version: '1.60', from_store: true, enabled: true }, { browser: 'chrome', user: 'user', id: 'efgh', name: 'Mystery Helper', version: '0.1', from_store: false, enabled: true }] },
                 connections: { checked_at: now, blocklist_size: 1234, processes: [{ pid: 5099, comm: 'chrome', exe: '/opt/google/chrome/chrome', user: 'user', trusted: true, remotes: { '140.82.112.26': { ip: '140.82.112.26', ports: ['443'], flagged: false, country: 'US', org: 'GitHub' } } }, { pid: 777, comm: 'miner', exe: '/tmp/miner', user: 'user', trusted: false, remotes: { '185.220.101.1': { ip: '185.220.101.1', ports: ['4444'], flagged: true, country: 'DE', org: 'Hetzner' } } }] },
                 app_update: { checked_at: now, current: '1.7.0', available: true, verified: true, downloaded: true, version: '1.8.0', size: 102400, date: now, error: '' },
@@ -2466,7 +2470,7 @@ function backupSaveContent() {
 }
 
 
-/** Intégrité seule (rkhunter, chkrootkit, debsums, fichiers de l'application), sans analyse antivirus. */
+/** Intégrité seule (Lynis, chkrootkit, debsums, fichiers de l'application), sans analyse antivirus. */
 function runIntegrityOnly() {
     if (scan.running || integrityRunning) { showToast(t('scan.integrity_running'), 'info'); return; }
     integrityRunning = true;
@@ -2496,6 +2500,7 @@ const CHECK_FIX = {
     persistence: () => { switchTab('system'); setTimeout(() => { const el = $('persistenceList'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150); },
     ld_preload: () => loadSecurityData('integrity', false, true),
     kernel_hwe: null,
+    hardening: () => loadSecurityData('integrity', false, true),
 };
 
 function fixCheck(key) {

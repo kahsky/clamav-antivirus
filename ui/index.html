@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.10.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.11.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -512,14 +512,14 @@
                     </div>
 
                     <div class="scan-hero-actions">
-                        <button class="btn btn-full-scan" id="btnFullAnalysis" onclick="startFullSystemScan(true)" data-i18n-title="scan.full_analysis_hint" title="Intégrité d'abord (rkhunter, chkrootkit, debsums), puis analyse antivirus des fichiers non vérifiés">
+                        <button class="btn btn-full-scan" id="btnFullAnalysis" onclick="startFullSystemScan(true)" data-i18n-title="scan.full_analysis_hint" title="Intégrité d'abord (Lynis, chkrootkit, debsums), puis analyse antivirus des fichiers non vérifiés">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9,12 12,15 15,9"/></svg>
                             <span data-i18n="scan.btn.full_analysis">Scan complet (intégrité + fichiers)</span>
                         </button>
                         <button class="btn btn-secondary" id="btnFullScan" onclick="startFullSystemScan(false)" data-i18n-title="scan.files_only_hint" title="Analyse antivirus de tous les fichiers, sans vérification d'intégrité">
                             <span data-i18n="scan.btn.full">Fichiers uniquement</span>
                         </button>
-                        <button class="btn btn-secondary" id="btnIntegrityOnly" onclick="runIntegrityOnly()" data-i18n-title="scan.integrity_only_hint" title="rkhunter, chkrootkit, debsums et fichiers de l'application, sans analyse antivirus">
+                        <button class="btn btn-secondary" id="btnIntegrityOnly" onclick="runIntegrityOnly()" data-i18n-title="scan.integrity_only_hint" title="Lynis, unhide, chkrootkit, debsums et fichiers de l'application, sans analyse antivirus">
                             <span data-i18n="scan.btn.integrity_only">Intégrité uniquement</span>
                         </button>
                         <button class="btn btn-danger" id="btnCancelScan" onclick="cancelScan()" hidden>
@@ -865,9 +865,9 @@
                         <h4 data-i18n="security.integrity.title">Intégrité et rootkits</h4>
                         <button class="btn btn-secondary btn-sm" id="btnIntegrityRun" onclick="loadSecurityData('integrity', false, true)" data-i18n="security.integrity.run">Vérifier maintenant</button>
                     </div>
-                    <p class="text-muted alerts-intro" data-i18n="security.integrity.intro">rkhunter et chkrootkit recherchent des rootkits, debsums compare les fichiers des paquets à leurs empreintes d'origine, et l'application vérifie ses propres fichiers grâce au manifeste signé livré dans le paquet.</p>
+                    <p class="text-muted alerts-intro" data-i18n="security.integrity.intro">Lynis audite le durcissement du système (indice sur 100), unhide cherche les processus et ports cachés, chkrootkit les rootkits connus, debsums compare les fichiers des paquets à leurs empreintes d'origine, et l'application vérifie ses propres fichiers grâce au manifeste signé livré dans le paquet.</p>
                     <div id="integrityList" class="integrity-list"><p class="text-muted" data-i18n="security.integrity.none_yet">Aucune vérification effectuée.</p></div>
-                    <div class="fw-actions"><button class="btn btn-secondary btn-sm" id="btnInstallTools" onclick="sendToBackend({action:'install_tools'})" hidden data-i18n="security.integrity.install_tools">Installer rkhunter, chkrootkit et debsums</button></div>
+                    <div class="fw-actions"><button class="btn btn-secondary btn-sm" id="btnInstallTools" onclick="sendToBackend({action:'install_tools'})" hidden data-i18n="security.integrity.install_tools">Installer Lynis, unhide, chkrootkit et debsums</button></div>
                 </div>
 
                 <div class="card card-appupdate" id="cardAppUpdate" data-state="unknown">

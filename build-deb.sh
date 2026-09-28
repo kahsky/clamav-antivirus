@@ -8,7 +8,7 @@
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.10.1"
+VERSION="1.11.0"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -106,7 +106,7 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
-Depends: python3 (>= 3.8), python3-gi, python3-pyudev, python3-apt, gir1.2-webkit2-4.1, gir1.2-appindicator3-0.1, gir1.2-gtk-3.0, policykit-1, clamav, clamav-daemon, clamav-freshclam, rkhunter, chkrootkit, debsums, zenity, systemd, udev, udisks2
+Depends: python3 (>= 3.8), python3-gi, python3-pyudev, python3-apt, gir1.2-webkit2-4.1, gir1.2-appindicator3-0.1, gir1.2-gtk-3.0, policykit-1, clamav, clamav-daemon, clamav-freshclam, lynis, unhide, chkrootkit, debsums, msmtp-mta | mail-transport-agent, zenity, systemd, udev, udisks2
 Recommends: libnotify-bin, mintupdate | update-manager, timeshift, rclone, rsync, gocryptfs, flatpak
 Maintainer: Dukiwi SA <info@dukiwi.ch>
 Homepage: https://dukiwi.ch
@@ -156,13 +156,6 @@ systemctl enable clamav-antivirus-daemon.service 2>/dev/null || true
 systemctl enable clamav-antivirus-update.timer 2>/dev/null || true
 systemctl restart clamav-antivirus-daemon.service 2>/dev/null || true
 systemctl start clamav-antivirus-update.timer 2>/dev/null || true
-
-# Outils d'intégrité : rkhunter prend le système fraîchement installé comme référence, et met sa base
-# de propriétés à jour après chaque passage d'apt (sinon chaque mise à jour système déclenche des faux positifs)
-if command -v rkhunter >/dev/null 2>&1; then
-    [ -f /etc/default/rkhunter ] && sed -i 's/^APT_AUTOGEN=.*/APT_AUTOGEN="true"/' /etc/default/rkhunter 2>/dev/null || true
-    rkhunter --propupd --quiet >/dev/null 2>&1 || true
-fi
 
 # Relancer les GUI ouvertes pour charger la nouvelle version (elles redémarrent via le tray/autostart)
 pkill -f "/opt/clamav-antivirus/clamav-antivirus.py" 2>/dev/null || true

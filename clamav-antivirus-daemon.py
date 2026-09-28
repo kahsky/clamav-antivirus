@@ -1653,6 +1653,11 @@ def collect_checklist(daemon):
     # Persistance inconnue
     unknown = [it for it in persistence.get("items", []) if not it.get("trusted")]
     add("persistence", "ok" if not unknown else "warn", 4, f"{len(unknown)}")
+    # Durcissement du système (indice Lynis 0-100, relevé lors de la vérification d'intégrité)
+    lynis = (daemon.state.get("integrity") or {}).get("lynis") or {}
+    idx = lynis.get("index")
+    add("hardening", "unknown" if idx is None else ("ok" if idx >= 65 else ("warn" if idx >= 45 else "fail")), 5,
+        f"{idx}/100" if idx is not None else "")
     # Noyau GA : failles déjà corrigées dans un noyau HWE (indication seulement, la distribution gère le déploiement)
     hwe_fixed = ((vulns or {}).get("counts") or {}).get("kernel_hwe_fixed") or 0
     add("kernel_hwe", "unknown" if not vulns else ("warn" if hwe_fixed else "ok"), 3, f"{hwe_fixed}" if hwe_fixed else "")
@@ -2013,7 +2018,7 @@ def collect_persistence():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Intégrité : rkhunter, chkrootkit, debsums + fichiers de l'application
+# Intégrité : Lynis, unhide, chkrootkit, debsums + fichiers de l'application
 # ═══════════════════════════════════════════════════════════════════════════
 
 def debsums_verified_paths(failed_lines):
@@ -2053,12 +2058,38 @@ def debsums_verified_paths(failed_lines):
     return verified
 
 
+def parse_lynis_report(path="/var/log/lynis-report.dat"):
+    """Rapport Lynis : indice de durcissement (0-100), avertissements, nombre de suggestions."""
+    rep = {"index": None, "warnings": [], "suggestions": 0, "tests": None, "version": ""}
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                ln = ln.strip()
+                if ln.startswith("hardening_index="):
+                    rep["index"] = int(ln.split("=", 1)[1].strip() or 0)
+                elif ln.startswith("warning[]="):
+                    parts = ln.split("=", 1)[1].split("|")
+                    rep["warnings"].append(f"{parts[0]}: {parts[1]}" if len(parts) > 1 and parts[1] else parts[0])
+                elif ln.startswith("suggestion[]="):
+                    rep["suggestions"] += 1
+                elif ln.startswith(("lynis_tests_done=", "tests_executed=")):
+                    rep["tests"] = ln.split("=", 1)[1].strip()
+                elif ln.startswith("lynis_version="):
+                    rep["version"] = ln.split("=", 1)[1].strip()
+    except (OSError, ValueError):
+        pass
+    return rep
+
+
 def run_integrity_checks(collect_verified=False, cancel_event=None):
-    """rkhunter, chkrootkit, debsums et fichiers de l'application. Avec collect_verified, retourne aussi
-    l'ensemble (hashes) des fichiers système vérifiés par debsums, que l'antivirus peut ignorer."""
+    """Lynis (audit de durcissement), unhide (processus et ports cachés), chkrootkit, debsums et fichiers de
+    l'application. Avec collect_verified, retourne aussi l'ensemble (hashes) des fichiers système vérifiés
+    par debsums, que l'antivirus peut ignorer."""
     result = {"checked_at": now_iso(), "tools": {}, "app": app_integrity(), "warnings": 0, "verified_files": 0}
     verified = set()
-    tools = {"rkhunter": ["rkhunter", "--check", "--sk", "--nocolors", "--rwo"],
+    tools = {"lynis": ["lynis", "audit", "system", "--quick", "--no-colors", "--quiet"],
+             "unhide": ["unhide", "quick"],
+             "unhide-tcp": ["unhide-tcp"],
              "chkrootkit": ["chkrootkit", "-q"],
              "debsums": ["debsums", "-s"]}
     for name, cmd in tools.items():
@@ -2072,8 +2103,12 @@ def run_integrity_checks(collect_verified=False, cancel_event=None):
             entry["rc"] = r.returncode
             out = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
             lines = [ln.strip() for ln in out if ln.strip()]
-            if name == "rkhunter":
-                lines = [ln for ln in lines if "Warning" in ln or "warning" in ln]
+            if name == "lynis":
+                rep = parse_lynis_report()
+                result["lynis"] = rep
+                lines = list(rep.get("warnings") or [])
+            elif name in ("unhide", "unhide-tcp"):
+                lines = [ln for ln in lines if "HIDDEN" in ln.upper() and "Found" in ln]
             elif name == "chkrootkit":
                 lines = [ln for ln in lines if "INFECTED" in ln or "Warning" in ln or "suspicious" in ln.lower()]
             elif name == "debsums":
@@ -2349,7 +2384,7 @@ class Daemon:
                 # les fichiers système confirmés intacts par debsums sont ensuite ignorés par l'antivirus.
                 job.phase = "integrity"
                 self.emit_progress(job)
-                self.emit_line("info", "▶ integrity (rkhunter, chkrootkit, debsums)")
+                self.emit_line("info", "▶ integrity (Lynis, unhide, chkrootkit, debsums)")
                 result, skip = run_integrity_checks(collect_verified=True, cancel_event=job.cancel_event)
                 if not job.cancel_event.is_set():
                     self._store_integrity(result, after_scan=True)
@@ -3349,7 +3384,7 @@ class Daemon:
                 return {"ok": True, "detail": "test_mode"}
             r = run_quiet(["systemd-run", "--unit", f"clamav-antivirus-tools-{int(time.time())}", "--collect", "--quiet",
                            "-p", "Environment=DEBIAN_FRONTEND=noninteractive",
-                           "/bin/sh", "-c", "apt-get install -y rkhunter chkrootkit debsums"], timeout=30)
+                           "/bin/sh", "-c", "apt-get install -y lynis unhide chkrootkit debsums"], timeout=30)
             return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else "command_failed",
                     "detail": ((r.stderr or "") + (r.stdout or "")).strip()[-200:]}
 

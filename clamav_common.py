@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.10.1"
+VERSION = "1.11.0"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -99,7 +99,7 @@ DEFAULT_SETTINGS = {
     "firewall_profile": "",
     # Télémétrie anonyme (opt-in) : version, système, score, faux positifs approuvés, sans identifiant personnel
     "telemetry": False,
-    # Vérification d'intégrité hebdomadaire (rkhunter, chkrootkit, debsums, fichiers de l'app)
+    # Vérification d'intégrité hebdomadaire (Lynis, unhide, chkrootkit, debsums, fichiers de l'app)
     "integrity_weekly": True,
     "integrity_day": 6,
     "integrity_hour": 13,
