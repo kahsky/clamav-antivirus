@@ -1396,6 +1396,23 @@ KNOWN_PORTS = {22: "ssh", 25: "smtp", 53: "dns", 67: "dhcp", 68: "dhcp", 80: "ht
                8080: "http-alt", 8443: "https-alt", 9050: "tor", 27017: "mongodb", 32400: "plex"}
 
 
+def sudoers_file_origin(path):
+    """(paquet, modifié) pour un fichier sudoers : livré par un paquet dpkg (mintupdate, mintdrivers, mintsystem…)
+    et, en root, vérifié inchangé par rapport au paquet (dpkg -V)."""
+    r = run_quiet(["dpkg", "-S", path], timeout=15)
+    if r.returncode != 0 or ":" not in (r.stdout or ""):
+        return "", False
+    pkg = (r.stdout or "").split(":", 1)[0].strip()
+    modified = False
+    if os.geteuid() == 0:
+        v = run_quiet(["dpkg", "-V", pkg], timeout=120)
+        for ln in (v.stdout or "").splitlines():
+            parts = ln.split()
+            if len(parts) >= 2 and parts[-1] == path and "5" in parts[0]:
+                modified = True
+    return pkg, modified
+
+
 def ufw_port_allowed(rules, port, proto):
     """Une règle ALLOW IN couvre-t-elle ce port ? (« 22/tcp », « 80,443/tcp », « 8000:8100/udp », « 22 », « Anywhere »)."""
     for r in rules:
@@ -1527,17 +1544,18 @@ def collect_checklist(daemon):
         for path in ["/etc/sudoers"] + sorted(str(p) for p in Path("/etc/sudoers.d").glob("*") if p.is_file()):
             try:
                 with open(path) as f:
-                    for line in f:
-                        if "NOPASSWD" in line and not line.strip().startswith("#"):
-                            # Linux Mint livre des règles NOPASSWD limitées à ses propres outils (mintupdate, mintdrivers) :
-                            # normales si toutes les commandes de la règle sont sous /usr/lib/linuxmint/
-                            cmds = re.findall(r"(/\S+)", line.split("NOPASSWD", 1)[1])
-                            if cmds and all(c.startswith(("/usr/lib/linuxmint/", "/usr/lib/mint")) for c in cmds):
-                                mint_ok.append(os.path.basename(path))
-                            else:
-                                nopass.append(os.path.basename(path))
+                    has_rule = any("NOPASSWD" in line and not line.strip().startswith("#") for line in f)
             except OSError:
-                pass
+                continue
+            if not has_rule:
+                continue
+            # Fichier déployé par le système (paquet dpkg : mintupdate, mintdrivers…) et inchangé : normal.
+            # Fichier ajouté à la main, ou modifié depuis le paquet : risque à signaler.
+            pkg, modified = sudoers_file_origin(path) if path != "/etc/sudoers" else ("", False)
+            if pkg and not modified:
+                mint_ok.append(f"{os.path.basename(path)} ({pkg})")
+            else:
+                nopass.append(os.path.basename(path) + (" (modifié)" if modified else ""))
         nopass, mint_ok = sorted(set(nopass)), sorted(set(mint_ok))
         add("nopasswd_sudo", "warn" if nopass else "ok", 5, ", ".join(nopass))
         if not nopass and mint_ok:

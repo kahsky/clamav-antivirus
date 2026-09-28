@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.9.2)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.9.4)
 
 ---
 
@@ -82,8 +82,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   (explication pas à pas : chiffrement, Secure Boot, AppArmor, sudo, comptes…). La liste des ports
   donne un verdict par port : local seulement, filtré par le pare-feu (rien à faire) ou joignable
   depuis le réseau, avec une explication par service (SMTP, Apache, Avahi, CUPS, Samba…) et un
-  bouton « Bloquer ce port ». Les règles sudo NOPASSWD livrées par Linux Mint (mintupdate,
-  mintdrivers) sont reconnues comme normales.
+  bouton « Bloquer ce port ». Les règles sudo NOPASSWD livrées par un paquet du système (mintupdate, mintdrivers, mintsystem) et
+  inchangées (vérification dpkg) sont reconnues comme normales ; seules les règles ajoutées à la main ou
+  modifiées sont signalées.
 - **Sauvegardes (disponibilité, le « A » du triptyque CIA)** — tuile « Sauvegardes » en vue simple et
   page complète en vue avancée. Le service lit l'état de **Timeshift** (installé, planification, dernier
   instantané) ; l'application copie les dossiers personnels (Documents, Images, Vidéos, Musique, Bureau,
@@ -170,7 +171,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.9.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.9.2_all.deb)
+[Télécharger clamav-antivirus_1.9.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.9.4_all.deb)
 
 ---
 
@@ -201,12 +202,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.9.2_all.deb`
+Résultat : `clamav-antivirus_1.9.4_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.9.2_all.deb
+sudo dpkg -i clamav-antivirus_1.9.4_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

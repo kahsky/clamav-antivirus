@@ -331,7 +331,8 @@ function loadSecurityData(type, refresh = false, run = false) {
 
 function onSecurityData(data) {
     const type = data.type;
-    if (type === 'integrity_running') { $('btnIntegrityRun').disabled = true; $('integrityList').innerHTML = `<p class="text-muted">${t('security.integrity.running')}</p>`; return; }
+    if (type === 'integrity_running') { integrityRunning = true; syncScanButtons(); $('btnIntegrityRun').disabled = true; $('integrityList').innerHTML = `<p class="text-muted">${t('security.integrity.running')}</p>`; return; }
+    if (type === 'integrity') { integrityRunning = !!data.refreshing; syncScanButtons(); }
     if (type === 'suspended') { if (lastStatus) { lastStatus.suspended = data.data; renderSimpleView(); } return; }
     if (data.available === false) { renderSecurityUnavailable(type); return; }
     if (type === 'integrity' && data.after_scan && data.data && scan.running) setHeroNote((data.data.warnings || 0) ? t('scan.note.integrity_warn', { n: data.data.warnings }) : t('scan.note.integrity_ok'));
@@ -1564,8 +1565,7 @@ function renderScanHero() {
     $('scanCurrentPath').textContent = scan.file ? rtlPath(scan.file) : (scan.running ? '…' : '—');
     $('scanCurrent').classList.toggle('active', scan.running && !!scan.file);
 
-    $('btnFullScan').hidden = scan.running;
-    $('btnCancelScan').hidden = !scan.running;
+    syncScanButtons();
     $('scanConsoleDot').style.visibility = scan.running ? 'visible' : 'hidden';
     $('navScanLive').hidden = !scan.running;
     updateSourceBadge();
@@ -2180,6 +2180,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (params.get('legal') === '1') { legalAccepted = false; openLegal(); }
     if (params.get('learn') === '1') showAwareness();
     if (params.get('backup') === '1') setTimeout(openBackupWizard, 400);   // dev : assistant de sauvegarde
+    if (params.get('autoscan') === '1') setTimeout(() => startFullSystemScan(true), 500);   // dev : scan en cours
     if (params.get('lesson')) setTimeout(() => openLesson(params.get('lesson')), 300);   // dev : ouvre une leçon
     if (location.hash && $(`tab-${location.hash.slice(1)}`)) { setViewMode('advanced', false); switchTab(location.hash.slice(1)); }
     sendToBackend({ action: 'check_status' });
@@ -2424,6 +2425,9 @@ function backupSaveContent() {
 
 /** Intégrité seule (rkhunter, chkrootkit, debsums, fichiers de l'application), sans analyse antivirus. */
 function runIntegrityOnly() {
+    if (scan.running || integrityRunning) { showToast(t('scan.integrity_running'), 'info'); return; }
+    integrityRunning = true;
+    syncScanButtons();
     loadSecurityData('integrity', false, true);
     showToast(t('scan.integrity_running'), 'info');
     setHeroNote(t('scan.integrity_running'));
@@ -2468,4 +2472,20 @@ function openPortsPanel() {
 function firewallQuickDeny(port, proto) {
     sendToBackend({ action: 'security_action', cmd: 'firewall_rule_add', port: String(port), proto, action: 'deny', comment: 'ClamAV Antivirus GUI' });
     showToast(t('ports.blocking', { port: `${port}/${proto}` }), 'info');
+}
+
+
+// ─── Boutons de scan : désactivés pendant une analyse ou une vérification d'intégrité ──
+let integrityRunning = false;
+
+function syncScanButtons() {
+    const busy = !!scan.running;
+    const set = (id, disabled) => { const el = $(id); if (el) el.disabled = disabled; };
+    set('btnFullAnalysis', busy || integrityRunning);
+    set('btnFullScan', busy);
+    set('btnIntegrityOnly', busy || integrityRunning);
+    set('btnIntegrityRun', (busy && scan.integrity) || integrityRunning);
+    set('simpleScanBtn', busy || integrityRunning);
+    if ($('btnCancelScan')) $('btnCancelScan').hidden = !busy;
+    document.querySelectorAll('.target-btn').forEach(b => { b.disabled = busy; });
 }
