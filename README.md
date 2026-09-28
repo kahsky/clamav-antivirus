@@ -70,6 +70,13 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   passe, sauvegardes, faux support, ingénierie sociale, Wi-Fi public, mot de passe admin, réaction
   à une attaque, extensions. Un **conseil du jour** apparaît en popup au démarrage (bouton
   « Lire plus » ouvre la leçon ; désactivable dans Paramètres). Contenu dans `ui/awareness.js`.
+- **Bouton « Régler »** — chaque contrôle de la checklist qui n'est pas au vert propose « Régler »
+  (action directe : pare-feu, mise à jour, scan, paramètres, liste des ports…) ou « Comment faire »
+  (explication pas à pas : chiffrement, Secure Boot, AppArmor, sudo, comptes…). La liste des ports
+  donne un verdict par port : local seulement, filtré par le pare-feu (rien à faire) ou joignable
+  depuis le réseau, avec une explication par service (SMTP, Apache, Avahi, CUPS, Samba…) et un
+  bouton « Bloquer ce port ». Les règles sudo NOPASSWD livrées par Linux Mint (mintupdate,
+  mintdrivers) sont reconnues comme normales.
 - **Sauvegardes (disponibilité, le « A » du triptyque CIA)** — tuile « Sauvegardes » en vue simple et
   page complète en vue avancée. Le service lit l'état de **Timeshift** (installé, planification, dernier
   instantané) ; l'application copie les dossiers personnels (Documents, Images, Vidéos, Musique, Bureau,

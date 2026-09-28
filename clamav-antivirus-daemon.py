@@ -1327,10 +1327,40 @@ def collect_vulnerabilities(previous=None):
 # Checklist de sécurité et score
 # ═══════════════════════════════════════════════════════════════════════════
 
-KNOWN_PORTS = {22: "ssh", 53: "dns", 67: "dhcp", 68: "dhcp", 80: "http", 111: "rpcbind", 139: "samba", 443: "https",
+KNOWN_PORTS = {22: "ssh", 25: "smtp", 53: "dns", 67: "dhcp", 68: "dhcp", 80: "http", 110: "pop3", 111: "rpcbind", 139: "samba", 143: "imap", 443: "https", 465: "smtps", 587: "submission", 993: "imaps",
                445: "samba", 546: "dhcpv6", 631: "cups", 1716: "kdeconnect", 3306: "mysql", 3389: "rdp",
                5353: "mdns", 5432: "postgresql", 5900: "vnc", 5901: "vnc", 6000: "x11", 8000: "dev-server",
                8080: "http-alt", 8443: "https-alt", 9050: "tor", 27017: "mongodb", 32400: "plex"}
+
+
+def ufw_port_allowed(rules, port, proto):
+    """Une règle ALLOW IN couvre-t-elle ce port ? (« 22/tcp », « 80,443/tcp », « 8000:8100/udp », « 22 », « Anywhere »)."""
+    for r in rules:
+        action = (r.get("action") or "").upper()
+        if not action.startswith("ALLOW") or "OUT" in action:
+            continue
+        to = (r.get("to") or "").strip()
+        spec = to.split()[-1] if to else ""          # « 192.168.1.5 22/tcp » → « 22/tcp »
+        if spec.lower() in ("anywhere", "anywhere (v6)", ""):
+            return True
+        if "/" in spec:
+            ports_part, rproto = spec.rsplit("/", 1)
+            if rproto.lower() not in (proto.lower(), "any"):
+                continue
+        else:
+            ports_part = spec
+        for chunk in ports_part.split(","):
+            chunk = chunk.strip()
+            try:
+                if ":" in chunk:
+                    lo, hi = chunk.split(":", 1)
+                    if int(lo) <= port <= int(hi):
+                        return True
+                elif int(chunk) == port:
+                    return True
+            except ValueError:
+                continue
+    return False
 
 
 def listening_ports():
@@ -1430,26 +1460,45 @@ def collect_checklist(daemon):
         except OSError:
             pass
         add("empty_passwords", "fail" if empty else "ok", 10, ", ".join(empty))
-        nopass = []
+        nopass, mint_ok = [], []
         for path in ["/etc/sudoers"] + sorted(str(p) for p in Path("/etc/sudoers.d").glob("*") if p.is_file()):
             try:
                 with open(path) as f:
                     for line in f:
                         if "NOPASSWD" in line and not line.strip().startswith("#"):
-                            nopass.append(os.path.basename(path))
-                            break
+                            # Linux Mint livre des règles NOPASSWD limitées à ses propres outils (mintupdate, mintdrivers) :
+                            # normales si toutes les commandes de la règle sont sous /usr/lib/linuxmint/
+                            cmds = re.findall(r"(/\S+)", line.split("NOPASSWD", 1)[1])
+                            if cmds and all(c.startswith(("/usr/lib/linuxmint/", "/usr/lib/mint")) for c in cmds):
+                                mint_ok.append(os.path.basename(path))
+                            else:
+                                nopass.append(os.path.basename(path))
             except OSError:
                 pass
+        nopass, mint_ok = sorted(set(nopass)), sorted(set(mint_ok))
         add("nopasswd_sudo", "warn" if nopass else "ok", 5, ", ".join(nopass))
+        if not nopass and mint_ok:
+            items[-1].update(detail_key="check.nopasswd_sudo.mint", detail_params={"files": ", ".join(mint_ok)})
     else:
         add("empty_passwords", "unknown", 10)
         add("nopasswd_sudo", "unknown", 5)
     # Ports exposés
     ports = listening_ports()
-    exposed = [p for p in ports if p["exposed"] and p["port"] not in (5353, 68, 546, 67)]
+    filtering = bool(ufw.get("active")) and (ufw.get("default_incoming") or "").lower().startswith("deny")
+    for p in ports:
+        if not p["exposed"]:
+            p["verdict"] = "local"
+        elif filtering and not ufw_port_allowed(ufw.get("rules") or [], p["port"], p["proto"]):
+            p["verdict"] = "filtered"           # à l'écoute, mais bloqué par le pare-feu : injoignable depuis le réseau
+        else:
+            p["verdict"] = "reachable"
+    exposed = [p for p in ports if p["verdict"] == "reachable" and p["port"] not in (5353, 68, 546, 67)]
+    filtered = [p for p in ports if p["verdict"] == "filtered"]
     add("open_ports", "ok" if not exposed else ("warn" if ufw.get("active") else "fail"), 8,
         ", ".join(f"{p['port']}/{p['proto']} {p['process'] or p['service']}".strip() for p in exposed[:8]))
-    # Services exposés courants
+    if not exposed and filtered:
+        items[-1].update(detail_key="check.open_ports.filtered", detail_params={"n": len(filtered)})
+    # Services exposés courants (joignables)
     exposed_services = sorted({p["service"] or p["process"] for p in exposed if p["port"] in (139, 445, 631, 5900, 5901, 3389, 3306, 5432, 27017)})
     add("exposed_services", "ok" if not exposed_services else "warn", 5, ", ".join(exposed_services))
     # ld.so.preload (persistance de rootkit)

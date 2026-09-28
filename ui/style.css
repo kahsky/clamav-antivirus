@@ -2804,3 +2804,16 @@ body.mode-simple { position: relative; }
 .simple-view .simple-rows .simple-row .btn { white-space: nowrap; }
 /* ligne impaire finale (Sauvegardes) : sur toute la largeur pour ne pas tronquer le texte */
 .simple-rows .simple-row:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+/* ── v1.9.1 : « Régler » et verdicts par port ── */
+.check-item { flex-wrap: wrap; }
+.check-item .check-fix-btn { margin-left: auto; white-space: nowrap; }
+.check-item .check-weight { margin-left: 8px; }
+.check-fix { flex-basis: 100%; font-size: 12px; line-height: 1.5; color: var(--text-secondary); background: var(--bg-surface-2); border-left: 3px solid var(--accent); border-radius: 6px; padding: 8px 12px; margin-top: 8px; white-space: pre-line; }
+.ports-list .port-item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin: 6px 0; }
+.ports-list .port-item.verdict-reachable { border-color: rgba(239,68,68,0.45); }
+.ports-list .port-item.verdict-filtered { border-color: rgba(245,158,11,0.35); }
+.ports-list .port-item .port-proc { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.ports-list .port-item .port-hint { flex-basis: 100%; font-size: 12px; color: var(--text-muted); }
+.ports-list .port-item .btn-sm { margin-left: auto; }
+.ports-intro { font-size: 12px; margin: 6px 0 4px; }

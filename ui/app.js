@@ -378,12 +378,26 @@ function renderChecklist() {
             <span class="check-icon">${i.status === 'ok' ? '✓' : i.status === 'fail' ? '✕' : i.status === 'warn' ? '!' : '?'}</span>
             <div class="check-text">
                 <span class="check-title">${t(`check.${i.key}.title`)}</span>
-                <span class="check-detail">${t(`check.${i.key}.${i.status === 'ok' ? 'ok' : 'hint'}`)}${i.detail ? ` — ${escapeHtml(i.detail)}` : ''}</span>
+                <span class="check-detail">${t(`check.${i.key}.${i.status === 'ok' ? 'ok' : 'hint'}`)}${i.detail_key ? ` — ${escapeHtml(t(i.detail_key, i.detail_params || {}))}` : i.detail ? ` — ${escapeHtml(i.detail)}` : ''}</span>
             </div>
+            ${i.status !== 'ok' && i.status !== 'na' ? `<button class="btn ${i.status === 'fail' ? 'btn-danger' : 'btn-secondary'} btn-sm check-fix-btn" onclick="fixCheck('${escapeJs(i.key)}')">${CHECK_FIX[i.key] ? t('security.fix') : t('security.fix.how')}</button>` : ''}
             <span class="check-weight">${i.weight}</span>
+            ${t(`check.${i.key}.fix`) !== `check.${i.key}.fix` ? `<div class="check-fix" id="fix-${escapeHtml(i.key)}" hidden>${escapeHtml(t(`check.${i.key}.fix`))}</div>` : ''}
         </div>`).join('');
     const ports = c.ports || [];
-    $('portsList').innerHTML = ports.length ? ports.map(p => `<div class="port-item ${p.exposed ? 'exposed' : ''}"><span class="rule-to">${p.port}/${p.proto}</span><span class="rule-from">${escapeHtml(p.addr)}</span><span>${escapeHtml(p.process || '')}</span><span class="text-muted">${escapeHtml(p.service || '')}</span>${p.exposed ? `<span class="scope-badge scope-danger">${t('security.ports.exposed')}</span>` : `<span class="scope-badge scope-user">${t('security.ports.local')}</span>`}</div>`).join('') : `<p class="text-muted">${t('security.ports.none')}</p>`;
+    $('portsList').innerHTML = `<p class="text-muted ports-intro">${t('ports.intro')}</p>` + (ports.length ? ports.map(p => {
+        const v = p.verdict || (p.exposed ? 'reachable' : 'local');
+        const hintKey = p.service ? `ports.hint.${p.service}` : `ports.hint.proc.${p.process || ''}`;
+        const hint = t(hintKey) !== hintKey ? t(hintKey) : t('ports.hint.generic', { proc: p.process || '?' });
+        return `<div class="port-item verdict-${v}">
+            <span class="rule-to">${p.port}/${escapeHtml(p.proto)}</span>
+            <span class="port-proc">${escapeHtml(p.process || p.service || '')}</span>
+            <span class="rule-from">${escapeHtml(p.addr)}</span>
+            <span class="scope-badge ${v === 'reachable' ? 'scope-danger' : v === 'filtered' ? 'scope-phased' : 'scope-user'}">${t(`ports.verdict.${v}`)}</span>
+            ${v === 'reachable' ? `<button class="btn btn-secondary btn-sm" onclick="firewallQuickDeny(${Number(p.port)}, '${escapeJs(p.proto)}')">${t('ports.block')}</button>` : ''}
+            <span class="port-hint">${escapeHtml(hint)}</span>
+        </div>`;
+    }).join('') : `<p class="text-muted">${t('security.ports.none')}</p>`);
 }
 
 function setVulnFilter(f) {
@@ -2384,4 +2398,45 @@ function runIntegrityOnly() {
     loadSecurityData('integrity', false, true);
     showToast(t('scan.integrity_running'), 'info');
     setHeroNote(t('scan.integrity_running'));
+}
+
+
+// ─── « Régler » : chaque contrôle mène au bon endroit ───────────────────────
+
+const CHECK_FIX = {
+    firewall: () => switchTab('firewall'),
+    ssh: () => switchTab('firewall'),
+    security_updates: () => sendToBackend({ action: 'system_upgrade' }),
+    reboot: null,
+    auto_updates: () => sendToBackend({ action: 'open_update_manager' }),
+    signatures: () => triggerUpdate(),
+    recent_scan: () => startFullSystemScan(true),
+    realtime: () => switchTab('settings'),
+    weekly_scan: () => switchTab('settings'),
+    auto_response: () => switchTab('settings'),
+    open_ports: () => openPortsPanel(),
+    exposed_services: () => openPortsPanel(),
+    open_vulns: () => { setVulnPrio('high'); const el = $('vulnList'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
+    persistence: () => { switchTab('system'); setTimeout(() => { const el = $('persistenceList'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150); },
+    ld_preload: () => loadSecurityData('integrity', false, true),
+};
+
+function fixCheck(key) {
+    const fn = CHECK_FIX[key];
+    if (fn) fn();
+    const info = $(`fix-${key}`);
+    if (info) info.hidden = !info.hidden;
+}
+
+function openPortsPanel() {
+    switchTab('security');
+    const d = $('portsDetails');
+    if (!d) return;
+    d.open = true;
+    setTimeout(() => d.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+}
+
+function firewallQuickDeny(port, proto) {
+    sendToBackend({ action: 'security_action', cmd: 'firewall_rule_add', port: String(port), proto, action: 'deny', comment: 'ClamAV Antivirus GUI' });
+    showToast(t('ports.blocking', { port: `${port}/${proto}` }), 'info');
 }
