@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.14.0)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.14.1)
 
 ---
 
@@ -109,7 +109,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   .packlist…) et « C'est normal » approuve un avertissement : mis à part, il ne compte plus dans l'état ni
   dans les prochains relevés (« Retirer » le réactive). Le service classe lui-même les fichiers cachés signalés
   par chkrootkit : livré par un paquet installé (`dpkg -S`), nom connu (.build-id, .packlist, marqueurs npm/Python)
-  ou inconnu (à vérifier) ; un constat entièrement bénin devient « faux positif connu » sans intervention, et un
+  ou inconnu (à vérifier) ; même traitement pour « Linux.Xor.DDoS » (chkrootkit liste tout fichier exécutable de
+  /tmp : extensions Chrome, scripts Timeshift, fichiers texte et dossiers de compilation sont bénins, seul un
+  binaire ELF inconnu reste à vérifier) ; un constat entièrement bénin devient « faux positif connu » sans intervention, et un
   relevé chkrootkit incomplet (ancienne version) est relancé seul au démarrage.
 - **Failles** — les noyaux installés mais non démarrés ne sont plus interrogés sur OSV (ni comptés, ni
   affichés) ; les réponses OSV sont paginées, un noyau dépassant les 1000 fiches d'une page.
@@ -248,7 +250,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.14.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.14.0_all.deb)
+[Télécharger clamav-antivirus_1.14.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.14.1_all.deb)
 
 ---
 
@@ -279,12 +281,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.14.0_all.deb`
+Résultat : `clamav-antivirus_1.14.1_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.14.0_all.deb
+sudo dpkg -i clamav-antivirus_1.14.1_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

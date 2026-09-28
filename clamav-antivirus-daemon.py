@@ -2650,15 +2650,50 @@ def classify_hidden_paths(paths):
     return notes
 
 
+TMP_KNOWN = (
+    ("/tmp/scoped_dir", "chrome"),        # installation d'extensions Chrome/Chromium (CRX_INSTALL/manifest.json)
+    ("/tmp/timeshift-", "timeshift"),     # scripts temporaires de Timeshift
+    ("/tmp/pip-", "build_tmp"), ("/tmp/cargo", "build_tmp"), ("/tmp/rustc", "build_tmp"), ("/tmp/go-build", "build_tmp"),
+    ("/tmp/tmp", "build_tmp"), ("/tmp/npm-", "build_tmp"), ("/tmp/yarn-", "build_tmp"),
+)
+
+
+def classify_tmp_paths(paths):
+    """Verdict intégré pour « Linux.Xor.DDoS » : chkrootkit y liste simplement tout fichier exécutable de /tmp.
+    Le vrai Xor.DDoS dépose des binaires ELF aux noms aléatoires : un fichier texte ou script, une installation
+    d'extension Chrome, un script Timeshift ou un dossier de compilation ne sont pas des rootkits."""
+    notes = []
+    for p in paths:
+        if not os.path.exists(p):
+            notes.append({"path": p, "verdict": "benign", "reason": "tmp_gone"})
+            continue
+        known = next((reason for prefix, reason in TMP_KNOWN if p.startswith(prefix)), None)
+        if known:
+            notes.append({"path": p, "verdict": "benign", "reason": known})
+            continue
+        try:
+            with open(p, "rb") as f:
+                head = f.read(4)
+        except OSError:
+            head = b""
+        if head != b"\x7fELF":
+            notes.append({"path": p, "verdict": "benign", "reason": "tmp_text"})
+        else:
+            notes.append({"path": p, "verdict": "unknown", "reason": "elf_tmp"})
+    return notes
+
+
 def chkrootkit_analysis(out):
     """Sortie de chkrootkit -q → {warnings, benign, notes} : les constats « suspicious files » dont tous les chemins
     sont bénins deviennent des faux positifs connus (non comptés) ; les autres gardent une note par chemin."""
     warnings, benign, notes = [], [], {}
     for text in parse_chkrootkit(out):
         lines = text.splitlines()
-        if "suspicious files" in lines[0].lower() and len(lines) > 1:
+        head = lines[0].lower()
+        classifier = classify_hidden_paths if "suspicious files" in head else classify_tmp_paths if "xor.ddos" in head else None
+        if classifier and len(lines) > 1:
             paths = [ln.strip() for ln in lines[1:] if ln.strip().startswith("/")]
-            verdicts = classify_hidden_paths(paths)
+            verdicts = classifier(paths)
             if paths and all(n["verdict"] == "benign" for n in verdicts):
                 benign.append({"text": text, "notes": verdicts})
                 continue
