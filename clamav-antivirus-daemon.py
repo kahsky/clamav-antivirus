@@ -1336,6 +1336,22 @@ def installed_sources():
     return sources
 
 
+def running_kernel_source(sources):
+    """Paquet source du noyau en cours d'exécution (uname -r), ex. linux (6.8 GA) ou linux-hwe-7.0."""
+    release = os.uname().release
+    r = run_quiet(["dpkg-query", "-W", "-f", "${source:Package}", f"linux-image-{release}"], timeout=15)
+    src = (r.stdout or "").strip()
+    if not src:
+        r = run_quiet(["dpkg-query", "-W", "-f", "${source:Package}", f"linux-image-unsigned-{release}"], timeout=15)
+        src = (r.stdout or "").strip()
+    if not src:
+        for name, info in sources.items():
+            if f"linux-image-{release}" in info.get("binaries", []) or f"linux-image-unsigned-{release}" in info.get("binaries", []):
+                src = name
+                break
+    return src.replace("linux-signed", "linux") if src else "", release
+
+
 def osv_query(sources, ecosystem):
     """Interroge OSV par lots ; retourne {source: [ids]}."""
     names = sorted(sources)
@@ -1407,11 +1423,22 @@ def collect_vulnerabilities(previous=None):
     """Failles connues affectant les paquets installés : sans correctif, correctif Pro, ou correctif disponible."""
     ecosystem = ubuntu_osv_ecosystem()
     result = {"checked_at": now_iso(), "ok": True, "error": "", "ecosystem": ecosystem,
-              "sources": 0, "items": [], "counts": {"unfixed": 0, "pro_only": 0, "fix_available": 0, "kernel_hwe_fixed": 0},
+              "sources": 0, "items": [], "counts": {"unfixed": 0, "pro_only": 0, "fix_available": 0, "kernel_hwe_fixed": 0, "dormant": 0},
+              "running_kernel": {}, "dormant_kernels": [],
               "by_priority": {}, "flatpak": [], "snap": [], "cache": {}}
     try:
         sources = installed_sources()
         result["sources"] = len(sources)
+        # Noyaux installés mais non démarrés (ex. linux 6.8 GA alors que linux-hwe-7.0 tourne) : leurs failles
+        # ne concernent pas le système en cours ; comptées à part.
+        running_src, release = running_kernel_source(sources)
+        def kernel_family(name):              # linux-signed-hwe-7.0 et linux-hwe-7.0 : même noyau
+            return "linux" + name[len("linux-signed"):] if name.startswith("linux-signed") else name
+        kernel_sources = {n for n, info in sources.items() if n.startswith("linux")
+                          and any(re.match(r"linux-(image|modules)(-unsigned)?-\d", b) for b in info.get("binaries", []))}
+        dormant = {n for n in kernel_sources if running_src and kernel_family(n) != kernel_family(running_src)}
+        result["running_kernel"] = {"release": release, "source": running_src}
+        result["dormant_kernels"] = sorted(dormant)
         found = osv_query(sources, ecosystem)
         ids = sorted({vid for lst in found.values() for vid in lst})
         cache = (previous or {}).get("cache") or {}
@@ -1432,10 +1459,14 @@ def collect_vulnerabilities(previous=None):
                     status = "fix_available"    # une mise à jour l'installe
                 else:
                     status = "unfixed"          # aucun correctif publié par Ubuntu pour ce paquet
-                result["counts"][status] += 1
+                is_dormant = source in dormant
+                if is_dormant:
+                    result["counts"]["dormant"] += 1
+                else:
+                    result["counts"][status] += 1
                 # Noyau GA (linux 6.8) : la faille est souvent déjà corrigée dans un noyau HWE plus récent
                 hwe = ""
-                if status == "unfixed" and source == "linux":
+                if status == "unfixed" and source == "linux" and not is_dormant:
                     fixed_hwe = {k: v for k, v in (d.get("fixed_by_pkg") or {}).items() if k.startswith("linux-hwe-") and v}
                     if fixed_hwe:
                         k = sorted(fixed_hwe)[0]
@@ -1444,7 +1475,7 @@ def collect_vulnerabilities(previous=None):
                 pr = d["priority"] or "untriaged"
                 result["by_priority"][pr] = result["by_priority"].get(pr, 0) + 1
                 result["items"].append({"id": d["id"], "cve": d["cve"] or d["id"], "package": source,
-                                        "installed": installed, "fixed": fixed, "status": status, "hwe_fixed": hwe,
+                                        "installed": installed, "fixed": fixed, "status": status, "hwe_fixed": hwe, "dormant": is_dormant,
                                         "priority": pr, "cvss": d["cvss"], "summary": d["summary"],
                                         "url": f"https://ubuntu.com/security/{d['cve']}" if d["cve"] else f"https://osv.dev/vulnerability/{d['id']}"})
         result["items"].sort(key=lambda it: (PRIORITY_RANK.get(it["priority"], 6), it["status"] != "unfixed", it["package"]))

@@ -427,8 +427,14 @@ function renderVulns(refreshing = false) {
         + ['critical', 'high', 'medium', 'low'].map(pr => `<div class="stat"><span class="stat-value">${formatNumber(bp[pr] || 0)}</span><span class="stat-label">${t(`priority.${pr}`)}</span></div>`).join('')
         + `<div class="stat"><span class="stat-value">${formatNumber(v.sources || 0)}</span><span class="stat-label">${t('security.vulns.sources')}</span></div>`;
     const maxRank = vulnPrio === 'all' ? 99 : vulnPrio === 'medium' ? 2 : 1;
-    const items = (v.items || []).filter(i => i.status === vulnFilter && (VULN_PRIO_RANK[i.priority] ?? 5) <= maxRank);
-    const hidden = (v.items || []).filter(i => i.status === vulnFilter).length - items.length;
+    const items = (v.items || []).filter(i => i.status === vulnFilter && !i.dormant && (VULN_PRIO_RANK[i.priority] ?? 5) <= maxRank);
+    const hidden = (v.items || []).filter(i => i.status === vulnFilter && !i.dormant).length - items.length;
+    const dormantNote = $('vulnDormantNote');
+    if (dormantNote) {
+        const nd = c.dormant || 0;
+        dormantNote.hidden = !nd;
+        if (nd) dormantNote.textContent = t('security.vulns.dormant_note', { n: formatNumber(nd), sources: (v.dormant_kernels || []).join(', '), running: (v.running_kernel && v.running_kernel.release) || '' });
+    }
     if ($('vulnPrio')) $('vulnPrio').value = vulnPrio;
     if ($('vulnHidden')) $('vulnHidden').textContent = hidden > 0 ? t('security.vulns.hidden', { n: hidden }) : '';
     const hweNote = $('vulnHweNote');

@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.11.2)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.11.3)
 
 ---
 
@@ -106,6 +106,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 - **Politique d'entreprise** — `/etc/clamav-antivirus/policy.json` déployé par dukiwi-kit (fichier
   root, signature détachée facultative) : réglages imposés et verrouillés, profil pare-feu, programmes
   de confiance ; voir `policy.example.json`. Les réglages verrouillés apparaissent grisés.
+- **Noyaux inactifs** — les failles des noyaux installés mais non démarrés (par exemple le 6.8 GA
+  quand le système tourne sur un noyau HWE 7.0) sont comptées à part et n'entrent plus dans le total ;
+  une note indique le noyau en cours (`uname -r`) et comment retirer les anciens.
 - **Noyau HWE** — les failles du noyau 6.8 de Mint déjà corrigées dans un noyau HWE (6.11, 6.14) sont
   marquées « corrigée dans le noyau HWE » et comptées ; la carte des failles explique comment installer
   ce noyau (Gestionnaire de mises à jour → Noyaux Linux, ou `linux-generic-hwe-24.04`).
@@ -205,7 +208,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.11.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.11.2_all.deb)
+[Télécharger clamav-antivirus_1.11.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.11.3_all.deb)
 
 ---
 
@@ -236,12 +239,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.11.2_all.deb`
+Résultat : `clamav-antivirus_1.11.3_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.11.2_all.deb
+sudo dpkg -i clamav-antivirus_1.11.3_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
