@@ -5310,7 +5310,7 @@ class Daemon:
                 return False, "invalid_policy"
             return all(ok for ok, _ in results), " | ".join(text for _, text in results)
         if cmd == "firewall_rule_add":
-            action = str(req.get("action", "allow")).lower()
+            action = str(req.get("rule_action") or req.get("action") or "allow").lower()
             proto = str(req.get("proto", "tcp")).lower()
             port = str(req.get("port", "")).strip()
             if action not in VALID_ACTION or proto not in VALID_PROTO or not re.fullmatch(r"\d{1,5}(:\d{1,5})?(,\d{1,5})*", port):

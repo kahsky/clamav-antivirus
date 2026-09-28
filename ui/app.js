@@ -959,7 +959,8 @@ function firewallDefaults() {
 
 function firewallAddRule(port, proto, action, comment) {
     if (!port) { showToast(t('firewall.rules.need_port'), 'error'); return; }
-    sendToBackend({ action: 'security_action', cmd: 'firewall_rule_add', port, proto, action, comment: comment || '' });
+    // « action » est déjà la commande envoyée au backend : l'action de la règle voyage sous « rule_action »
+    sendToBackend({ action: 'security_action', cmd: 'firewall_rule_add', port, proto, rule_action: String(action || 'allow').toLowerCase(), comment: comment || '' });
 }
 
 function firewallAddRuleFromForm() {
@@ -2733,7 +2734,7 @@ function openPortsPanel() {
 }
 
 function firewallQuickDeny(port, proto) {
-    sendToBackend({ action: 'security_action', cmd: 'firewall_rule_add', port: String(port), proto, action: 'deny', comment: 'ClamAV Antivirus GUI' });
+    sendToBackend({ action: 'security_action', cmd: 'firewall_rule_add', port: String(port), proto, rule_action: 'deny', comment: 'ClamAV Antivirus GUI' });
     showToast(t('ports.blocking', { port: `${port}/${proto}` }), 'info');
 }
 
