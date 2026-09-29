@@ -1392,6 +1392,13 @@ def ufw_args(args):
 # Surveillance des supports USB (udev)
 # ═══════════════════════════════════════════════════════════════════════════
 
+def usb_identity(info):
+    """Identité stable d'un support USB pour « Faire confiance à cette clé » : numéro de série et UUID du système de
+    fichiers (l'un ou l'autre peut manquer selon le support)."""
+    serial, uuid = (info or {}).get("serial") or "", (info or {}).get("uuid") or ""
+    return f"{serial}|{uuid}" if (serial or uuid) else ""
+
+
 class UsbWatcher(threading.Thread):
     """Analyse les clés USB avant leur montage ; demande pour les disques durs USB."""
 
@@ -1458,6 +1465,7 @@ class UsbWatcher(threading.Thread):
             "vendor": (device.get("ID_VENDOR") or src.get("ID_VENDOR") or "").replace("_", " ").strip(),
             "model": (device.get("ID_MODEL") or src.get("ID_MODEL") or "").replace("_", " ").strip(),
             "serial": device.get("ID_SERIAL_SHORT") or src.get("ID_SERIAL_SHORT") or "",
+            "uuid": device.get("ID_FS_UUID") or "",
             "removable": removable,
             "kind": "key" if (auto and size <= max_bytes) else "hdd",
         }
@@ -1469,10 +1477,16 @@ class UsbWatcher(threading.Thread):
             info = self.describe(device)
             if not info:
                 return
+            ident = usb_identity(info)
+            info["trusted"] = bool(ident and (self.daemon_ref.state.get("trusted_usb") or {}).get(ident))
             log(f"USB détecté : {devnode} ({info['label'] or info['model']}, "
-                f"{info['size'] // 2**20} MiB, {info['kind']})")
+                f"{info['size'] // 2**20} MiB, {info['kind']}{', de confiance' if info['trusted'] else ''})")
             self.daemon_ref.broadcast({"event": "usb_added", "usb": info})
-            if info["kind"] == "key":
+            if info["trusted"]:
+                # « Faire confiance à cette clé » : remise à l'utilisateur sans analyse (choix révocable dans Paramètres)
+                self.daemon_ref.write_log(f"USB trusted, mounted without scan: {devnode} ({info['label'] or info['model']})")
+                self.daemon_ref.broadcast({"event": "usb_trusted", "usb": info})
+            elif info["kind"] == "key":
                 self.daemon_ref.start_usb_scan(info)
             else:
                 with self.lock:
@@ -3277,6 +3291,7 @@ class Daemon:
         self.subscribers = []
         self.sub_lock = threading.Lock()
         self.queue = deque()
+        self.usb_priority_job = None            # clé USB analysée pendant qu'un scan est en pause
         self.queue_lock = threading.Condition()
         self.current = None
         self.shutdown = threading.Event()
@@ -3458,12 +3473,13 @@ class Daemon:
                 "event": "usb_done", "usb": job.usb, "status": status,
                 "msg_key": key, "msg_params": params, "infected": job.infected,
                 "files": job.total + job.cached, "cached": job.cached, "threats": job.threats[-50:],
-                "removed": bool(job.usb.get("removed")),
+                "removed": bool(job.usb.get("removed")), "skipped": bool(job.usb.get("skipped")),
             })
 
     def _run_priority(self, job, paused):
         """Clé USB pendant un scan : le scan est mis en pause, la clé est analysée tout de suite, puis reprise."""
         paused.pause()
+        self.usb_priority_job = job
         self.write_log(f"⏸ paused {paused.path} for USB {job.usb.get('label') or job.usb.get('devnode')}")
         self.emit_line("info", f"⏸ paused for USB {job.usb.get('label') or job.usb.get('devnode')}")
         self.broadcast({"event": "job_paused", "job": paused.public()})
@@ -3480,6 +3496,7 @@ class Daemon:
                 self._after_job(job)
             except Exception as e:  # noqa: BLE001
                 log(f"Fin du job USB : {e}")
+            self.usb_priority_job = None
             paused.unpause()
             self.write_log(f"▶ resumed {paused.path}")
             self.emit_line("info", "▶ resumed")
@@ -5185,7 +5202,8 @@ class Daemon:
                    "install_phased", "install_package"):
             return True
         if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence", "acknowledge_integrity",
-                   "acknowledge_vuln", "acknowledge_port", "system_upgrade", "harden_apply", "forget_network"):
+                   "acknowledge_vuln", "acknowledge_port", "system_upgrade", "harden_apply", "forget_network",
+                   "usb_skip", "untrust_usb"):
             return bool(self.settings.get("family_mode"))
         return False
 
@@ -5625,6 +5643,55 @@ class Daemon:
         if cmd == "usb_pending":
             return {"ok": True, "pending": self.usb.pending_list()}
 
+        if cmd == "usb_skip":
+            # « Continuer sans analyse » / « Faire confiance à cette clé » : l'utilisateur assume le risque, la clé lui
+            # est remise tout de suite (analyse en cours annulée, ou en attente retirée). Sans mot de passe sauf mode famille.
+            devnode = str(req.get("devnode") or "")[:64]
+            trust = bool(req.get("trust"))
+            info = self.usb.take_pending(devnode)
+            with self.queue_lock:
+                cur = self.current
+                queued = [j for j in self.queue if j.usb and j.usb.get("devnode") == devnode]
+                for j in queued:
+                    self.queue.remove(j)
+            running = next((j for j in (cur, self.usb_priority_job)
+                            if j and j.usb and j.usb.get("devnode") == devnode and not j.cancel_event.is_set()), None)
+            if running:
+                info = info or running.usb
+                running.usb["skipped"] = True
+                running.cancel(by_user=True)            # usb_done {skipped} suit, le montage privé est libéré
+            for j in queued:
+                info = info or j.usb
+                if j.usb.get("private_mount"):
+                    self.usb.unmount(devnode)
+                self.broadcast({"event": "usb_done", "usb": dict(j.usb, skipped=True), "status": "skipped",
+                                "msg_key": "msg.scan.cancelled", "msg_params": {}, "infected": 0, "files": 0, "cached": 0,
+                                "threats": [], "removed": False, "skipped": True})
+            if not info:
+                return {"ok": False, "error": "not_found"}
+            trusted_now = False
+            if trust:
+                ident = usb_identity(info)
+                if ident:
+                    trusted = dict(self.state.get("trusted_usb") or {})
+                    trusted[ident] = {"label": info.get("label") or "", "model": ((info.get("vendor") or "") + " " + (info.get("model") or "")).strip(),
+                                      "size": info.get("size") or 0, "at": now_iso(), "uid": uid}
+                    self.state.update(trusted_usb=trusted)
+                    self.write_log(f"✔ trusted USB (no scan on insert): {info.get('label') or info.get('model')} [{ident}]")
+                    trusted_now = True
+            self.write_log(f"USB scan skipped by user: {devnode} ({info.get('label') or info.get('model')})")
+            return {"ok": True, "trusted": trusted_now, "mount_now": running is None, "usb": info}
+
+        if cmd == "untrust_usb":
+            ident = str(req.get("id") or "")[:200]
+            trusted = dict(self.state.get("trusted_usb") or {})
+            entry = trusted.pop(ident, None)
+            if entry is None:
+                return {"ok": False, "error": "not_found"}
+            self.state.update(trusted_usb=trusted)
+            self.write_log(f"✘ untrusted USB: {entry.get('label') or entry.get('model')} [{ident}]")
+            return {"ok": True, "usb": [dict(v, id=k) for k, v in trusted.items()]}
+
         if cmd == "system_status":
             if req.get("refresh"):
                 started = self.refresh_system_status(force=bool(req.get("force")))
@@ -5695,7 +5762,8 @@ class Daemon:
 
         if cmd == "trusted_programs":
             return {"ok": True, "programs": self.state.get("trusted_programs") or [],
-                    "acknowledged": self.state.get("acknowledged_persistence") or []}
+                    "acknowledged": self.state.get("acknowledged_persistence") or [],
+                    "usb": [dict(v, id=k) for k, v in (self.state.get("trusted_usb") or {}).items()]}
 
         if cmd == "trust_program":
             # « C'est moi » : le programme ne déclenche plus d'alerte (rafale, connexion), même s'il est inconnu de dpkg

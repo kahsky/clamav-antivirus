@@ -1088,23 +1088,31 @@ function loadSettings() {
 
 // ─── « C'est moi » : programmes et entrées approuvés (plus d'alerte) ─────────
 
-let trustedData = { programs: [], acknowledged: [] };
+let trustedData = { programs: [], acknowledged: [], usb: [] };
 
 function trustProgram(exe, comm) { sendToBackend({ action: 'trust_program', exe, comm }); }
 function untrustProgram(exe) { sendToBackend({ action: 'untrust_program', exe }); }
+function untrustUsb(id) { sendToBackend({ action: 'untrust_usb', id }); }
 function acknowledgePersistence(key, remove = false) { sendToBackend({ action: 'acknowledge_persistence', key, remove }); }
 
 function onTrustedList(data) {
-    trustedData = { programs: (data && data.programs) || [], acknowledged: (data && data.acknowledged) || [] };
+    trustedData = { programs: (data && data.programs) || [], acknowledged: (data && data.acknowledged) || [], usb: (data && data.usb) || [] };
     renderTrusted();
 }
 
 function renderTrusted() {
     const el = $('trustedList');
     if (!el) return;
-    const progs = trustedData.programs, ack = trustedData.acknowledged;
-    if (!progs.length && !ack.length) { el.innerHTML = `<p class="text-muted">${t('settings.trusted.none')}</p>`; return; }
+    const progs = trustedData.programs, ack = trustedData.acknowledged, usb = trustedData.usb || [];
+    if (!progs.length && !ack.length && !usb.length) { el.innerHTML = `<p class="text-muted">${t('settings.trusted.none')}</p>`; return; }
     el.innerHTML = [
+        ...usb.map(u => `<div class="package-item">
+            <span class="scope-badge scope-user">${t('settings.trusted.usb')}</span>
+            <span class="package-name">${escapeHtml(u.label || u.model || u.id)}</span>
+            <span class="package-versions" title="${escapeHtml(u.id || '')}">${escapeHtml(u.model || '')}${u.size ? ` · ${formatSize(u.size)}` : ''}</span>
+            <span class="alert-meta">${u.at ? formatDateTime(u.at) : ''}</span>
+            <button class="btn btn-secondary btn-sm" onclick="untrustUsb('${escapeJs(u.id)}')">${t('settings.trusted.remove')}</button>
+        </div>`),
         ...progs.map(p => `<div class="package-item">
             <span class="scope-badge scope-user">${t('settings.trusted.program')}</span>
             <span class="package-name">${escapeHtml(p.comm || '')}</span>
@@ -2407,7 +2415,11 @@ function simulateBackend(data) {
             break;
         case 'get_trusted':
             reply('trustedList', { programs: [{ exe: '/home/user/bin/backup.sh', comm: 'backup.sh', by: 'user', added: new Date().toISOString() }],
-                                   acknowledged: ['autostart:/home/user/.config/autostart/sync.desktop'] });
+                                   acknowledged: ['autostart:/home/user/.config/autostart/sync.desktop'],
+                                   usb: [{ id: '4C530001|1234-ABCD', label: 'SANDISK 32G', model: 'SanDisk Ultra', size: 32e9, at: new Date().toISOString() }] });
+            break;
+        case 'untrust_usb':
+            reply('operationResult', { status: 'success', message: t('msg.usb_untrusted') });
             break;
         case 'trust_program': case 'untrust_program': case 'acknowledge_persistence':
             reply('operationResult', { status: 'success', message: data.action === 'trust_program' ? t('msg.program_trusted', { program: data.comm || data.exe }) : data.action === 'untrust_program' ? t('msg.program_untrusted') : t('msg.persistence_acknowledged') });

@@ -1317,6 +1317,12 @@ class ClamAVAntivirusApp:
             self.ask_usb(ev.get("usb") or {})
         elif et == "usb_done":
             self.usb_done(ev)
+        elif et == "usb_trusted":
+            usb = ev.get("usb") or {}
+            self.popup("usb", self.T("popup.usb.trusted_title", name=self.usb_name(usb)), self.T("popup.usb.trusted_body"), timeout=12,
+                       buttons=[(self.T("popup.btn.scan_anyway"), "primary",
+                                 lambda: threading.Thread(target=self.mount_for_user, args=(usb, False, True), daemon=True).start())])
+            threading.Thread(target=self.mount_for_user, args=(usb, True, False), daemon=True).start()
         elif et == "usb_error":
             usb = ev.get("usb") or {}
             self.popup("warning", self.T("popup.usb.error_title"),
@@ -1492,7 +1498,37 @@ class ClamAVAntivirusApp:
         title = self.T("popup.usb.scanning_title", name=self.usb_name(usb))
         return self.popup("usb", title, self.T("popup.usb.preparing"), key=key, progress=0.0,
                           meta=f"{usb.get('devnode', '')} · {format_size(usb.get('size', 0))}",
-                          on_activate=lambda: self.show_tab("scan"))
+                          on_activate=lambda: self.show_tab("scan"),
+                          buttons=[(self.T("popup.btn.skip_scan"), None, lambda: self.usb_skip(usb, False)),
+                                   (self.T("popup.btn.trust_usb"), None, lambda: self.usb_skip(usb, True))])
+
+    def usb_skip(self, usb, trust=False):
+        """« Continuer sans analyse » / « Faire confiance à cette clé » : la clé est remise tout de suite, sans mot de
+        passe (sauf mode famille). Une clé de confiance n'est plus analysée à l'insertion (révocable dans Paramètres)."""
+        def done(resp):
+            if not resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+                return False
+            self.popups.close_key(f"usb:{usb.get('devnode')}")
+            name = self.usb_name(usb)
+            self.popup("usb", self.T("popup.usb.skipped_title", name=name),
+                       self.T("popup.usb.trusted_body") if resp.get("trusted") else self.T("popup.usb.skipped_body"), timeout=12)
+            if resp.get("mount_now"):
+                threading.Thread(target=self.mount_for_user, args=(usb, True, False), daemon=True).start()
+            if resp.get("trusted"):
+                self.act_get_trusted({})
+            return False
+        self.run_admin("usb_skip", {"devnode": usb.get("devnode", ""), "trust": bool(trust)}, done)
+
+    def act_untrust_usb(self, data):
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.usb_untrusted")})
+                self.act_get_trusted({})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("untrust_usb", {"id": str(data.get("id") or "")}, done)
 
     def update_usb_popup(self, ev):
         usb = ev.get("usb") or {}
@@ -1512,6 +1548,11 @@ class ClamAVAntivirusApp:
         key = f"usb:{usb.get('devnode')}"
         self.popups.close_key(key)
         if ev.get("removed"):
+            return
+        if ev.get("skipped"):
+            # « Continuer sans analyse » pendant l'analyse : montage privé libéré, la clé est montée pour l'utilisateur
+            if usb.get("private_mount"):
+                threading.Thread(target=self.mount_for_user, args=(usb, True, False), daemon=True).start()
             return
         name = self.usb_name(usb)
         status = ev.get("status")
@@ -1536,7 +1577,8 @@ class ClamAVAntivirusApp:
                       model=(usb.get("vendor", "") + " " + usb.get("model", "")).strip())
         self.popup("usb", self.T("popup.usb.ask_title"), body, key=key,
                    buttons=[(self.T("popup.btn.scan"), "primary", lambda: self.usb_decide(usb, True)),
-                            (self.T("popup.btn.no_scan"), None, lambda: self.usb_decide(usb, False))])
+                            (self.T("popup.btn.no_scan"), None, lambda: self.usb_decide(usb, False)),
+                            (self.T("popup.btn.trust_usb"), None, lambda: self.usb_skip(usb, True))])
 
     def usb_decide(self, usb, scan):
         DaemonClient.request("usb_decision", devnode=usb.get("devnode", ""))
@@ -1550,7 +1592,7 @@ class ClamAVAntivirusApp:
             r = subprocess.run(["udisksctl", "mount", "-b", devnode], capture_output=True, text=True, timeout=60)
             out = (r.stdout or "") + (r.stderr or "")
             if " at " in out:
-                mountpoint = out.rsplit(" at ", 1)[1].strip().rstrip(".")
+                mountpoint = out.rsplit(" at ", 1)[1].strip().rstrip(".").strip("`'\"")     # aussi « already mounted at `/media/…' »
         except Exception:  # noqa: BLE001
             pass
         if not mountpoint:
@@ -1863,6 +1905,7 @@ class ClamAVAntivirusApp:
         resp = DaemonClient.request("trusted_programs")
         self.send_to_js("trustedList", {"programs": resp.get("programs", []) if resp.get("ok") else [],
                                         "acknowledged": resp.get("acknowledged", []) if resp.get("ok") else [],
+                                        "usb": resp.get("usb", []) if resp.get("ok") else [],
                                         "available": bool(resp.get("ok"))})
 
     def act_acknowledge_vuln(self, data):
