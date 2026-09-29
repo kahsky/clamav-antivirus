@@ -4678,6 +4678,21 @@ class Daemon:
         return checklist
 
     # ── Durcissement (recommandations Lynis) ─────────────────────────────
+    def integrity_summary(self):
+        """Résumé pour la vue simple et le tray : avertissements des outils rootkit (hors Lynis), fichiers de
+        l'application modifiés (→ rouge), recommandations Lynis (→ jaune)."""
+        integ = self.state.get("integrity") or {}
+        if not integ:
+            return None
+        tools = integ.get("tools") or {}
+        app = integ.get("app") or {}
+        per_tool = {n: len(t.get("warnings") or []) for n, t in tools.items()}
+        return {"checked_at": integ.get("checked_at"), "warnings": integ.get("warnings"),
+                "rootkit": sum(v for n, v in per_tool.items() if n != "lynis"),
+                "lynis": per_tool.get("lynis", 0),
+                "app_modified": len(app.get("modified") or []) + len(app.get("missing") or []),
+                "tools": per_tool}
+
     def integrity_payload(self):
         """Résultat d'intégrité + disponibilité actuelle des outils + état du durcissement (pour l'interface)."""
         out = with_tools_now(self.state.get("integrity"))
@@ -5298,8 +5313,7 @@ class Daemon:
             "checklist_summary": dict({k: (state.get("checklist") or {}).get(k) for k in ("checked_at", "score", "grade")},
                                       todo=sum(1 for i in (state.get("checklist") or {}).get("items", []) if i.get("status") in ("warn", "fail")))
             if state.get("checklist") else None,
-            "integrity_summary": {"checked_at": (state.get("integrity") or {}).get("checked_at"),
-                                  "warnings": (state.get("integrity") or {}).get("warnings")} if state.get("integrity") else None,
+            "integrity_summary": self.integrity_summary(),
             "persistence_summary": (state.get("persistence") or {}).get("counts"),
             "connections_active": self.connections.active,
             "alerts": (state.get("alerts") or [])[:10],

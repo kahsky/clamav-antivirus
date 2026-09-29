@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.19.0)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.19.1)
 
 ---
 
@@ -153,6 +153,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
   `ufw.service` au démarrage et signale un autre gestionnaire de pare-feu actif (firewalld, nftables avec
   `flush ruleset`, netfilter-persistent). Checklist et score recalculés après chaque action pare-feu/SSH.
+- **Vue simple : jamais un rouge sans explication** — le sous-titre cite le motif exact du service (« intégrité
+  compromise », « failles sans correctif »…) et une ligne « Intégrité du système » (rootkits, fichiers de paquets ou
+  de l'application modifiés → rouge, recommandations Lynis → jaune) mène aux détails et au bouton « C'est normal ».
 - **Clé USB : continuer sans analyse, faire confiance** — le popup d'analyse d'une clé (et la question pour un
   disque volumineux) propose « Continuer sans analyse » et « Faire confiance à cette clé » : l'analyse en cours est
   annulée et la clé est montée tout de suite pour l'utilisateur, sans mot de passe (mode famille : administrateur).
@@ -335,7 +338,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.19.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.19.0_all.deb)
+[Télécharger clamav-antivirus_1.19.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.19.1_all.deb)
 
 ---
 
@@ -366,12 +369,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.19.0_all.deb`
+Résultat : `clamav-antivirus_1.19.1_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.19.0_all.deb
+sudo dpkg -i clamav-antivirus_1.19.1_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

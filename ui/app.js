@@ -795,6 +795,10 @@ function toggleAdmin() {
 
 // ─── Vue simple / avancée ───────────────────────────────────────────────────
 
+function scrollToIntegrity() {
+    setTimeout(() => { const el = $('integrityList'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
+}
+
 function setViewMode(mode, persist = true) {
     viewMode = mode === 'advanced' ? 'advanced' : 'simple';
     document.body.classList.toggle('mode-simple', viewMode === 'simple');
@@ -868,6 +872,19 @@ function simpleOverall() {
     rows.push({ state: thrState, label: t('simple.row.threats'), value: thrValue,
         action: thrState !== 'ok' ? { label: t('popup.btn.details'), fn: danger ? "setViewMode('advanced'); switchTab('system')" : "setViewMode('advanced'); switchTab('quarantine')" } : null });
 
+    // Intégrité du système : rootkits, fichiers de paquets ou de l'application modifiés (rouge), Lynis (jaune)
+    const integ = (lastStatus && lastStatus.integrity_summary) || null;
+    let intState = 'neutral', intValue = t('simple.integrity.unknown');
+    if (integ && integ.checked_at) {
+        const bad = (integ.rootkit || 0) + (integ.app_modified || 0);
+        if (bad) { intState = 'danger'; intValue = t('simple.integrity.danger', { n: bad }); }
+        else if (integ.lynis) { intState = 'warn'; intValue = t('simple.integrity.warn', { n: integ.lynis }); }
+        else { intState = 'ok'; intValue = t('simple.integrity.ok', { rel: formatRelative(integ.checked_at) }); }
+    }
+    bump(intState === 'neutral' ? 'ok' : intState);
+    rows.push({ state: intState, label: t('simple.row.integrity'), value: intValue,
+        action: intState === 'ok' || intState === 'neutral' ? null : { label: t('popup.btn.details'), fn: "setViewMode('advanced'); switchTab('security'); scrollToIntegrity()" } });
+
     // Sauvegardes (disponibilité)
     const bk = backupRowInfo();
     bump(bk.state === 'neutral' ? 'ok' : bk.state);
@@ -888,7 +905,9 @@ function renderSimpleView() {
     }
     view.dataset.state = worst;
     $('simpleTitle').textContent = t(`simple.title.${worst}`);
-    $('simpleSub').textContent = t(`simple.sub.${worst}`);
+    // Le motif exact du service (« intégrité compromise », « failles sans correctif »…) : jamais un rouge sans explication
+    const reasons = worst !== 'ok' && overall && overall.reasons ? overall.reasons.map(r => t(`overall.reason.${r}`)).filter(x => !x.startsWith('overall.reason.')) : [];
+    $('simpleSub').textContent = t(`simple.sub.${worst}`) + (reasons.length ? ` ${t('simple.sub.reasons', { list: reasons.join(', ') })}` : '');
     $('simpleRows').innerHTML = rows.map(r => `
         <li class="simple-row" data-state="${r.state}">
             <span class="simple-row-icon">${r.state === 'ok' ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="5,12 10,17 19,7"/></svg>' : r.state === 'neutral' ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="14"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>'}</span>
