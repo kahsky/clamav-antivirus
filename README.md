@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.18.3)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.18.4)
 
 ---
 
@@ -144,6 +144,10 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   le nom du fichier et son dossier d'origine (index alimenté par les lignes « moved to » de clamdscan/clamscan,
   côté service et côté scan local) ; les confirmations (suppression, vidage, pare-feu, journaux) passent par
   une modale dans le thème de l'application, plus jamais par `confirm()` natif.
+- **Service en locale C** — les sorties d'outils analysées (ufw, iptables, dpkg, apt…) sont toujours en anglais :
+  avec un système en français, systemd donnait au service `LANG=fr_CH.UTF-8` et « ufw status » répondait
+  « État : actif », d'où un pare-feu vu inactif après une activation réussie. Secours : présence des chaînes
+  `ufw-user-input` dans le noyau (même test que ufw-init).
 - **Activation du pare-feu vérifiée** — `ufw enable` répond « actif » même quand le chargement des règles échoue
   si `ufw.conf` disait déjà `ENABLED=yes` ; le service contrôle l'état réel, force disable → enable puis
   `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
@@ -311,7 +315,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.18.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.18.3_all.deb)
+[Télécharger clamav-antivirus_1.18.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.18.4_all.deb)
 
 ---
 
@@ -342,12 +346,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.18.3_all.deb`
+Résultat : `clamav-antivirus_1.18.4_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.18.3_all.deb
+sudo dpkg -i clamav-antivirus_1.18.4_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

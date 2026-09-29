@@ -118,6 +118,14 @@ ALERTS_MAX = 30
 SYSTEM_STATUS_MIN_INTERVAL = 300   # secondes entre deux relevés apt à la demande
 TEST_MODE = os.geteuid() != 0 and "CLAMAV_ANTIVIRUS_SOCKET" in os.environ
 
+# Sorties d'outils analysées en anglais quelle que soit la langue du système : systemd donne au service la locale
+# de /etc/default/locale (LANG=fr_CH.UTF-8 → « ufw status » répond « État : actif », « Partout »…) et l'analyse
+# croyait alors le pare-feu inactif après une activation réussie. Les messages propres au programme sont traduits
+# par l'interface, pas par la locale du service.
+os.environ["LC_ALL"] = "C.UTF-8"
+os.environ["LANG"] = "C.UTF-8"
+os.environ.pop("LANGUAGE", None)
+
 
 def now_iso():
     return datetime.now().isoformat(timespec="seconds")
@@ -1126,6 +1134,8 @@ def collect_security_status():
                 ufw["rules"] = parse_ufw_numbered(r2.stdout) if r2.returncode == 0 else []
             else:
                 ufw["error"] = (r.stderr or r.stdout or "").strip()[:200]
+            if not ufw["active"] and ufw["enabled"] and ufw_chains_loaded():
+                ufw["active"] = True                    # sortie de ufw non analysable : les chaînes font foi
             ufw["conflicts"] = firewall_conflicts()
             ufw["unit_enabled"] = unit_enabled("ufw")
         else:
@@ -1285,10 +1295,22 @@ UFW_RULE_COMMANDS = ("allow", "deny", "reject", "limit", "insert", "prepend")
 UFW_INIT = os.environ.get("CLAMAV_ANTIVIRUS_UFW_INIT") or next((p for p in ("/lib/ufw/ufw-init", "/usr/lib/ufw/ufw-init") if os.path.exists(p)), "/lib/ufw/ufw-init")
 
 
+def ufw_chains_loaded():
+    """Les chaînes UFW existent dans le noyau (même test que ufw-init : « Firewall already started »),
+    indépendant de la langue et de ufw.conf. Root seulement ; False si iptables est absent."""
+    if os.geteuid() != 0 and not os.environ.get("CLAMAV_ANTIVIRUS_UFW_INIT"):
+        return False
+    r = run_quiet(["iptables", "-L", "ufw-user-input", "-n"], timeout=15)
+    return r.returncode == 0
+
+
 def firewall_running():
-    """True si les chaînes UFW sont réellement chargées (« Status: active »), indépendamment de ufw.conf."""
+    """True si les chaînes UFW sont réellement chargées : « Status: active », ou chaînes présentes (secours si la
+    sortie de ufw n'est pas analysable)."""
     r = run_quiet(["ufw", "status"], timeout=20)
-    return r.returncode == 0 and bool(parse_ufw_verbose(r.stdout).get("active"))
+    if r.returncode == 0 and parse_ufw_verbose(r.stdout).get("active"):
+        return True
+    return ufw_chains_loaded()
 
 
 def firewall_conflicts():
