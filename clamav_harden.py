@@ -386,13 +386,23 @@ def revert_firewire(_prev):
 
 
 def apply_purge_rc(_ctx):
-    r = _run(["dpkg-query", "-W", "-f", "${Package}\t${db:Status-Abbrev}\n"])
+    # ${binary:Package} garde l'architecture (libvdpau1:i386) : sans elle, dpkg --purge visait l'amd64 installé
+    # dont d'autres paquets dépendent (« problèmes de dépendance ») alors que seul le reste i386 était à purger
+    r = _run(["dpkg-query", "-W", "-f", "${binary:Package}\t${db:Status-Abbrev}\n"])
     rc = [ln.split("\t")[0] for ln in (r.stdout or "").splitlines()
           if len(ln.split("\t")) > 1 and ln.split("\t")[1].strip().startswith("rc")]
     if not rc:
         return "aucun reste de configuration à purger", {}
-    _check(_run(["dpkg", "--purge"] + rc, timeout=900), "dpkg --purge")
-    return f"{len(rc)} paquet(s) purgé(s) : " + ", ".join(rc[:8]) + ("…" if len(rc) > 8 else ""), {}
+    r = _run(["dpkg", "--purge"] + rc, timeout=900)
+    if r.returncode == 0:
+        return f"{len(rc)} paquet(s) purgé(s) : " + ", ".join(rc[:8]) + ("…" if len(rc) > 8 else ""), {}
+    done, failed = [], []
+    for pkg in rc:                                   # un par un : un échec n'empêche pas les autres
+        rr = _run(["dpkg", "--purge", pkg], timeout=300)
+        (done if rr.returncode == 0 else failed).append(pkg)
+    if not done:
+        raise RuntimeError("dpkg --purge: " + ((r.stderr or r.stdout or "").strip()[-300:] or f"code {r.returncode}"))
+    return f"{len(done)} paquet(s) purgé(s) : " + ", ".join(done[:8]) + (f" ; non purgé(s) : {', '.join(failed[:6])}" if failed else ""), {}
 
 
 def _kernel_key(rel):

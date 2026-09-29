@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.19.1)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.19.2)
 
 ---
 
@@ -153,6 +153,11 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
   `ufw.service` au démarrage et signale un autre gestionnaire de pare-feu actif (firewalld, nftables avec
   `flush ruleset`, netfilter-persistent). Checklist et score recalculés après chaque action pare-feu/SSH.
+- **chkrootkit « bindshell » classé** — « Potential bindshell installed: infected ports: 145 » est vérifié sur
+  place : programme réellement à l'écoute (livré par un paquet ou une application de magasin → bénin), aucun
+  programme (détection passagère, ou dernier octet de l'adresse IP pris pour un port par la regex de chkrootkit →
+  bénin), programme hors dpkg → à vérifier. Ligne « WARNING » seule (artefact du mode verbeux) ignorée.
+  Durcissement « purger les restes » : architecture conservée (libvdpau1:i386) et purge paquet par paquet.
 - **Vue simple : jamais un rouge sans explication** — le sous-titre cite le motif exact du service (« intégrité
   compromise », « failles sans correctif »…) et une ligne « Intégrité du système » (rootkits, fichiers de paquets ou
   de l'application modifiés → rouge, recommandations Lynis → jaune) mène aux détails et au bouton « C'est normal ».
@@ -338,7 +343,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.19.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.19.1_all.deb)
+[Télécharger clamav-antivirus_1.19.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.19.2_all.deb)
 
 ---
 
@@ -369,12 +374,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.19.1_all.deb`
+Résultat : `clamav-antivirus_1.19.2_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.19.1_all.deb
+sudo dpkg -i clamav-antivirus_1.19.2_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

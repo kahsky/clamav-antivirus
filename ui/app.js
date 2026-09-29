@@ -598,8 +598,8 @@ function integrityHint(tool, text) {
 
 /** Verdict intégré du service pour un chemin caché (dpkg, nom connu, module npm/Python, inconnu). */
 function pathNoteHtml(n) {
-    const text = n.reason === 'dpkg' ? t('security.integrity.reason.dpkg', { package: escapeHtml(n.package || '') })
-        : t(`security.integrity.reason.${n.reason}`) !== `security.integrity.reason.${n.reason}` ? t(`security.integrity.reason.${n.reason}`) : t('security.integrity.reason.unknown');
+    const params = { package: escapeHtml(n.package || ''), path: escapeHtml(n.path || '') };
+    const text = t(`security.integrity.reason.${n.reason}`, params) !== `security.integrity.reason.${n.reason}` ? t(`security.integrity.reason.${n.reason}`, params) : t('security.integrity.reason.unknown');
     const fix = n.fix ? ` <button class="btn btn-secondary btn-sm" onclick="hardenApply(['${escapeJs(n.fix)}'])">${t('security.fix')}</button>` : '';
     return `<div class="path-note ${n.verdict === 'benign' ? 'benign' : 'unknown'}"><span class="path-note-icon">${n.verdict === 'benign' ? '✓' : '?'}</span><code>${escapeHtml(n.path)}</code> — ${text}${fix}</div>`;
 }

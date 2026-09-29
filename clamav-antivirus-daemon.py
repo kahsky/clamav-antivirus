@@ -2230,10 +2230,10 @@ def listening_ports():
             port = int(port)
         except ValueError:
             continue
-        proc = ""
-        m = re.search(r'users:\(\("([^"]+)"', line)
+        proc, pid = "", 0
+        m = re.search(r'users:\(\("([^"]+)",pid=(\d+)', line)
         if m:
-            proc = m.group(1)
+            proc, pid = m.group(1), int(m.group(2))
         if addr in ("0.0.0.0", "::", "*", ""):
             exposed = True
         else:
@@ -2242,7 +2242,7 @@ def listening_ports():
                 exposed = not (ip.is_loopback or ip.is_link_local)
             except ValueError:
                 exposed = False
-        ports.append({"proto": proto, "addr": addr or "*", "port": port, "process": proc,
+        ports.append({"proto": proto, "addr": addr or "*", "port": port, "process": proc, "pid": pid,
                       "service": KNOWN_PORTS.get(port, ""), "exposed": bool(exposed)})
     ports.sort(key=lambda p: (not p["exposed"], p["port"]))
     return ports
@@ -2865,7 +2865,7 @@ def parse_lynis_report(path="/var/log/lynis-report.dat", log_path="/var/log/lyni
     return rep
 
 
-CHK_RULES_VERSION = 4              # règles de classification intégrées ; un relevé plus ancien est refait au démarrage
+CHK_RULES_VERSION = 5              # règles de classification intégrées ; un relevé plus ancien est refait au démarrage
 CHK_NOISE = ("RTNETLINK answers", "ip: ", "ifconfig:", "ls: ", "find: ", "grep: ", "netstat:", "ss: ", "Usage:",
              "/usr/sbin/chkrootkit:", "chkrootkit:", "chkproc:", "chkdirs:", "chkutmp:", "eth", "wlan")   # messages d'outils, pas des constats
 CHK_NOISE = tuple(x for x in CHK_NOISE if x not in ("eth", "wlan"))
@@ -2940,7 +2940,9 @@ def parse_chkrootkit(out):
             prev_blank = True
             continue
         if s.startswith("ROOTDIR") or s.lower().startswith(("not tested", "not infected", "not found", "nothing found")) \
-                or s.startswith(CHK_NOISE):
+                or s.startswith(CHK_NOISE) or s == "WARNING":
+            # « WARNING » seul : fin de la ligne « Checking … » séparée par un message d'outil (mode verbeux) ;
+            # le constat détaillé « WARNING: … » suit toujours (_warn de chkrootkit)
             prev_blank = False
             continue
         m = re.match(r"^(?:Checking `[^']*'\.\.\.|Searching for .*?\.\.\.)\s*(.*)$", s)
@@ -3081,6 +3083,54 @@ def classify_promisc(lines):
     return notes
 
 
+def local_ip_octets():
+    """Derniers octets des adresses IPv4 locales : le test bindshell de chkrootkit (regex « [.:]PORT[^0-9.:] » sur
+    netstat/ss) confond une adresse 192.168.0.145 avec le port 145."""
+    r = run_quiet(["ip", "-4", "-o", "addr"], timeout=10)
+    return set(re.findall(r"inet \d+\.\d+\.\d+\.(\d+)/", r.stdout or ""))
+
+
+APP_STORE_PREFIXES = ("/app/", "/snap/", "/var/lib/flatpak/", "/var/lib/snapd/")
+
+
+def classify_bindshell(head):
+    """Verdict intégré pour « Potential bindshell installed: infected ports: … » : quel programme écoute vraiment
+    sur ces ports ? Livré par un paquet ou une application de magasin → bénin ; aucun processus (détection passagère,
+    ou dernier octet d'une adresse IP pris pour un port) → bénin ; programme hors dpkg → à vérifier."""
+    m = re.search(r"infected ports:\s*(.*)", head, flags=re.I)
+    if not m:
+        return None
+    ports = [int(p) for p in re.findall(r"\d+", m.group(1))]
+    if not ports:
+        return None
+    listeners = listening_ports()
+    octets = local_ip_octets()
+    notes, exes = [], {}
+    for port in ports:
+        ls = [p for p in listeners if p["port"] == port]
+        if not ls:
+            reason = "port_ip_octet" if str(port) in octets else "port_closed"
+            notes.append({"path": str(port), "verdict": "benign", "reason": reason})
+            continue
+        for p in ls:
+            exe = ""
+            try:
+                exe = os.readlink(f"/proc/{p['pid']}/exe").split(" (deleted)")[0] if p.get("pid") else ""
+            except OSError:
+                exe = ""
+            exes[(port, p["proto"], p["process"], exe)] = exe
+    owners = dpkg_owners([e for e in exes.values() if e])
+    for (port, proto, proc, exe), _ in exes.items():
+        path = f"{port}/{proto} {proc or '?'}" + (f" ({exe})" if exe else "")
+        if exe in owners:
+            notes.append({"path": path, "verdict": "benign", "reason": "port_dpkg", "package": owners[exe].split(", ")[0]})
+        elif exe.startswith(APP_STORE_PREFIXES):
+            notes.append({"path": path, "verdict": "benign", "reason": "port_app"})
+        else:
+            notes.append({"path": path, "verdict": "unknown", "reason": "port_unknown"})
+    return notes
+
+
 def chkrootkit_analysis(out):
     """Sortie de chkrootkit -q → {warnings, benign, notes} : les constats « suspicious files » dont tous les chemins
     sont bénins deviennent des faux positifs connus (non comptés) ; les autres gardent une note par chemin."""
@@ -3089,7 +3139,9 @@ def chkrootkit_analysis(out):
         lines = text.splitlines()
         head = lines[0].lower()
         verdicts = None
-        if len(lines) > 1:
+        if "bindshell" in head:
+            verdicts = classify_bindshell(lines[0])
+        elif len(lines) > 1:
             paths = [ln.strip() for ln in lines[1:] if ln.strip().startswith("/")]
             if "suspicious files" in head:
                 verdicts = classify_hidden_paths(paths)
