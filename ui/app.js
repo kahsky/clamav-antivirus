@@ -2427,11 +2427,13 @@ function simulateBackend(data) {
         case 'get_apps':
             reply('appsData', { inventory: { flatpak: [{ kind: 'flatpak', id: 'org.gimp.GIMP', name: 'GIMP', version: '3.2.7', origin: 'flathub', risky: ['filesystem'], key: 'flatpak:org.gimp.GIMP' }, { kind: 'flatpak', id: 'com.spotify.Client', name: 'Spotify', version: '1.2', origin: 'flathub', risky: [], key: 'flatpak:com.spotify.Client' }], snap: [{ kind: 'snap', id: 'code', name: 'code', version: '1.95', origin: 'vscode', risky: ['classic'], plugs: [], key: 'snap:code' }], appimage: [{ kind: 'appimage', id: '/home/user/Applications/Obsidian.AppImage', name: 'Obsidian.AppImage', path: '/home/user/Applications/Obsidian.AppImage', size: 1e8, risky: ['unsandboxed'], key: 'appimage:/home/user/Applications/Obsidian.AppImage' }] }, acknowledged: ['snap:code'] });
             break;
-        case 'timeshift_ignore':
-            if (lastStatus && lastStatus.settings) lastStatus.settings.timeshift_check = !data.ignore;
-            reply('operationResult', { status: 'success', message: t(data.ignore ? 'msg.timeshift_ignored' : 'msg.timeshift_unignored') });
-            if (typeof renderBackupTab === 'function') { renderBackupTab(); if (typeof renderSimple === 'function') renderSimple(); }
+        case 'ignore_check': case 'timeshift_ignore': {
+            const setting = data.setting || 'timeshift_check';
+            if (lastStatus) { lastStatus.settings = lastStatus.settings || {}; lastStatus.settings[setting] = !data.ignore; }
+            reply('operationResult', { status: 'success', message: t(setting === 'backup_check' ? (data.ignore ? 'msg.backup_ignored' : 'msg.backup_unignored') : (data.ignore ? 'msg.timeshift_ignored' : 'msg.timeshift_unignored')) });
+            if (typeof renderBackupTab === 'function') { renderBackupTab(); renderBackupWizard(); renderSimpleView(); }
             break;
+        }
         case 'timeshift_enable': case 'timeshift_disable':
             reply('operationResult', { status: 'success', message: t(data.action === 'timeshift_enable' ? 'msg.timeshift_enabled' : 'msg.timeshift_disabled') });
             break;
@@ -2673,8 +2675,36 @@ function timeshiftIgnored() {
     return !!(lastStatus && lastStatus.settings && lastStatus.settings.timeshift_check === false);
 }
 
-function timeshiftIgnore(on) {
-    sendToBackend({ action: 'timeshift_ignore', ignore: !!on });
+function ignoreCheck(setting, on) {
+    sendToBackend({ action: 'ignore_check', setting, ignore: !!on });
+}
+
+function timeshiftIgnore(on) { ignoreCheck('timeshift_check', on); }
+
+/** « Ignorer » la sauvegarde des fichiers (réglage backup_check) : sauvegardés autrement, ou rien à sauvegarder. */
+function backupIgnored() {
+    return !!(lastStatus && lastStatus.settings && lastStatus.settings.backup_check === false);
+}
+
+function backupUserInfo() {
+    const b = (lastStatus && lastStatus.backup) || {};
+    const u = b.user || (backupData && backupData.user) || { state: 'none' };
+    if (u.state === 'ok') return { state: 'ok', text: t('simple.backup.ok', { rel: formatRelative(u.last), dest: u.dest_label || '' }), u };
+    if (backupIgnored()) return { state: 'neutral', text: t('simple.backup.ignored'), u };
+    if (u.state === 'old') return { state: 'warn', text: t('simple.backup.old', { n: Math.round(u.age_days || 0) }), u };
+    if (u.state === 'missing') return { state: 'warn', text: t('simple.backup.missing'), u };
+    return { state: 'warn', text: t('simple.backup.none'), u };
+}
+
+function backupIgnoreBtn() {
+    const info = backupUserInfo();
+    if (backupIgnored()) return `<button class="btn btn-secondary btn-sm" onclick="ignoreCheck('backup_check', false)">${t('backup.user.unignore')}</button>`;
+    return info.state === 'ok' ? '' : `<button class="btn btn-secondary btn-sm" onclick="ignoreCheck('backup_check', true)" title="${escapeHtml(t('backup.user.ignore_hint'))}">${t('backup.user.ignore')}</button>`;
+}
+
+function backupUserStateHtml() {
+    const info = backupUserInfo();
+    return `<div class="ts-line backup-user-state"><span class="ts-dot ${info.state}"></span><span>${escapeHtml(info.text)}</span>${backupIgnored() ? ` <span class="scope-badge scope-user">${t('backup.user.ignored_badge')}</span>` : ''}${backupIgnoreBtn()}</div>`;
 }
 
 function timeshiftIgnoreBtn(d) {
@@ -2690,11 +2720,8 @@ function backupRowInfo() {
     const ts = timeshiftInfo(b.timeshift);
     const running = b.running || backupRunning;
     if (running) return { state: 'ok', value: t('simple.backup.running', { pct: Math.floor(running.pct || 0) }), action: null };
-    let state = 'ok', value;
-    if (u.state === 'ok') value = t('simple.backup.ok', { rel: formatRelative(u.last), dest: u.dest_label || '' });
-    else if (u.state === 'old') { state = 'warn'; value = t('simple.backup.old', { n: Math.round(u.age_days || 0) }); }
-    else if (u.state === 'missing') { state = 'warn'; value = t('simple.backup.missing'); }
-    else { state = 'warn'; value = t('simple.backup.none'); }
+    const info = backupUserInfo();
+    let state = info.state === 'warn' ? 'warn' : 'ok', value = info.text;   // fichiers ignorés → ne compte plus
     if ((ts.state === 'warn' || ts.state === 'danger') && timeshiftIgnored()) value += ` · ${t('simple.backup.timeshift_ignored')}`;
     else if (ts.state === 'warn' || ts.state === 'danger') { state = state === 'ok' ? 'warn' : state; value += ` · ${t('simple.backup.timeshift_off')}`; }
     else if (ts.state === 'ok') value += ` · ${t('simple.backup.timeshift_ok')}`;
@@ -2732,6 +2759,7 @@ function renderBackupWizard() {
             <div class="text-muted backup-progress-text">${Math.floor(running.pct || 0)} % · ${escapeHtml(running.text || '')}</div>
             <div class="log-actions-right"><button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'backup_cancel'})">${t('backup.progress.cancel')}</button></div></div>`;
     }
+    html += `<h4>${t('backup.user.title')}</h4>${backupUserStateHtml()}`;
     html += `<h4>${t('backup.wizard.drives')} <button class="btn btn-secondary btn-sm" onclick="loadBackup(true)">${t('system.refresh')}</button></h4>`;
     const drives = d.drives || [];
     if (!drives.length) html += `<div class="backup-empty">${t('backup.wizard.no_drive')}</div>`;
@@ -2775,6 +2803,7 @@ function renderBackupTab() {
     if (!d || !$('backupTimeshift')) return;
     const ts = timeshiftInfo(d.timeshift);
     const tsOn = !!(d.timeshift && d.timeshift.configured && (d.timeshift.schedule || []).length);
+    if ($('backupUserState')) $('backupUserState').innerHTML = backupUserStateHtml();
     const tsIgnored = timeshiftIgnored();
     $('backupTimeshift').innerHTML = `<div class="ts-line"><span class="ts-dot ${tsIgnored && ts.state !== 'ok' ? 'neutral' : ts.state}"></span><span>${escapeHtml(ts.text)}</span>${tsIgnored ? ` <span class="scope-badge scope-user">${t('backup.timeshift.ignored_badge')}</span>` : ''}</div>
         <p class="text-muted setting-note">${t('backup.timeshift.enable_hint')}</p>

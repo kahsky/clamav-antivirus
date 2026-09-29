@@ -2964,3 +2964,8 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 /* ── v1.18.3 : badge « ignoré par vous » de Timeshift sur une ligne ── */
 .ts-line { flex-wrap: wrap; }
 .ts-line .scope-badge { white-space: nowrap; margin-left: 8px; }
+
+/* ── v1.18.5 : sauvegarde des fichiers ignorable ── */
+.backup-user-state { margin: 2px 0 10px; }
+.backup-user-state .btn-sm { margin-left: auto; }
+.backup-wizard .backup-user-state { padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); }

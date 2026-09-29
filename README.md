@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.18.4)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.18.5)
 
 ---
 
@@ -153,6 +153,10 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
   `ufw.service` au démarrage et signale un autre gestionnaire de pare-feu actif (firewalld, nftables avec
   `flush ruleset`, netfilter-persistent). Checklist et score recalculés après chaque action pare-feu/SSH.
+- **Sauvegarde des fichiers ignorable** — la ligne « Sauvegardes » combine la sauvegarde de vos fichiers et
+  Timeshift ; chacune a son « Ignorer » / « Réafficher » (assistant de la vue simple, onglet Sauvegardes) :
+  réglages `backup_check` (fichiers) et `timeshift_check` (Timeshift), indépendants. Une ligne verte = tout ce qui
+  reste compté est en ordre.
 - **État de Timeshift ignorable** — bouton « Ignorer » (onglet Sauvegardes et assistant de la vue simple) pour les
   PC sans place pour les instantanés : réglage `timeshift_check`, plus de jaune ni d'alerte « espace faible »,
   badge « ignoré par vous » et « Réafficher ».
@@ -315,7 +319,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.18.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.18.4_all.deb)
+[Télécharger clamav-antivirus_1.18.5_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.18.5_all.deb)
 
 ---
 
@@ -346,12 +350,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.18.4_all.deb`
+Résultat : `clamav-antivirus_1.18.5_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.18.4_all.deb
+sudo dpkg -i clamav-antivirus_1.18.5_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

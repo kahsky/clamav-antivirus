@@ -5123,7 +5123,7 @@ class Daemon:
             raise_to("yellow", "monitor_inactive")
         # Disponibilité (CIA) : instantanés système Timeshift
         ts = self.state.get("timeshift") or {}
-        if self.settings.get("backup_check") and self.settings.get("timeshift_check") is not False and ts.get("checked_at"):
+        if self.settings.get("timeshift_check") is not False and ts.get("checked_at"):     # backup_check = fichiers seulement
             if not ts.get("installed") or not ts.get("configured") or not ts.get("schedule"):
                 raise_to("yellow", "timeshift_off")
             elif ts.get("last"):

@@ -2192,19 +2192,29 @@ class ClamAVAntivirusApp:
         self.act_backup_status({"refresh": True})
         GLib.timeout_add_seconds(90, lambda: self.act_backup_status({"refresh": True}) or False)
 
-    def act_timeshift_ignore(self, data):
-        """« Ignorer » l'état de Timeshift (PC sans place pour les instantanés) : réglage timeshift_check."""
+    IGNORABLE_CHECKS = {"timeshift_check": ("msg.timeshift_ignored", "msg.timeshift_unignored"),
+                        "backup_check": ("msg.backup_ignored", "msg.backup_unignored")}
+
+    def act_ignore_check(self, data):
+        """« Ignorer » / « Réafficher » un contrôle de disponibilité (état de Timeshift, sauvegarde des fichiers) :
+        réglage du service à False/True, sans mot de passe sauf en mode famille."""
+        setting = str(data.get("setting") or "")
+        if setting not in self.IGNORABLE_CHECKS:
+            return
         ignore = bool(data.get("ignore", True))
+        keys = self.IGNORABLE_CHECKS[setting]
 
         def done(resp):
             if resp.get("ok"):
-                self.send_to_js("operationResult", {"status": "success",
-                                                    "message": self.T("msg.timeshift_ignored" if ignore else "msg.timeshift_unignored")})
+                self.send_to_js("operationResult", {"status": "success", "message": self.T(keys[0] if ignore else keys[1])})
                 self.refresh_daemon_status_now()
             else:
                 self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
             return False
-        self.run_admin("set_settings", {"settings": {"timeshift_check": not ignore}}, done)
+        self.run_admin("set_settings", {"settings": {setting: not ignore}}, done)
+
+    def act_timeshift_ignore(self, data):
+        self.act_ignore_check({"setting": "timeshift_check", "ignore": data.get("ignore", True)})
 
     def refresh_daemon_status_now(self):
         """Relit le statut du service (réglages, état global) et rafraîchit la vue et l'onglet Sauvegardes."""
