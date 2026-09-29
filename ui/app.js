@@ -2785,9 +2785,9 @@ function renderBackupWizard() {
     html += `<h4>${t('backup.wizard.timeshift')}</h4><div class="backup-choice"><div class="backup-choice-icon"><span class="ts-dot ${ts.state}"></span></div>
         <div class="backup-choice-text"><span class="backup-choice-title">${escapeHtml(ts.text)}</span><span class="backup-choice-sub">${t('backup.wizard.timeshift_hint')}</span></div>
         ${!d.timeshift_installed ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'install_package', name:'timeshift'})">${t('backup.install_timeshift')}</button>`
-          : (d.timeshift && d.timeshift.configured && (d.timeshift.schedule || []).length) ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'backup_open_timeshift'})">${t('backup.open_timeshift')}</button>`
+          : (d.timeshift && d.timeshift.configured && (d.timeshift.schedule || []).length) ? `${d.timeshift.managed ? '' : `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'timeshift_enable'})" title="${escapeHtml(t('backup.timeshift.auto_hint', { sched: tsSchedLabel(d.timeshift) }))}">${t('backup.timeshift.auto')}</button>`}<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'backup_open_timeshift'})">${t('backup.open_timeshift')}</button>`
           : `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'timeshift_enable'})">${t('backup.timeshift.enable_simple')}</button>`}${timeshiftIgnoreBtn(d)}</div>
-        <p class="text-muted">${t('backup.timeshift.enable_hint')}</p>`;
+        <p class="text-muted">${(d.timeshift && d.timeshift.configured && (d.timeshift.schedule || []).length && !d.timeshift.managed) ? t('backup.timeshift.auto_hint', { sched: tsSchedLabel(d.timeshift) }) : t('backup.timeshift.enable_hint')}</p>`;
     box.innerHTML = html;
 }
 
@@ -2805,10 +2805,10 @@ function renderBackupTab() {
     const tsOn = !!(d.timeshift && d.timeshift.configured && (d.timeshift.schedule || []).length);
     if ($('backupUserState')) $('backupUserState').innerHTML = backupUserStateHtml();
     const tsIgnored = timeshiftIgnored();
-    $('backupTimeshift').innerHTML = `<div class="ts-line"><span class="ts-dot ${tsIgnored && ts.state !== 'ok' ? 'neutral' : ts.state}"></span><span>${escapeHtml(ts.text)}</span>${tsIgnored ? ` <span class="scope-badge scope-user">${t('backup.timeshift.ignored_badge')}</span>` : ''}</div>
-        <p class="text-muted setting-note">${t('backup.timeshift.enable_hint')}</p>
+    $('backupTimeshift').innerHTML = `<div class="ts-line"><span class="ts-dot ${tsIgnored && ts.state !== 'ok' ? 'neutral' : ts.state}"></span><span>${escapeHtml(ts.text)}</span>${tsOn && d.timeshift.managed ? ` <span class="scope-badge scope-user">${t('backup.timeshift.managed_badge')}</span>` : ''}${tsIgnored ? ` <span class="scope-badge scope-user">${t('backup.timeshift.ignored_badge')}</span>` : ''}</div>
+        <p class="text-muted setting-note">${tsOn && !d.timeshift.managed ? t('backup.timeshift.auto_hint', { sched: tsSchedLabel(d.timeshift) }) : t('backup.timeshift.enable_hint')}</p>
         <div class="fw-actions">${!d.timeshift_installed ? `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'install_package', name:'timeshift'})">${t('backup.install_timeshift')}</button>`
-            : tsOn ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'timeshift_disable'})">${t('backup.timeshift.disable')}</button>`
+            : tsOn ? `${d.timeshift.managed ? '' : `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'timeshift_enable'})" title="${escapeHtml(t('backup.timeshift.auto_hint', { sched: tsSchedLabel(d.timeshift) }))}">${t('backup.timeshift.auto')}</button>`}<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'timeshift_disable'})">${t('backup.timeshift.disable')}</button>`
                    : `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'timeshift_enable'})">${t('backup.timeshift.enable')}</button>`}${timeshiftIgnoreBtn(d)}</div>`;
     if (document.activeElement !== $('backupSources')) $('backupSources').value = (d.sources || []).join('\n');
     if (document.activeElement !== $('backupExcludes')) $('backupExcludes').value = (d.excludes || []).join('\n');

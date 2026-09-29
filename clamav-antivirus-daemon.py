@@ -1103,6 +1103,11 @@ def collect_timeshift_status(list_snapshots=True):
     free, _path = timeshift_free_bytes(cfg)
     ts["free_bytes"] = free
     ts["low_space"] = free is not None and free < TIMESHIFT_MIN_FREE
+    try:
+        with open(TIMESHIFT_CRON, encoding="utf-8") as f:
+            ts["managed"] = "df " in f.read()          # planification posée par l'application (garde-fou d'espace)
+    except OSError:
+        ts["managed"] = False
     if ts["configured"] and list_snapshots and os.geteuid() == 0:
         r = run_quiet(["timeshift", "--list", "--scripted"], timeout=120)
         names = sorted(set(re.findall(r"\b(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\b", (r.stdout or ""))))
@@ -5156,9 +5161,9 @@ class Daemon:
         if cmd == "firewall_set":
             return not req.get("enabled")
         if cmd == "firewall_profile":
-            # L'utilisateur sait sur quel réseau il est : le service applique le profil sans mot de passe
-            # (sauf en mode famille, où les actions sensibles restent réservées à un administrateur).
-            return bool(self.settings.get("family_mode"))
+            # L'utilisateur sait sur quel réseau il est : le service applique le profil sans mot de passe, même en
+            # mode famille et pour un compte sans droits d'administration (décision 2026-09-29).
+            return False
         if cmd in ("timeshift_disable", "harden_revert"):
             return True
         if cmd == "ssh_set":
