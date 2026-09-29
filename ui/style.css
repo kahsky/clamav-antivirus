@@ -2961,3 +2961,6 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .ports-list .port-item .port-actions { margin-left: auto; display: flex; gap: 6px; }
 .ports-list .port-item .port-actions .btn-sm { margin-left: 0; }
 .port-item.acked { opacity: 0.8; border-color: rgba(148,163,184,0.3); }
+/* ── v1.18.3 : badge « ignoré par vous » de Timeshift sur une ligne ── */
+.ts-line { flex-wrap: wrap; }
+.ts-line .scope-badge { white-space: nowrap; margin-left: 8px; }

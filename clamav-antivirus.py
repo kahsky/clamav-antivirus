@@ -1589,7 +1589,7 @@ class ClamAVAntivirusApp:
                "nothing_phased": "msg.nothing_phased", "nothing_to_upgrade": "msg.nothing_to_upgrade",
                "busy_upgrade": "msg.system_upgrading", "busy_timeshift": "msg.timeshift_checking",
                "auto_updates_unavailable": "msg.auto_updates_unavailable", "busy_hardening": "msg.harden_busy",
-               "nothing_to_harden": "msg.harden_nothing"}.get(err)
+               "nothing_to_harden": "msg.harden_nothing", "firewall_not_active": "msg.firewall_not_active"}.get(err)
         if key:
             return self.T(key, path=resp.get("path", ""), detail=str(resp.get("detail") or "")[:200])
         return err or self.T("msg.daemon_unavailable")
@@ -2191,6 +2191,30 @@ class ClamAVAntivirusApp:
             self.send_to_js("operationResult", {"status": "error", "message": T(key) if key else self.daemon_error(resp)})
         self.act_backup_status({"refresh": True})
         GLib.timeout_add_seconds(90, lambda: self.act_backup_status({"refresh": True}) or False)
+
+    def act_timeshift_ignore(self, data):
+        """« Ignorer » l'état de Timeshift (PC sans place pour les instantanés) : réglage timeshift_check."""
+        ignore = bool(data.get("ignore", True))
+
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success",
+                                                    "message": self.T("msg.timeshift_ignored" if ignore else "msg.timeshift_unignored")})
+                self.refresh_daemon_status_now()
+            else:
+                self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("set_settings", {"settings": {"timeshift_check": not ignore}}, done)
+
+    def refresh_daemon_status_now(self):
+        """Relit le statut du service (réglages, état global) et rafraîchit la vue et l'onglet Sauvegardes."""
+        def worker():
+            resp = DaemonClient.request("status")
+            if resp.get("ok"):
+                self.last_daemon_status = resp
+            GLib.idle_add(self.send_status)
+            GLib.idle_add(self.act_backup_status, {})
+        threading.Thread(target=worker, daemon=True).start()
 
     def act_timeshift_disable(self, _data):
         def done(resp):

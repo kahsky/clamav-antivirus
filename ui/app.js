@@ -338,7 +338,7 @@ function onTelemetryPreview(data) {
 
 const TELEMETRY_EXAMPLE_FALLBACK = JSON.stringify({
     install_id: '5f0f79d2…', version: '1.17.0', os: 'Linux Mint 22.3', kernel: '7.0.0-34-generic', arch: 'x86_64',
-    settings: { family_mode: false, firewall_profile: 'home', auto_response: true, connection_monitor: true, auto_harden: false, scan_cache_days: 30 },
+    settings: { family_mode: false, firewall_profile: 'home', auto_response: true, connection_monitor: true, auto_harden: false, scan_cache_days: 30, backup_check: true, timeshift_check: true },
     checklist: { score: 92, grade: 'A', fail: [], warn: ['open_vulns'] },
     alerts_7d: { connection: 3, burst: 1 },
     trusted_programs: ['/home/~/.local/bin/mon-script'],
@@ -999,6 +999,9 @@ function renderSecurity(available = true) {
             ? t('firewall.summary_on', { incoming: t(`firewall.policy.${ufw.default_incoming || 'deny'}`), outgoing: t(`firewall.policy.${ufw.default_outgoing || 'allow'}`), n: (ufw.rules || []).length })
             : t('firewall.summary_off');
         if (ufw.error === 'root_required') $('fwSummary').textContent += ` — ${t('firewall.root_required')}`;
+        else if (!ufw.active && ufw.enabled) $('fwSummary').textContent += ` — ${t('firewall.not_loaded')}${ufw.error ? ` (${ufw.error})` : ''}`;
+        else if (!ufw.active && ufw.error) $('fwSummary').textContent += ` — ${ufw.error}`;
+        if ((ufw.conflicts || []).length) $('fwSummary').textContent += ` — ${t('firewall.conflicts', { names: ufw.conflicts.join(', ') })}`;
         if (ufw.default_incoming) $('fwDefaultIn').value = ufw.default_incoming;
         if (ufw.default_outgoing) $('fwDefaultOut').value = ufw.default_outgoing;
     }
@@ -1151,12 +1154,13 @@ function onSettingsData(data) {
     }
     $('setIntegrityWeekly').checked = sys.integrity_weekly !== false;
     if ($('setBackupCheck')) $('setBackupCheck').checked = sys.backup_check !== false;
+    if ($('setTimeshiftCheck')) $('setTimeshiftCheck').checked = sys.timeshift_check !== false;
     if ($('setTelemetry')) $('setTelemetry').checked = !!sys.telemetry;
     if ($('setAutoHarden')) $('setAutoHarden').checked = !!sys.auto_harden;
     if ($('setScanCacheDays')) $('setScanCacheDays').value = sys.scan_cache_days ?? 30;
     if ($('telemetryLast')) $('telemetryLast').textContent = data.telemetry_sent ? t('settings.telemetry.last', { rel: formatRelative(data.telemetry_sent) }) : '';
     const locked = new Set(data.locked || []);
-    const map = { setUploadMonitor: 'upload_monitor', setUploadGb: 'upload_alert_gb', setUploadHours: 'upload_window_hours', setBurstMonitor: 'burst_monitor', setBurstInfo: 'burst_info_threshold', setBurstDanger: 'burst_danger_threshold', setBurstWindow: 'burst_window_sec', setUsbAuto: 'usb_auto_scan', setUsbMax: 'usb_auto_scan_max_gib', setUpdateTime: 'update_hour', setFamilyMode: 'family_mode', setAutoResponse: 'auto_response', setConnectionMonitor: 'connection_monitor', setGeoip: 'geoip_lookup', setGeoipKey: 'geoip_api_key', setIntegrityWeekly: 'integrity_weekly', setIntegrityDay: 'integrity_day', setIntegrityHour: 'integrity_hour', setAppUpdateCheck: 'app_update_check', setAppUpdateAuto: 'app_update_auto', setWeekly: 'weekly_scan', setWeeklyDay: 'weekly_scan_day', setWeeklyHour: 'weekly_scan_hour', setBackupCheck: 'backup_check', setTelemetry: 'telemetry', setAutoHarden: 'auto_harden', setScanCacheDays: 'scan_cache_days' };
+    const map = { setUploadMonitor: 'upload_monitor', setUploadGb: 'upload_alert_gb', setUploadHours: 'upload_window_hours', setBurstMonitor: 'burst_monitor', setBurstInfo: 'burst_info_threshold', setBurstDanger: 'burst_danger_threshold', setBurstWindow: 'burst_window_sec', setUsbAuto: 'usb_auto_scan', setUsbMax: 'usb_auto_scan_max_gib', setUpdateTime: 'update_hour', setFamilyMode: 'family_mode', setAutoResponse: 'auto_response', setConnectionMonitor: 'connection_monitor', setGeoip: 'geoip_lookup', setGeoipKey: 'geoip_api_key', setIntegrityWeekly: 'integrity_weekly', setIntegrityDay: 'integrity_day', setIntegrityHour: 'integrity_hour', setAppUpdateCheck: 'app_update_check', setAppUpdateAuto: 'app_update_auto', setWeekly: 'weekly_scan', setWeeklyDay: 'weekly_scan_day', setWeeklyHour: 'weekly_scan_hour', setBackupCheck: 'backup_check', setTimeshiftCheck: 'timeshift_check', setTelemetry: 'telemetry', setAutoHarden: 'auto_harden', setScanCacheDays: 'scan_cache_days' };
     Object.entries(map).forEach(([id, key]) => { const el = $(id); if (!el) return; const row = el.closest('.setting-row'); if (locked.has(key)) { el.disabled = true; if (row) { row.classList.add('locked'); row.title = t('settings.locked_note'); } } else if (row) { row.classList.remove('locked'); row.title = ''; } });
     const banner = $('policyBanner');
     if (banner) { banner.hidden = !data.policy; if (data.policy) banner.textContent = t('settings.policy.banner', { name: data.policy.name || '—', signed: data.policy.signed ? t('settings.policy.signed') : '', n: (data.locked || []).length }) + (data.allowlist && data.allowlist.version ? ' · ' + t('settings.allowlist', { version: data.allowlist.version, n: data.allowlist.patterns || 0 }) : ''); }
@@ -1198,6 +1202,7 @@ function saveSettings() {
         geoip_api_key: $('setGeoipKey') ? $('setGeoipKey').value.trim() : '',
         integrity_weekly: $('setIntegrityWeekly').checked,
         backup_check: $('setBackupCheck') ? $('setBackupCheck').checked : true,
+        timeshift_check: $('setTimeshiftCheck') ? $('setTimeshiftCheck').checked : true,
         telemetry: $('setTelemetry') ? $('setTelemetry').checked : false,
         auto_harden: $('setAutoHarden') ? $('setAutoHarden').checked : false,
         scan_cache_days: $('setScanCacheDays') ? Math.max(0, Math.min(365, parseInt($('setScanCacheDays').value, 10) || 0)) : 30,
@@ -2422,6 +2427,11 @@ function simulateBackend(data) {
         case 'get_apps':
             reply('appsData', { inventory: { flatpak: [{ kind: 'flatpak', id: 'org.gimp.GIMP', name: 'GIMP', version: '3.2.7', origin: 'flathub', risky: ['filesystem'], key: 'flatpak:org.gimp.GIMP' }, { kind: 'flatpak', id: 'com.spotify.Client', name: 'Spotify', version: '1.2', origin: 'flathub', risky: [], key: 'flatpak:com.spotify.Client' }], snap: [{ kind: 'snap', id: 'code', name: 'code', version: '1.95', origin: 'vscode', risky: ['classic'], plugs: [], key: 'snap:code' }], appimage: [{ kind: 'appimage', id: '/home/user/Applications/Obsidian.AppImage', name: 'Obsidian.AppImage', path: '/home/user/Applications/Obsidian.AppImage', size: 1e8, risky: ['unsandboxed'], key: 'appimage:/home/user/Applications/Obsidian.AppImage' }] }, acknowledged: ['snap:code'] });
             break;
+        case 'timeshift_ignore':
+            if (lastStatus && lastStatus.settings) lastStatus.settings.timeshift_check = !data.ignore;
+            reply('operationResult', { status: 'success', message: t(data.ignore ? 'msg.timeshift_ignored' : 'msg.timeshift_unignored') });
+            if (typeof renderBackupTab === 'function') { renderBackupTab(); if (typeof renderSimple === 'function') renderSimple(); }
+            break;
         case 'timeshift_enable': case 'timeshift_disable':
             reply('operationResult', { status: 'success', message: t(data.action === 'timeshift_enable' ? 'msg.timeshift_enabled' : 'msg.timeshift_disabled') });
             break;
@@ -2658,6 +2668,21 @@ function timeshiftInfo(ts) {
     return { state: 'ok', text: t('backup.timeshift.ok', { n: ts.snapshots, rel: formatRelative(ts.last), sched }) };
 }
 
+/** « Ignorer » l'état de Timeshift (réglage timeshift_check du service) : PC sans place pour les instantanés. */
+function timeshiftIgnored() {
+    return !!(lastStatus && lastStatus.settings && lastStatus.settings.timeshift_check === false);
+}
+
+function timeshiftIgnore(on) {
+    sendToBackend({ action: 'timeshift_ignore', ignore: !!on });
+}
+
+function timeshiftIgnoreBtn(d) {
+    const tsOn = !!(d && d.timeshift && d.timeshift.configured && (d.timeshift.schedule || []).length);
+    if (timeshiftIgnored()) return `<button class="btn btn-secondary btn-sm" onclick="timeshiftIgnore(false)">${t('backup.timeshift.unignore')}</button>`;
+    return tsOn ? '' : `<button class="btn btn-secondary btn-sm" onclick="timeshiftIgnore(true)" title="${escapeHtml(t('backup.timeshift.ignore_hint'))}">${t('backup.timeshift.ignore')}</button>`;
+}
+
 /** Ligne « Sauvegardes » de la vue simple. */
 function backupRowInfo() {
     const b = (lastStatus && lastStatus.backup) || {};
@@ -2670,7 +2695,8 @@ function backupRowInfo() {
     else if (u.state === 'old') { state = 'warn'; value = t('simple.backup.old', { n: Math.round(u.age_days || 0) }); }
     else if (u.state === 'missing') { state = 'warn'; value = t('simple.backup.missing'); }
     else { state = 'warn'; value = t('simple.backup.none'); }
-    if (ts.state === 'warn' || ts.state === 'danger') { state = state === 'ok' ? 'warn' : state; value += ` · ${t('simple.backup.timeshift_off')}`; }
+    if ((ts.state === 'warn' || ts.state === 'danger') && timeshiftIgnored()) value += ` · ${t('simple.backup.timeshift_ignored')}`;
+    else if (ts.state === 'warn' || ts.state === 'danger') { state = state === 'ok' ? 'warn' : state; value += ` · ${t('simple.backup.timeshift_off')}`; }
     else if (ts.state === 'ok') value += ` · ${t('simple.backup.timeshift_ok')}`;
     return { state, value, action: { label: t('simple.backup.btn'), fn: 'openBackupWizard()' } };
 }
@@ -2732,7 +2758,7 @@ function renderBackupWizard() {
         <div class="backup-choice-text"><span class="backup-choice-title">${escapeHtml(ts.text)}</span><span class="backup-choice-sub">${t('backup.wizard.timeshift_hint')}</span></div>
         ${!d.timeshift_installed ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'install_package', name:'timeshift'})">${t('backup.install_timeshift')}</button>`
           : (d.timeshift && d.timeshift.configured && (d.timeshift.schedule || []).length) ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'backup_open_timeshift'})">${t('backup.open_timeshift')}</button>`
-          : `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'timeshift_enable'})">${t('backup.timeshift.enable_simple')}</button>`}</div>
+          : `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'timeshift_enable'})">${t('backup.timeshift.enable_simple')}</button>`}${timeshiftIgnoreBtn(d)}</div>
         <p class="text-muted">${t('backup.timeshift.enable_hint')}</p>`;
     box.innerHTML = html;
 }
@@ -2749,11 +2775,12 @@ function renderBackupTab() {
     if (!d || !$('backupTimeshift')) return;
     const ts = timeshiftInfo(d.timeshift);
     const tsOn = !!(d.timeshift && d.timeshift.configured && (d.timeshift.schedule || []).length);
-    $('backupTimeshift').innerHTML = `<div class="ts-line"><span class="ts-dot ${ts.state}"></span><span>${escapeHtml(ts.text)}</span></div>
+    const tsIgnored = timeshiftIgnored();
+    $('backupTimeshift').innerHTML = `<div class="ts-line"><span class="ts-dot ${tsIgnored && ts.state !== 'ok' ? 'neutral' : ts.state}"></span><span>${escapeHtml(ts.text)}</span>${tsIgnored ? ` <span class="scope-badge scope-user">${t('backup.timeshift.ignored_badge')}</span>` : ''}</div>
         <p class="text-muted setting-note">${t('backup.timeshift.enable_hint')}</p>
         <div class="fw-actions">${!d.timeshift_installed ? `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'install_package', name:'timeshift'})">${t('backup.install_timeshift')}</button>`
             : tsOn ? `<button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'timeshift_disable'})">${t('backup.timeshift.disable')}</button>`
-                   : `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'timeshift_enable'})">${t('backup.timeshift.enable')}</button>`}</div>`;
+                   : `<button class="btn btn-primary btn-sm" onclick="sendToBackend({action:'timeshift_enable'})">${t('backup.timeshift.enable')}</button>`}${timeshiftIgnoreBtn(d)}</div>`;
     if (document.activeElement !== $('backupSources')) $('backupSources').value = (d.sources || []).join('\n');
     if (document.activeElement !== $('backupExcludes')) $('backupExcludes').value = (d.excludes || []).join('\n');
     $('backupRetention').value = d.retention || 8;

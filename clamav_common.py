@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.18.1"
+VERSION = "1.18.3"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -99,6 +99,8 @@ DEFAULT_SETTINGS = {
     "geoip_api_key": "",
     # Disponibilité : vérifier les sauvegardes (Timeshift + fichiers de l'utilisateur) dans l'état global
     "backup_check": True,
+    # État de Timeshift compté dans l'état global (False = « Ignorer » : PC sans place pour les instantanés)
+    "timeshift_check": True,
     # Profil réseau du pare-feu : "" (non choisi), "home", "public", "enterprise"
     "firewall_profile": "",
     # Télémétrie anonyme (opt-in) : version, système, score, faux positifs approuvés, sans identifiant personnel

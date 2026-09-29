@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.18.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.18.3 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -1171,6 +1171,7 @@
                     <p class="text-muted setting-note" id="geoipStats"></p>
                     <p class="text-muted setting-note" data-i18n="settings.geoip.note">Sans clé : service gratuit ip-api.com (HTTP, 15 requêtes groupées par minute, 100 adresses par requête, usage non commercial). Avec une clé Pro : HTTPS et sans limite. Chaque adresse n'est demandée qu'une fois par 24 h et le cache survit au redémarrage.</p>
                     <label class="setting-row toggle"><span data-i18n="settings.backup_check">Vérifier les sauvegardes (Timeshift et fichiers) dans l'état global</span><input type="checkbox" id="setBackupCheck"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.timeshift_check">Compter l'état de Timeshift dans l'état global (décochez sur un PC sans place pour les instantanés)</span><input type="checkbox" id="setTimeshiftCheck"></label>
                     <label class="setting-row toggle"><span data-i18n="settings.telemetry">Télémétrie anonyme (opt-in) : aider Dukiwi à réduire les faux positifs</span><input type="checkbox" id="setTelemetry"></label>
                     <p class="text-muted setting-note" data-i18n="settings.telemetry.note">Une fois par semaine, si activé : version, système, réglages, score de la checklist, types d'alertes, programmes et entrées de démarrage approuvés (chemins anonymisés), avertissements d'intégrité approuvés et classés, mesures du dernier scan (durée, fichiers, cache, moteur), réglages de durcissement appliqués, paquets avec failles hautes, compteurs de failles. Jamais de nom d'utilisateur, d'ordinateur, de contenu de fichier ni d'adresse IP en clair. Sert à la liste blanche centrale signée et aux règles intégrées de faux positifs.</p>
                     <p class="text-muted setting-note" id="telemetryLast"></p>

@@ -1126,6 +1126,8 @@ def collect_security_status():
                 ufw["rules"] = parse_ufw_numbered(r2.stdout) if r2.returncode == 0 else []
             else:
                 ufw["error"] = (r.stderr or r.stdout or "").strip()[:200]
+            ufw["conflicts"] = firewall_conflicts()
+            ufw["unit_enabled"] = unit_enabled("ufw")
         else:
             ufw["error"] = "root_required"
     ssh_installed = shutil.which("sshd") is not None or os.path.exists("/usr/sbin/sshd")
@@ -1278,6 +1280,75 @@ def network_identity():
 
 
 UFW_RULE_COMMANDS = ("allow", "deny", "reject", "limit", "insert", "prepend")
+
+
+UFW_INIT = os.environ.get("CLAMAV_ANTIVIRUS_UFW_INIT") or next((p for p in ("/lib/ufw/ufw-init", "/usr/lib/ufw/ufw-init") if os.path.exists(p)), "/lib/ufw/ufw-init")
+
+
+def firewall_running():
+    """True si les chaînes UFW sont réellement chargées (« Status: active »), indépendamment de ufw.conf."""
+    r = run_quiet(["ufw", "status"], timeout=20)
+    return r.returncode == 0 and bool(parse_ufw_verbose(r.stdout).get("active"))
+
+
+def firewall_conflicts():
+    """Autres gestionnaires de pare-feu susceptibles d'effacer les règles UFW (au démarrage ou à la volée)."""
+    out = []
+    if systemd_is_active("firewalld"):
+        out.append("firewalld")
+    if systemd_is_active("nftables"):
+        try:
+            with open("/etc/nftables.conf", encoding="utf-8", errors="replace") as f:
+                if "flush ruleset" in f.read():
+                    out.append("nftables")
+        except OSError:
+            out.append("nftables")
+    if systemd_is_active("netfilter-persistent"):
+        out.append("netfilter-persistent")
+    return out
+
+
+def firewall_unit_persist(log_fn):
+    """ufw.service démasquée, activée et démarrée : les règles sont rechargées au démarrage et
+    « systemctl is-active ufw » reflète l'état réel."""
+    if TEST_MODE and not os.environ.get("CLAMAV_ANTIVIRUS_UFW_INIT"):
+        return
+    r = run_quiet(["systemctl", "is-enabled", "ufw"], timeout=10)
+    st = (r.stdout or "").strip()
+    if st == "masked":
+        run_quiet(["systemctl", "unmask", "ufw"], timeout=30)
+    if st != "enabled":
+        run_quiet(["systemctl", "enable", "ufw"], timeout=30)
+        log_fn(f"ufw.service was {st or 'unknown'}: enabled at boot")
+    if not systemd_is_active("ufw"):
+        run_quiet(["systemctl", "start", "ufw"], timeout=60)       # ufw-init start quiet : sans effet si déjà chargé
+
+
+def firewall_enable_checked(ufw, log_fn):
+    """« Activer le pare-feu » vérifié. `ufw enable` répond 0 avec « Firewall is active » même quand ufw-init échoue,
+    dès que ufw.conf disait déjà ENABLED=yes (frontend.set_enabled ne remonte l'erreur que si l'état a changé) :
+    le pare-feu paraît activé mais reste inactif. On contrôle donc l'état réel ; s'il n'est pas chargé, on force
+    disable → enable (l'erreur réelle apparaît), puis ufw-init start, et on rend l'erreur à l'utilisateur."""
+    ok, text = ufw("enable")
+    if ok and firewall_running():
+        firewall_unit_persist(log_fn)
+        return True, text
+    ufw("disable")
+    ok2, text2 = ufw("enable")
+    if ok2 and firewall_running():
+        firewall_unit_persist(log_fn)
+        return True, text2
+    init = run_quiet([UFW_INIT, "start"], timeout=60)
+    init_out = ((init.stdout or "") + (init.stderr or "")).strip()
+    if firewall_running():
+        firewall_unit_persist(log_fn)
+        log_fn(f"firewall loaded by ufw-init after a silent ufw enable: {init_out[:160]}")
+        return True, init_out or "loaded by ufw-init"
+    parts = [x.strip() for x in ((text2 if not ok2 else ""), init_out) if x and x.strip()]
+    detail = " | ".join(dict.fromkeys(parts)) or "firewall not active after enable"
+    conflicts = firewall_conflicts()
+    log_fn(f"firewall enable failed: {detail[:300]}" + (f" (conflicts: {', '.join(conflicts)})" if conflicts else ""))
+    return False, detail[:300]
 
 
 def ufw_args(args):
@@ -4190,8 +4261,9 @@ class Daemon:
         free_gb = round((ts.get("free_bytes") or 0) / 1e9, 1)
         self.state.update(timeshift_suspended={"at": now_iso(), "free_bytes": ts.get("free_bytes")})
         self.write_log(f"timeshift schedules suspended: only {free_gb} GB free")
-        self.publish_alert({"kind": "timeshift", "severity": "warn", "time": now_iso(), "title": "low_space",
-                            "detail": f"{free_gb} GB free", "free_gb": free_gb})
+        if self.settings.get("timeshift_check") is not False:          # état Timeshift ignoré par l'utilisateur : pas d'alerte
+            self.publish_alert({"kind": "timeshift", "severity": "warn", "time": now_iso(), "title": "low_space",
+                                "detail": f"{free_gb} GB free", "free_gb": free_gb})
         new = collect_timeshift_status(list_snapshots=False)
         new["snapshots"], new["last"] = ts.get("snapshots"), ts.get("last")
         return new
@@ -4526,6 +4598,20 @@ class Daemon:
         self.broadcast({"event": "app_update", "update": info})
         self.refresh_overall()
         return info
+
+    def refresh_checklist_async(self):
+        """Checklist et score recalculés en arrière-plan (ss, sudoers… quelques secondes) après une action de sécurité."""
+        th = getattr(self, "_checklist_thread", None)
+        if th and th.is_alive():
+            return
+
+        def run():
+            try:
+                self.refresh_checklist()
+            except Exception as e:  # noqa: BLE001
+                log(f"Checklist : {e}")
+        self._checklist_thread = threading.Thread(target=run, daemon=True)
+        self._checklist_thread.start()
 
     def refresh_checklist(self):
         checklist = collect_checklist(self)
@@ -4909,7 +4995,7 @@ class Daemon:
         vulns = (self.state.get("vulns") or {}).get("counts") or {}
         payload = {
             "install_id": install_id, "version": VERSION, "os": pretty, "kernel": os.uname().release, "arch": os.uname().machine,
-            "settings": {k: self.settings.get(k) for k in ("family_mode", "firewall_profile", "backup_check", "auto_response", "connection_monitor",
+            "settings": {k: self.settings.get(k) for k in ("family_mode", "firewall_profile", "backup_check", "timeshift_check", "auto_response", "connection_monitor",
                                                              "auto_harden", "scan_cache_days", "integrity_weekly", "weekly_scan")},
             "checklist": {"score": checklist.get("score"), "grade": checklist.get("grade"),
                           "fail": [i["key"] for i in checklist.get("items", []) if i.get("status") == "fail"],
@@ -5015,7 +5101,7 @@ class Daemon:
             raise_to("yellow", "monitor_inactive")
         # Disponibilité (CIA) : instantanés système Timeshift
         ts = self.state.get("timeshift") or {}
-        if self.settings.get("backup_check") and ts.get("checked_at"):
+        if self.settings.get("backup_check") and self.settings.get("timeshift_check") is not False and ts.get("checked_at"):
             if not ts.get("installed") or not ts.get("configured") or not ts.get("schedule"):
                 raise_to("yellow", "timeshift_off")
             elif ts.get("last"):
@@ -5553,9 +5639,15 @@ class Daemon:
             if uid not in (0,) and uid < 1000:
                 return {"ok": False, "error": "forbidden"}
             ok, text = self.security_command(cmd, req)
-            self.refresh_security(force=True)
+            sec = self.refresh_security(force=True)
             self.refresh_overall()
-            return {"ok": ok, "error": "" if ok else "command_failed", "detail": text}
+            self.refresh_checklist_async()                      # score, « Pare-feu » et badge suivent tout de suite
+            ufw_now = (sec or {}).get("ufw") or {}
+            enabling = cmd == "firewall_set" and bool(req.get("enabled"))
+            if enabling and ok and not ufw_now.get("active"):
+                ok, text = False, text or "firewall not active after enable"
+            err = "" if ok else ("firewall_not_active" if enabling else "command_failed")
+            return {"ok": ok, "error": err, "detail": text, "conflicts": ufw_now.get("conflicts") or []}
 
         if cmd == "alerts":
             return {"ok": True, "alerts": self.state.get("alerts", [])}
@@ -5824,7 +5916,7 @@ class Daemon:
             if req.get("enabled"):
                 if req.get("allow_ssh"):
                     self.ufw("allow", f"{ssh_port()}/tcp", "comment", "SSH")
-                return self.ufw("enable")
+                return firewall_enable_checked(self.ufw, self.write_log)
             return self.ufw("disable")
         if cmd == "firewall_defaults":
             results = []

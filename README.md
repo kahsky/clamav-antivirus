@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.18.1)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.18.3)
 
 ---
 
@@ -144,6 +144,14 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   le nom du fichier et son dossier d'origine (index alimenté par les lignes « moved to » de clamdscan/clamscan,
   côté service et côté scan local) ; les confirmations (suppression, vidage, pare-feu, journaux) passent par
   une modale dans le thème de l'application, plus jamais par `confirm()` natif.
+- **Activation du pare-feu vérifiée** — `ufw enable` répond « actif » même quand le chargement des règles échoue
+  si `ufw.conf` disait déjà `ENABLED=yes` ; le service contrôle l'état réel, force disable → enable puis
+  `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
+  `ufw.service` au démarrage et signale un autre gestionnaire de pare-feu actif (firewalld, nftables avec
+  `flush ruleset`, netfilter-persistent). Checklist et score recalculés après chaque action pare-feu/SSH.
+- **État de Timeshift ignorable** — bouton « Ignorer » (onglet Sauvegardes et assistant de la vue simple) pour les
+  PC sans place pour les instantanés : réglage `timeshift_check`, plus de jaune ni d'alerte « espace faible »,
+  badge « ignoré par vous » et « Réafficher ».
 - **Ports ouverts ignorés** — « Ignorer » sur le point « Ports ouverts » de la checklist et sur chaque port joignable
   de la liste « Ports en écoute » (clé port/protocole/programme) : un serveur web de développement voulu ne compte
   plus dans le score ni les points à corriger ; badge « ignoré par vous » et « Réafficher » ; un autre programme sur
@@ -303,7 +311,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.18.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.18.1_all.deb)
+[Télécharger clamav-antivirus_1.18.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.18.3_all.deb)
 
 ---
 
@@ -334,12 +342,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.18.1_all.deb`
+Résultat : `clamav-antivirus_1.18.3_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.18.1_all.deb
+sudo dpkg -i clamav-antivirus_1.18.3_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
