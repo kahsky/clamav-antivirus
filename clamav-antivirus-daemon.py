@@ -4212,6 +4212,18 @@ class Daemon:
         self.refresh_backup(force=True)
         self.refresh_overall()
 
+    def _timeshift_state_quick(self):
+        """État Timeshift immédiat (configuration seulement, sans « timeshift --list » qui peut durer des minutes) :
+        les compteurs d'instantanés du dernier relevé sont conservés. Utilisé juste après activer/désactiver pour
+        répondre à l'interface sans délai ; le relevé complet suit en arrière-plan."""
+        cached = self.state.get("timeshift") or {}
+        ts = collect_timeshift_status(list_snapshots=False)
+        ts["snapshots"], ts["last"] = cached.get("snapshots"), cached.get("last")
+        ts["suspended"] = self.state.get("timeshift_suspended") or None
+        self.state.update(timeshift=ts)
+        self.broadcast({"event": "timeshift", "timeshift": ts})
+        return ts
+
     def cached_system_size(self, max_age=7 * 86400):
         info = self.state.get("system_size") or {}
         try:
@@ -4252,8 +4264,9 @@ class Daemon:
         self.state.update(timeshift_suspended=None)
         self.write_log(f"timeshift enabled ({'btrfs' if btrfs else 'rsync'}, daily 5 / weekly 3 / monthly 2, "
                        f"{'?' if free is None else free // 10**9} GB free for a {size // 10**9} GB system)")
+        self._timeshift_state_quick()                     # réponse immédiate ; relevé complet après le premier instantané
         threading.Thread(target=self._timeshift_first_snapshot, daemon=True).start()
-        self.refresh_backup(force=True)
+        self.refresh_overall()
         return {"ok": True, "mode": "btrfs" if btrfs else "rsync", "started": True, "free": free, "size": size}
 
     def _timeshift_enable_worker(self, existing):
@@ -5442,8 +5455,9 @@ class Daemon:
                 pass
             self.state.update(timeshift_suspended=None)
             self.write_log("timeshift schedules disabled")
-            self.refresh_backup(force=True)
+            self._timeshift_state_quick()
             self.refresh_overall()
+            threading.Thread(target=lambda: self.refresh_backup(force=True), daemon=True).start()
             return {"ok": True}
 
         if cmd in ("harden_apply", "harden_revert"):

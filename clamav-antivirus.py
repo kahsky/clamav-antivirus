@@ -1979,11 +1979,14 @@ class ClamAVAntivirusApp:
 
     def act_backup_status(self, data):
         if data.get("refresh"):
-            DaemonClient.request("backup_status", refresh=True)
-            if isinstance(self.last_daemon_status, dict):
-                resp = DaemonClient.request("backup_status")
-                if resp.get("ok"):
+            # Relevé complet (timeshift --list peut durer plus d'une minute) : hors du fil principal, délai large
+            def worker():
+                resp = daemon_request("backup_status", timeout=180, refresh=True)
+                if resp.get("ok") and isinstance(self.last_daemon_status, dict):
                     self.last_daemon_status["timeshift"] = resp.get("timeshift")
+                GLib.idle_add(lambda: self.send_to_js("backupStatus", self._backup_payload()) or False)
+            threading.Thread(target=worker, daemon=True).start()
+            return
         self.send_to_js("backupStatus", self._backup_payload())
 
     def _start_backup(self, dest, auto=False):
@@ -2165,11 +2168,21 @@ class ClamAVAntivirusApp:
                 subprocess.Popen(["xdg-open", os.path.join(target, backup.BACKUP_DIRNAME, backup._hostuser())])
 
     def act_timeshift_enable(self, _data):
-        resp = DaemonClient.request("timeshift_enable")
+        """Activation (ou planification automatique) : hors du fil principal, délai large — la réponse est immédiate
+        depuis 1.18.7 mais le service peut être occupé (mesure du système, instantané en cours)."""
+        self.send_to_js("operationResult", {"status": "info", "message": self.T("msg.timeshift_enabling")})
+
+        def worker():
+            resp = daemon_request("timeshift_enable", timeout=120)
+            GLib.idle_add(self._timeshift_enable_reply, resp)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _timeshift_enable_reply(self, resp):
         if resp.get("ok") and resp.get("pending"):
             self.send_to_js("operationResult", {"status": "info", "message": self.T("msg.timeshift_checking")})
-            return
+            return False
         self.timeshift_enable_result(resp)
+        return False
 
     def timeshift_enable_result(self, resp):
         """Résultat d'« Activer Timeshift » (immédiat, ou différé après la mesure du système par le service)."""
