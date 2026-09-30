@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.20.3)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.20.4)
 
 ---
 
@@ -153,6 +153,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
   `ufw.service` au démarrage et signale un autre gestionnaire de pare-feu actif (firewalld, nftables avec
   `flush ruleset`, netfilter-persistent). Checklist et score recalculés après chaque action pare-feu/SSH.
+- **« Ignorer » une faille ou un port : jamais de mot de passe** — même en mode famille (information seulement).
+  Restent réservés à un administrateur en mode famille : « C'est normal » sur un avertissement d'intégrité,
+  confiance à un programme, à un démarrage automatique ou à une clé USB, réglages, durcissement.
 - **État relu après « Ignorer »** — trois secondes après un « Ignorer », « C'est normal », « Faire confiance » ou
   « Réafficher », l'interface relit tout l'état (bouclier, vue simple, score de la checklist, failles, intégrité,
   sauvegardes) pour afficher le nouveau statut sans changer d'onglet.
@@ -362,7 +365,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.20.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.20.3_all.deb)
+[Télécharger clamav-antivirus_1.20.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.20.4_all.deb)
 
 ---
 
@@ -393,12 +396,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.20.3_all.deb`
+Résultat : `clamav-antivirus_1.20.4_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.20.3_all.deb
+sudo dpkg -i clamav-antivirus_1.20.4_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
