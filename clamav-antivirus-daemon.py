@@ -5543,10 +5543,11 @@ class Daemon:
         if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools",
                    "install_phased", "install_package"):
             return True
-        # « Ignorer » une faille sans correctif ou un port ouvert voulu : information seulement, jamais de mot de passe
-        # (acknowledge_vuln, acknowledge_port, ignore_check ne figurent pas ici), même en mode famille.
+        # « Ignorer » une faille sans correctif ou un port ouvert voulu, monter une clé USB sans analyse ou lui faire
+        # confiance : jamais de mot de passe, même en mode famille (acknowledge_vuln, acknowledge_port, ignore_check,
+        # usb_skip, untrust_usb ne figurent pas ici). Le choix est journalisé ; on fait confiance à l'utilisateur.
         if cmd in ("set_settings", "trust_program", "untrust_program", "acknowledge_persistence", "acknowledge_integrity",
-                   "system_upgrade", "harden_apply", "forget_network", "usb_skip", "untrust_usb"):
+                   "system_upgrade", "harden_apply", "forget_network"):
             return bool(self.settings.get("family_mode"))
         return False
 
