@@ -113,7 +113,27 @@ function locale() {
 
 // ─── Backend Communication ──────────────────────────────────────────────────
 
+// « Ignorer », « C'est normal », « Faire confiance », « Réafficher »… : le service recalcule bouclier, score et listes.
+// Trois secondes après, tout l'état affiché est relu pour montrer le nouveau statut sans changer d'onglet.
+const RELOAD_AFTER_ACTIONS = new Set(['acknowledge_vuln', 'acknowledge_port', 'acknowledge_integrity', 'acknowledge_persistence',
+    'ignore_check', 'timeshift_ignore', 'trust_program', 'untrust_program', 'untrust_usb']);
+let statusReloadTimer = null;
+
+function scheduleStatusReload(delay = 3000) {
+    clearTimeout(statusReloadTimer);
+    statusReloadTimer = setTimeout(() => {
+        statusReloadTimer = null;
+        sendToBackend({ action: 'check_status' });                                   // bouclier, vue simple, tableau de bord
+        sendToBackend({ action: 'get_security_data', type: 'checklist', refresh: true });   // score et points à corriger
+        sendToBackend({ action: 'get_security_data', type: 'vulns' });
+        sendToBackend({ action: 'get_security_data', type: 'integrity' });
+        sendToBackend({ action: 'get_security_data', type: 'persistence' });
+        sendToBackend({ action: 'backup_status' });
+    }, delay);
+}
+
 function sendToBackend(data) {
+    if (data && RELOAD_AFTER_ACTIONS.has(data.action)) scheduleStatusReload();
     try {
         window.webkit.messageHandlers.backend.postMessage(JSON.stringify(data));
     } catch (e) {

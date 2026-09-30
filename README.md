@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.20.2)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.20.3)
 
 ---
 
@@ -153,6 +153,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
   `ufw.service` au démarrage et signale un autre gestionnaire de pare-feu actif (firewalld, nftables avec
   `flush ruleset`, netfilter-persistent). Checklist et score recalculés après chaque action pare-feu/SSH.
+- **État relu après « Ignorer »** — trois secondes après un « Ignorer », « C'est normal », « Faire confiance » ou
+  « Réafficher », l'interface relit tout l'état (bouclier, vue simple, score de la checklist, failles, intégrité,
+  sauvegardes) pour afficher le nouveau statut sans changer d'onglet.
 - **Bleu = information, partout** — la vue simple affiche l'état « information » (bouclier bleu, « Pour
   information seulement ») quand le service est bleu (failles sans correctif), au lieu du jaune ; la ligne
   « Mises à jour du système » propose « Ignorer ». « Tout ignorer » (carte Failles, point « Failles ouvertes » de la
@@ -359,7 +362,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.20.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.20.2_all.deb)
+[Télécharger clamav-antivirus_1.20.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.20.3_all.deb)
 
 ---
 
@@ -390,12 +393,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.20.2_all.deb`
+Résultat : `clamav-antivirus_1.20.3_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.20.2_all.deb
+sudo dpkg -i clamav-antivirus_1.20.3_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
