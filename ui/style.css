@@ -2969,3 +2969,11 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .backup-user-state { margin: 2px 0 10px; }
 .backup-user-state .btn-sm { margin-left: auto; }
 .backup-wizard .backup-user-state { padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); }
+
+/* ── v1.20.1 : tuiles latérales du tableau de bord (textes longs) ── */
+.card .status-side { flex: 0 1 320px; max-width: 42%; }
+.status-side-value { white-space: normal; overflow-wrap: anywhere; line-height: 1.3; }
+.status-side-sub { font-size: 12px; color: var(--text-secondary); line-height: 1.3; margin-top: 1px; white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+    .card .status-side { max-width: 100%; flex-basis: 100%; padding-left: 0; border-left: 0; border-top: 1px solid var(--border); padding-top: 12px; }
+}

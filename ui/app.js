@@ -1477,11 +1477,17 @@ function systemState(st) {
 }
 
 /** « Système à jour », avec les paquets décalés (phasing) ou retenus par apt : on attend notre tour, tout reste vert. */
-function systemOkLabel(st) {
+/** « Système à jour » + détails (décalées, retenues) : courts pour les tuiles, explicatifs (long) pour l'onglet. */
+function systemOkParts(st, long = false) {
     const parts = [];
-    if (st && st.phased) parts.push(t('dash.system.phased_note', { n: st.phased }));
-    if (st && st.held) parts.push(t('dash.system.held_note', { n: st.held }));
-    return t('dash.system.uptodate') + (parts.length ? ' · ' + parts.join(' · ') : '');
+    if (st && st.phased) parts.push(t(long ? 'dash.system.phased_note' : 'dash.system.phased_short', { n: st.phased }));
+    if (st && st.held) parts.push(t(long ? 'dash.system.held_note' : 'dash.system.held_short', { n: st.held }));
+    return { main: t('dash.system.uptodate'), detail: parts.join(' · ') };
+}
+
+function systemOkLabel(st, long = false) {
+    const p = systemOkParts(st, long);
+    return p.main + (p.detail ? ' · ' + p.detail : '');
 }
 
 function renderSystemSummary() {
@@ -1497,8 +1503,11 @@ function renderSystemSummary() {
         security: t('dash.system.security', { n: st ? st.security : 0, cves: st ? (st.cve_count || 0) : 0 }),
         reboot: t('dash.system.reboot'),
     };
-    $('statusSystem').textContent = labels[state];
-    $('dashSystemHint').textContent = labels[state];
+    // Tuile du tableau de bord : état court, détails sur une seconde ligne discrète (texte long = colonne écrasée)
+    const parts = state === 'ok' ? systemOkParts(st) : { main: labels[state], detail: '' };
+    $('statusSystem').textContent = parts.main;
+    if ($('statusSystemSub')) { $('statusSystemSub').textContent = parts.detail; $('statusSystemSub').hidden = !parts.detail; }
+    $('dashSystemHint').textContent = state === 'ok' ? systemOkLabel(st, true) : labels[state];
     const icon = $('dashSystemIcon');
     icon.className = 'card-icon ' + ({ ok: 'accent-green', updates: 'accent-blue', security: 'accent-red', reboot: 'accent-amber', unknown: 'accent-blue' }[state]);
 }

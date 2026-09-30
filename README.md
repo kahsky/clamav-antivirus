@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.20.0)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.20.1)
 
 ---
 
@@ -153,6 +153,9 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
   `ufw.service` au démarrage et signale un autre gestionnaire de pare-feu actif (firewalld, nftables avec
   `flush ruleset`, netfilter-persistent). Checklist et score recalculés après chaque action pare-feu/SSH.
+- **Tableau de bord lisible avec des textes longs** — la tuile « Système » affiche l'état en une ligne et les
+  détails (mises à jour décalées, retenues par apt) sur une seconde ligne discrète ; la colonne latérale est
+  bornée en largeur et passe sous le titre sur une fenêtre étroite.
 - **Contrôle du noyau et des processus (comportemental)** — deux contrôles intégrés, à chaque vérification
   d'intégrité et toutes les 5 minutes : *Noyau* (module caché : vivant dans `/sys/module` mais absent de
   `/proc/modules`, module chargé sans fichier pour ce noyau, taint « chargé de force », modules DKMS listés
@@ -352,7 +355,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.20.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.20.0_all.deb)
+[Télécharger clamav-antivirus_1.20.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.20.1_all.deb)
 
 ---
 
@@ -383,12 +386,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.20.0_all.deb`
+Résultat : `clamav-antivirus_1.20.1_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.20.0_all.deb
+sudo dpkg -i clamav-antivirus_1.20.1_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 
