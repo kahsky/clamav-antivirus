@@ -2791,7 +2791,221 @@ def debsums_verified_paths(failed_lines):
     return verified
 
 
-INTEGRITY_TOOLS = {"lynis": "lynis", "unhide": "unhide", "unhide-tcp": "unhide-tcp", "chkrootkit": "chkrootkit", "debsums": "debsums"}
+INTEGRITY_TOOLS = {"kernel": "uname", "processes": "ps",            # contrôles intégrés (toujours disponibles)
+                   "lynis": "lynis", "unhide": "unhide", "unhide-tcp": "unhide-tcp", "chkrootkit": "chkrootkit", "debsums": "debsums"}
+BUILTIN_CHECKS = ("kernel", "processes")
+KERNEL_RULES_VERSION = 1
+PROC_RULES_VERSION = 1
+TAINT_FLAGS = {0: "P", 1: "F", 2: "S", 3: "R", 4: "M", 5: "B", 6: "U", 7: "D", 8: "A", 9: "W", 10: "C", 11: "I", 12: "O",
+               13: "E", 14: "L", 15: "K", 16: "X", 17: "T", 18: "N"}
+
+
+def _read_text(path, default=""):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def loaded_modules():
+    return {ln.split()[0] for ln in _read_text("/proc/modules").splitlines() if ln.strip()}
+
+
+def sysfs_live_modules():
+    """Modules chargeables vivants vus par sysfs (les modules intégrés au noyau n'ont pas d'initstate)."""
+    out = set()
+    try:
+        names = os.listdir("/sys/module")
+    except OSError:
+        return out
+    for n in names:
+        if _read_text(f"/sys/module/{n}/initstate") == "live":
+            out.add(n)
+    return out
+
+
+def modules_dep_index(release):
+    """nom de module normalisé ('-' → '_') → chemin relatif du fichier .ko pour ce noyau (modules.dep)."""
+    idx = {}
+    for ln in _read_text(f"/lib/modules/{release}/modules.dep").splitlines():
+        rel = ln.split(":", 1)[0].strip()
+        if not rel:
+            continue
+        base = os.path.basename(rel)
+        for ext in (".ko.zst", ".ko.xz", ".ko.gz", ".ko"):
+            if base.endswith(ext):
+                base = base[:-len(ext)]
+                break
+        idx[base.replace("-", "_")] = rel
+    return idx
+
+
+def kernel_check():
+    """Contrôle du noyau : module caché (vivant dans /sys/module mais absent de la liste /proc/modules — signature
+    d'un rootkit LKM), module chargé sans fichier pour ce noyau (injecté depuis la mémoire), modules hors arbre
+    (DKMS : bénin, listés), taint « chargé de force », état lockdown / signature / modules_disabled."""
+    release = os.uname().release
+    loaded = loaded_modules()
+    hidden = sorted(sysfs_live_modules() - loaded)
+    dep = modules_dep_index(release)
+    nofile, dkms, extra = [], [], []
+    for name in sorted(loaded):
+        rel = dep.get(name.replace("-", "_"))
+        if rel is None:
+            nofile.append(name)
+        elif "dkms" in rel:
+            dkms.append(f"{name} ({rel})")
+        elif rel.startswith(("updates/", "extra/")):
+            extra.append(f"{name} ({rel})")
+    warnings, benign, notes = [], [], {}
+    if hidden:
+        text = "Hidden kernel module(s): alive in /sys/module but absent from /proc/modules: " + ", ".join(hidden)
+        warnings.append(text)
+        notes[text] = [{"path": n, "verdict": "unknown", "reason": "module_hidden"} for n in hidden]
+    if nofile:
+        if not dep or len(nofile) > 10:          # arbre de modules absent ou d'un autre noyau : pas une injection
+            text = f"Module tree for the running kernel {release} is missing or stale ({len(nofile)} loaded module(s) without file): reboot after the kernel update"
+            benign.append({"text": text, "notes": [{"path": release, "verdict": "benign", "reason": "module_tree_stale"}]})
+        else:
+            text = f"Loaded kernel module(s) without a module file for kernel {release}: " + ", ".join(nofile)
+            warnings.append(text)
+            notes[text] = [{"path": n, "verdict": "unknown", "reason": "module_nofile"} for n in nofile]
+    if dkms or extra:
+        text = "Out-of-tree kernel module(s): " + ", ".join(dkms + extra)
+        benign.append({"text": text, "notes": [{"path": x, "verdict": "benign", "reason": "module_dkms" if x in dkms else "module_extra"} for x in dkms + extra]})
+    try:
+        taint = int(_read_text("/proc/sys/kernel/tainted", "0") or 0)
+    except ValueError:
+        taint = 0
+    flags = "".join(TAINT_FLAGS[b] for b in TAINT_FLAGS if taint & (1 << b))
+    if taint & (1 << 1) or taint & (1 << 3):
+        text = f"Kernel taint flags {flags}: a module was force-loaded or force-unloaded (modprobe -f / rmmod -f)"
+        warnings.append(text)
+        notes[text] = [{"path": flags, "verdict": "unknown", "reason": "taint_forced"}]
+    info = {"release": release, "loaded": len(loaded), "taint": taint, "taint_flags": flags,
+            "lockdown": _read_text("/sys/kernel/security/lockdown"), "sig_enforce": _read_text("/sys/module/module/parameters/sig_enforce"),
+            "modules_disabled": _read_text("/proc/sys/kernel/modules_disabled")}
+    return {"installed": True, "ran": True, "rc": 0, "warnings": warnings[:80], "benign": benign[:40], "notes": notes,
+            "rules": KERNEL_RULES_VERSION, "info": info}
+
+
+SYSTEM_EXE_DIRS = ("/usr/", "/opt/", "/snap/", "/var/lib/flatpak/", "/app/", "/lib/", "/lib64/", "/bin/", "/sbin/", "/etc/", "/nix/")
+TMP_EXE_DIRS = ("/tmp/", "/var/tmp/", "/dev/shm/", "/run/user/", "/run/shm/")
+DEBUGGER_NAMES = {"gdb", "strace", "ltrace", "lldb", "lldb-server", "rr", "valgrind", "perf", "gdbserver", "py-spy", "bpftrace", "ltrace"}
+STEAM_PRELOAD_RE = re.compile(r"/(\.steam|\.local/share/Steam|Steam)/")
+
+
+def process_check():
+    """Balayage de /proc (comportement) : exécutable supprimé du disque, exécution depuis un dossier temporaire,
+    bibliothèque injectée par LD_PRELOAD, processus suivi par ptrace. Verdicts intégrés : programme mis à jour
+    (fichier remplacé), AppImage, bibliothèque livrée par un paquet / Steam / magasin, débogueur connu → bénins."""
+    findings = {"exe_deleted": [], "exe_upgraded": [], "exe_tmp": [], "exe_appimage": []}
+    preload_libs, tracers = {}, {}
+    scanned = 0
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        base = f"/proc/{pid}"
+        try:
+            exe = os.readlink(f"{base}/exe")
+        except OSError:
+            continue                                   # thread noyau, ou processus déjà terminé
+        scanned += 1
+        comm = _read_text(f"{base}/comm") or "?"
+        deleted = exe.endswith(" (deleted)")
+        path = exe[:-10] if deleted else exe
+        label = f"{pid} {comm} {path}"
+        if deleted:
+            if os.path.exists(path) or path.startswith(SYSTEM_EXE_DIRS):
+                findings["exe_upgraded"].append(label)     # programme mis à jour (ou paquet retiré) pendant qu'il tourne
+            else:
+                findings["exe_deleted"].append(label)
+        elif path.startswith(TMP_EXE_DIRS):
+            if "/.mount_" in path or "appimage" in path.lower():
+                findings["exe_appimage"].append(label)
+            else:
+                findings["exe_tmp"].append(label)
+        try:
+            with open(f"{base}/environ", "rb") as f:
+                env = f.read()
+        except OSError:
+            env = b""
+        for chunk in env.split(b"\0"):
+            if chunk.startswith(b"LD_PRELOAD="):
+                for lib in re.split(r"[:\s]+", chunk[11:].decode(errors="replace").strip()):
+                    if lib:
+                        preload_libs.setdefault(lib, []).append(label)
+        m = re.search(r"^TracerPid:\s*(\d+)", _read_text(f"{base}/status"), flags=re.M)
+        if m and m.group(1) != "0":
+            tracers.setdefault(m.group(1), []).append(label)
+    warnings, benign, notes = [], [], {}
+
+    def add(items, verdict, reason, head):
+        if not items:
+            return
+        text = head + "\n" + "\n".join(items[:40])
+        ns = [{"path": it, "verdict": verdict, "reason": reason} for it in items[:40]]
+        if verdict == "benign":
+            benign.append({"text": text, "notes": ns})
+        else:
+            warnings.append(text)
+            notes[text] = ns
+    add(findings["exe_deleted"], "unknown", "exe_deleted", "Running process(es) whose executable was deleted from disk:")
+    add(findings["exe_tmp"], "unknown", "exe_tmp", "Process(es) running from a temporary directory:")
+    add(findings["exe_upgraded"], "benign", "exe_upgraded", "Process(es) still running an executable replaced on disk (program updated):")
+    add(findings["exe_appimage"], "benign", "exe_appimage", "AppImage(s) mounted under /tmp:")
+    if preload_libs:
+        owners = dpkg_owners([lib for lib in preload_libs if lib.startswith("/")])
+        ns_b, ns_u = [], []
+        for lib, procs in preload_libs.items():
+            who = ", ".join(sorted({p.split(" ", 2)[1] for p in procs})[:6])
+            path = f"{lib} <- {who}"
+            if lib in owners:
+                ns_b.append({"path": path, "verdict": "benign", "reason": "preload_dpkg", "package": owners[lib].split(", ")[0]})
+            elif STEAM_PRELOAD_RE.search(lib):
+                ns_b.append({"path": path, "verdict": "benign", "reason": "preload_steam"})
+            elif not lib.startswith("/") or lib.startswith(("/snap/", "/var/lib/flatpak/", "/app/", "/usr/lib/", "/lib/")):
+                ns_b.append({"path": path, "verdict": "benign", "reason": "preload_app"})
+            else:
+                ns_u.append({"path": path, "verdict": "unknown", "reason": "preload_unknown"})
+        if ns_u:
+            text = "LD_PRELOAD library injected into process(es):\n" + "\n".join(n["path"] for n in ns_u + ns_b)
+            warnings.append(text)
+            notes[text] = ns_u + ns_b
+        else:
+            text = "LD_PRELOAD in use (known libraries):\n" + "\n".join(n["path"] for n in ns_b)
+            benign.append({"text": text, "notes": ns_b})
+    if tracers:
+        tr_exe = {}
+        for tpid in tracers:
+            try:
+                tr_exe[tpid] = os.readlink(f"/proc/{tpid}/exe").split(" (deleted)")[0]
+            except OSError:
+                tr_exe[tpid] = ""
+        owners = dpkg_owners([e for e in tr_exe.values() if e])
+        ns_b, ns_u = [], []
+        for tpid, victims in tracers.items():
+            tcomm = _read_text(f"/proc/{tpid}/comm") or "?"
+            path = f"{tcomm} ({tpid}) -> " + ", ".join(v.split(" ", 2)[1] for v in victims[:6])
+            texe = tr_exe.get(tpid, "")
+            if tcomm in DEBUGGER_NAMES or texe in owners:
+                ns_b.append({"path": path, "verdict": "benign", "reason": "traced_dpkg", "package": (owners.get(texe) or tcomm).split(", ")[0]})
+            else:
+                ns_u.append({"path": path, "verdict": "unknown", "reason": "traced"})
+        if ns_u:
+            text = "Process(es) being traced (ptrace) by an unknown program:\n" + "\n".join(n["path"] for n in ns_u + ns_b)
+            warnings.append(text)
+            notes[text] = ns_u + ns_b
+        else:
+            text = "Process(es) traced by a known debugger:\n" + "\n".join(n["path"] for n in ns_b)
+            benign.append({"text": text, "notes": ns_b})
+    return {"installed": True, "ran": True, "rc": 0, "warnings": warnings[:80], "benign": benign[:40], "notes": notes,
+            "rules": PROC_RULES_VERSION, "info": {"scanned": scanned}}
+
+
+def builtin_check(name):
+    return kernel_check() if name == "kernel" else process_check()
 
 
 def integrity_tools_now():
@@ -3279,7 +3493,8 @@ def run_integrity_checks(collect_verified=False, cancel_event=None, progress=Non
     est appelé au fil de l'eau (sortie des outils lue en continu) pour l'affichage."""
     result = {"checked_at": now_iso(), "tools": {}, "app": app_integrity(), "warnings": 0, "verified_files": 0}
     verified = set()
-    tools = {"lynis": ["lynis", "audit", "system", "--quick", "--no-colors"],
+    tools = {"kernel": ["uname"], "processes": ["ps"],
+             "lynis": ["lynis", "audit", "system", "--quick", "--no-colors"],
              "unhide": ["unhide", "quick"],
              "unhide-tcp": ["unhide-tcp"],
              "chkrootkit": ["chkrootkit"],
@@ -3293,6 +3508,17 @@ def run_integrity_checks(collect_verified=False, cancel_event=None, progress=Non
                 log(f"Progression intégrité : {e}")
 
     for name, cmd in tools.items():
+        if name in BUILTIN_CHECKS:
+            report(name, 0, "", "running")
+            try:
+                entry = builtin_check(name)
+            except Exception as e:  # noqa: BLE001
+                log(f"Contrôle intégré {name} : {e}")
+                entry = {"installed": True, "ran": False, "warnings": [], "rc": 1}
+            report(name, 100, "", "done", len(entry["warnings"]))
+            result["tools"][name] = entry
+            result["warnings"] += len(entry["warnings"])
+            continue
         entry = {"installed": shutil.which(cmd[0]) is not None, "ran": False, "warnings": [], "rc": None}
         if cancel_event is not None and cancel_event.is_set():
             result["tools"][name] = entry
@@ -4428,6 +4654,12 @@ class Daemon:
                     self.check_tray()
             except Exception as e:  # noqa: BLE001
                 log(f"Tray : {e}")
+            try:
+                if time.time() - getattr(self, "last_builtin_watch", 0) >= 300:
+                    self.last_builtin_watch = time.time()
+                    self._builtin_refresh()             # noyau et processus : veille comportementale toutes les 5 min
+            except Exception as e:  # noqa: BLE001
+                log(f"Veille noyau/processus : {e}")
             self.shutdown.wait(10)
 
     def check_tray(self):
@@ -4629,6 +4861,9 @@ class Daemon:
                 log(f"Blocklist : {e}")
             # Vérification d'intégrité : jamais faite, ou faite avec une autre liste d'outils (mise à jour de l'application)
             stored = self.state.get("integrity") or {}
+            if stored.get("tools") and any(n not in stored["tools"] for n in BUILTIN_CHECKS):
+                self._builtin_refresh(initial=True)       # noyau / processus : ajoutés sans relancer tout l'audit
+                stored = self.state.get("integrity") or {}
             if os.geteuid() == 0 and not self.integrity_running and set((stored.get("tools") or {}).keys()) != set(INTEGRITY_TOOLS):
                 log("Vérification d'intégrité relancée (outils modifiés)")
                 threading.Thread(target=self.run_integrity, daemon=True).start()
@@ -4869,6 +5104,46 @@ class Daemon:
         app = result.get("app") or {}
         result["warnings"] = total + len(app.get("modified") or []) + len(app.get("missing") or [])
         return result
+
+    def _builtin_refresh(self, initial=False):
+        """Contrôles intégrés (noyau, processus) recalculés sur place : nouvel avertissement non approuvé → alerte
+        (popup) et bouclier rouge ; disparition (processus terminé) → retour au vert. Pas de relance des outils."""
+        if (os.geteuid() != 0 and not TEST_MODE) or self.integrity_running:
+            return
+        stored = self.state.get("integrity") or {}
+        if not stored.get("tools"):
+            return                                       # jamais de relevé : la première analyse complète les créera
+        integ = dict(stored)
+        tools = dict(integ.get("tools") or {})
+        new_unknown = []
+        for name in BUILTIN_CHECKS:
+            try:
+                entry = builtin_check(name)
+            except Exception as e:  # noqa: BLE001
+                log(f"Contrôle intégré {name} : {e}")
+                continue
+            prev = tools.get(name) or {}
+            prev_all = set(prev.get("all_warnings") or prev.get("warnings") or [])
+            new_unknown += [(name, w) for w in entry["warnings"] if w not in prev_all]
+            entry["all_warnings"] = list(entry["warnings"])
+            tools[name] = entry
+        integ["tools"] = tools
+        integ = self.apply_integrity_acks(integ) or integ
+
+        def signature(t):
+            return json.dumps({n: (e.get("warnings"), [b.get("text") for b in e.get("benign") or []], e.get("ignored"))
+                               for n, e in (t or {}).items() if n in BUILTIN_CHECKS}, sort_keys=True, default=str)
+        if signature(tools) == signature(stored.get("tools")) and integ.get("warnings") == stored.get("warnings"):
+            return
+        self.state.update(integrity=integ)
+        self.broadcast({"event": "integrity", "integrity": self.integrity_payload()})
+        self.refresh_overall()
+        fresh = [(n, w) for n, w in new_unknown if w in (tools[n].get("warnings") or [])]
+        if fresh and not initial:
+            self.write_log("⚠ kernel/process watch: " + "; ".join(f"{n}: {w.splitlines()[0][:100]}" for n, w in fresh[:4]))
+            self.publish_alert({"kind": "integrity", "severity": "danger", "time": now_iso(), "title": str(len(fresh)),
+                                "detail": ", ".join(sorted({n for n, _ in fresh})),
+                                "pid": 0, "comm": "", "exe": "", "count": 0, "top_dir": "", "reasons": [], "sample": []})
 
     def _chkrootkit_rescan(self):
         """chkrootkit seul (moins d'une minute) quand le relevé stocké est incomplet ; classification intégrée."""
@@ -5748,6 +6023,17 @@ class Daemon:
             self.write_log(f"USB scan skipped by user: {devnode} ({info.get('label') or info.get('model')})")
             return {"ok": True, "trusted": trusted_now, "mount_now": running is None, "usb": info}
 
+        if cmd == "ignore_check":
+            # « Ignorer » un contrôle de disponibilité (sauvegarde des fichiers, Timeshift) : jamais de mot de passe
+            setting = str(req.get("setting") or "")
+            if setting not in ("backup_check", "timeshift_check"):
+                return {"ok": False, "error": "invalid_key"}
+            changed, _errors = self.settings.update({setting: not bool(req.get("ignore", True))})
+            self.write_log(f"settings: {setting}={self.settings.get(setting)} (ignore_check)")
+            self.broadcast({"event": "settings", "settings": self.settings.snapshot()})
+            self.refresh_overall()
+            return {"ok": True, "changed": changed, "settings": {k: self.settings.get(k) for k in ("backup_check", "timeshift_check")}}
+
         if cmd == "untrust_usb":
             ident = str(req.get("id") or "")[:200]
             trusted = dict(self.state.get("trusted_usb") or {})
@@ -6182,6 +6468,10 @@ class Daemon:
 
         threading.Thread(target=self.worker, daemon=True, name="worker").start()
         threading.Thread(target=self.maintenance_loop, daemon=True, name="maintenance").start()
+        try:
+            self._builtin_refresh(initial=True)      # noyau / processus : état à jour dès le démarrage (quelques ms)
+        except Exception as e:  # noqa: BLE001
+            log(f"Contrôles intégrés : {e}")
         threading.Thread(target=self.network_loop, daemon=True, name="network").start()
         self.monitor.start()
         self.network.start()

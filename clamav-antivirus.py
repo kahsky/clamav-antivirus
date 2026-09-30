@@ -1199,7 +1199,7 @@ class ClamAVAntivirusApp:
                        buttons=[(T("popup.btn.details"), None, lambda: self.show_tab("system"))])
             return
         if kind == "integrity":
-            self.popup("warning", T("popup.integrity.title"), T("popup.integrity.body", n=alert.get("title", "0"),
+            self.popup("danger" if alert.get("severity") == "danger" else "warning", T("popup.integrity.title"), T("popup.integrity.body", n=alert.get("title", "0"),
                        tools=alert.get("detail", "")), on_activate=lambda: self.show_tab("security"),
                        buttons=[(T("popup.btn.details"), None, lambda: self.show_tab("security"))])
             return
@@ -2267,7 +2267,7 @@ class ClamAVAntivirusApp:
             else:
                 self.send_to_js("operationResult", {"status": "error", "message": self.daemon_error(resp)})
             return False
-        self.run_admin("set_settings", {"settings": {setting: not ignore}}, done)
+        self.run_admin("ignore_check", {"setting": setting, "ignore": ignore}, done)
 
     def act_timeshift_ignore(self, data):
         self.act_ignore_check({"setting": "timeshift_check", "ignore": data.get("ignore", True)})

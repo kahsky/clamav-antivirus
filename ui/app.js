@@ -573,7 +573,8 @@ function renderIntegrity(running = false) {
         const installedNow = now ? !!now[name] : !!tl.installed;
         const pending = installedNow && !tl.ran;              // installé depuis le dernier relevé, pas encore vérifié
         const st = !installedNow ? 'unknown' : pending ? 'neutral' : (tl.warnings || []).length ? 'warn' : 'ok';
-        html += `<div class="check-item check-${st}"><span class="check-icon">${st === 'ok' ? '✓' : st === 'warn' ? '!' : st === 'neutral' ? '…' : '?'}</span><div class="check-text"><span class="check-title">${escapeHtml(name)}</span><span class="check-detail">${!installedNow ? t('security.integrity.not_installed') : pending ? t('security.integrity.pending') : (tl.warnings || []).length ? t('security.integrity.warnings', { n: tl.warnings.length }) : t('security.integrity.clean')}${(tl.ignored || []).length ? ` · ${t('security.integrity.ignored', { n: tl.ignored.length })}` : ''}${(tl.benign || []).length ? ` · ${t('security.integrity.benign', { n: tl.benign.length })}` : ''}</span>${integrityWarningsHtml(name, tl)}</div></div>`;
+        const toolTitle = t(`security.integrity.tool.${name}`) !== `security.integrity.tool.${name}` ? t(`security.integrity.tool.${name}`) : name;
+        html += `<div class="check-item check-${st}"><span class="check-icon">${st === 'ok' ? '✓' : st === 'warn' ? '!' : st === 'neutral' ? '…' : '?'}</span><div class="check-text"><span class="check-title">${escapeHtml(toolTitle)}</span><span class="check-detail">${!installedNow ? t('security.integrity.not_installed') : pending ? t('security.integrity.pending') : (tl.warnings || []).length ? t('security.integrity.warnings', { n: tl.warnings.length }) : t('security.integrity.clean')}${(tl.ignored || []).length ? ` · ${t('security.integrity.ignored', { n: tl.ignored.length })}` : ''}${(tl.benign || []).length ? ` · ${t('security.integrity.benign', { n: tl.benign.length })}` : ''}</span>${integrityWarningsHtml(name, tl)}</div></div>`;
     }
     const app = it.app || {};
     const appSt = !app.available ? 'unknown' : (app.modified || []).length || (app.missing || []).length ? 'fail' : 'ok';
@@ -2689,21 +2690,28 @@ function tsSchedLabel(ts) {
 
 /** État Timeshift → {state:'ok'|'warn'|'danger'|'neutral', text}. */
 function timeshiftInfo(ts) {
-    if (!ts) return { state: 'neutral', text: t('backup.timeshift.unknown', { sched: '—' }) };
-    if (!ts.installed) return { state: 'warn', text: t('backup.timeshift.not_installed') };
-    if (ts.suspended) return { state: 'warn', text: t('backup.timeshift.suspended', { free: Math.round((ts.free_bytes || ts.suspended.free_bytes || 0) / 1e9) }) };
-    if (!ts.configured || !(ts.schedule || []).length) return { state: 'warn', text: t('backup.timeshift.not_configured') };
+    if (!ts) return { state: 'neutral', kind: 'unknown', text: t('backup.timeshift.unknown', { sched: '—' }) };
+    if (!ts.installed) return { state: 'warn', kind: 'not_installed', text: t('backup.timeshift.not_installed') };
+    if (ts.suspended) return { state: 'warn', kind: 'suspended', text: t('backup.timeshift.suspended', { free: Math.round((ts.free_bytes || ts.suspended.free_bytes || 0) / 1e9) }) };
+    if (!ts.configured || !(ts.schedule || []).length) return { state: 'warn', kind: 'off', text: t('backup.timeshift.not_configured') };
     const sched = tsSchedLabel(ts);
-    if (ts.snapshots == null) return { state: 'neutral', text: t('backup.timeshift.unknown', { sched }) };
-    if (!ts.last) return { state: 'warn', text: t('backup.timeshift.no_snapshot', { sched }) };
+    if (ts.snapshots == null) return { state: 'neutral', kind: 'unknown', text: t('backup.timeshift.unknown', { sched }) };
+    if (!ts.last) return { state: 'warn', kind: 'none', text: t('backup.timeshift.no_snapshot', { sched }) };
     const age = (Date.now() - new Date(ts.last).getTime()) / 86400e3;
-    if (age > 30) return { state: 'warn', text: t('backup.timeshift.old', { rel: formatRelative(ts.last) }) };
-    return { state: 'ok', text: t('backup.timeshift.ok', { n: ts.snapshots, rel: formatRelative(ts.last), sched }) };
+    if (age > 30) return { state: 'warn', kind: 'old', text: t('backup.timeshift.old', { rel: formatRelative(ts.last) }) };
+    return { state: 'ok', kind: 'ok', text: t('backup.timeshift.ok', { n: ts.snapshots, rel: formatRelative(ts.last), sched }) };
 }
 
 /** « Ignorer » l'état de Timeshift (réglage timeshift_check du service) : PC sans place pour les instantanés. */
+function daemonSetting(key) {
+    // Réglage du service : statut courant, sinon dernier chargement de l'onglet Paramètres
+    if (lastStatus && lastStatus.settings && key in lastStatus.settings) return lastStatus.settings[key];
+    if (settingsData && settingsData.system && key in settingsData.system) return settingsData.system[key];
+    return undefined;
+}
+
 function timeshiftIgnored() {
-    return !!(lastStatus && lastStatus.settings && lastStatus.settings.timeshift_check === false);
+    return daemonSetting('timeshift_check') === false;
 }
 
 function ignoreCheck(setting, on) {
@@ -2714,7 +2722,7 @@ function timeshiftIgnore(on) { ignoreCheck('timeshift_check', on); }
 
 /** « Ignorer » la sauvegarde des fichiers (réglage backup_check) : sauvegardés autrement, ou rien à sauvegarder. */
 function backupIgnored() {
-    return !!(lastStatus && lastStatus.settings && lastStatus.settings.backup_check === false);
+    return daemonSetting('backup_check') === false;
 }
 
 function backupUserInfo() {
@@ -2754,7 +2762,7 @@ function backupRowInfo() {
     const info = backupUserInfo();
     let state = info.state === 'warn' ? 'warn' : 'ok', value = info.text;   // fichiers ignorés → ne compte plus
     if ((ts.state === 'warn' || ts.state === 'danger') && timeshiftIgnored()) value += ` · ${t('simple.backup.timeshift_ignored')}`;
-    else if (ts.state === 'warn' || ts.state === 'danger') { state = state === 'ok' ? 'warn' : state; value += ` · ${t('simple.backup.timeshift_off')}`; }
+    else if (ts.state === 'warn' || ts.state === 'danger') { state = state === 'ok' ? 'warn' : state; value += ` · ${t(`simple.backup.timeshift_${ts.kind || 'off'}`) !== `simple.backup.timeshift_${ts.kind || 'off'}` ? t(`simple.backup.timeshift_${ts.kind || 'off'}`) : t('simple.backup.timeshift_off')}`; }
     else if (ts.state === 'ok') value += ` · ${t('simple.backup.timeshift_ok')}`;
     return { state, value, action: { label: t('simple.backup.btn'), fn: 'openBackupWizard()' } };
 }
