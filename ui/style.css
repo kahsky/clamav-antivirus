@@ -2977,3 +2977,8 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 @media (max-width: 900px) {
     .card .status-side { max-width: 100%; flex-basis: 100%; padding-left: 0; border-left: 0; border-top: 1px solid var(--border); padding-top: 12px; }
 }
+
+/* ── v1.20.2 : état « information » (bleu) de la vue simple, cohérent avec le bouclier du tray ── */
+.simple-view[data-state="info"]   { background: radial-gradient(ellipse at 50% 18%, rgba(59,130,246,0.12), transparent 55%), var(--bg-primary); }
+.simple-view[data-state="info"] .simple-shield { color: var(--accent-blue); filter: drop-shadow(0 0 22px rgba(59,130,246,0.35)); }
+.simple-row[data-state="info"] .simple-row-icon { background: rgba(59,130,246,0.14); color: var(--accent-blue); }

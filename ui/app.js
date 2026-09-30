@@ -488,8 +488,9 @@ function renderVulns(refreshing = false) {
     const ackable = ['unfixed', 'pro_only'].includes(vulnFilter);
     const ackAll = $('vulnAckAll');
     if (ackAll) {
-        ackAll.hidden = !(ackable && items.length);
-        ackAll.textContent = t('security.vulns.ack_all', { n: formatNumber(new Set(items.map(i => i.cve)).size) });
+        const openAll = new Set((v.items || []).filter(i => ['unfixed', 'pro_only'].includes(i.status) && !i.dormant && !i.acknowledged).map(i => i.cve)).size;
+        ackAll.hidden = !openAll;
+        ackAll.textContent = t('security.vulns.ack_all', { n: formatNumber(openAll) });
     }
     if ($('vulnPrio')) $('vulnPrio').value = vulnPrio;
     if ($('vulnHidden')) $('vulnHidden').textContent = hidden > 0 ? t('security.vulns.hidden', { n: hidden }) : '';
@@ -625,14 +626,16 @@ function ackVuln(cve, remove = false) {
     if (cve) sendToBackend({ action: 'acknowledge_vuln', cves: [cve], remove });
 }
 
+/** « Tout ignorer » : toutes les failles ouvertes (sans correctif et Ubuntu Pro, toutes priorités) — depuis la carte,
+ *  la checklist ou la vue simple. Le service connaît la liste : all_open. */
 async function ackAllVulns() {
     const v = secData.vulns;
-    if (!v) return;
-    const maxRank = vulnPrio === 'all' ? 99 : vulnPrio === 'medium' ? 2 : 1;
-    const cves = [...new Set((v.items || []).filter(i => i.status === vulnFilter && !i.dormant && !i.acknowledged && (VULN_PRIO_RANK[i.priority] ?? 5) <= maxRank).map(i => i.cve))];
-    if (!cves.length) return;
-    const ok = await appConfirm({ title: t('security.vulns.ack_all_title', { n: formatNumber(cves.length) }), message: t('security.vulns.ack_all_msg', { n: formatNumber(cves.length) }), ok: t('security.vulns.ack_all_ok') });
-    if (ok) sendToBackend({ action: 'acknowledge_vuln', cves });
+    const vs = lastStatus && lastStatus.vulns_summary;
+    let n = v ? new Set((v.items || []).filter(i => ['unfixed', 'pro_only'].includes(i.status) && !i.dormant && !i.acknowledged).map(i => i.cve)).size : 0;
+    if (!n && vs && vs.counts) n = (vs.counts.unfixed || 0) + (vs.counts.pro_only || 0);
+    if (!n) return;
+    const ok = await appConfirm({ title: t('security.vulns.ack_all_title', { n: formatNumber(n) }), message: t('security.vulns.ack_all_msg', { n: formatNumber(n) }), ok: t('security.vulns.ack_all_ok') });
+    if (ok) sendToBackend({ action: 'acknowledge_vuln', all_open: true });
 }
 
 async function unackAllVulns() {
@@ -813,7 +816,7 @@ function simpleOverall() {
     const sys = systemStatus || (lastStatus && lastStatus.system_status) || null;
     const rows = [];
     let worst = 'ok';
-    const bump = (st) => { if (st === 'danger') worst = 'danger'; else if (st === 'warn' && worst !== 'danger') worst = 'warn'; };
+    const bump = (st) => { if (st === 'danger') worst = 'danger'; else if (st === 'warn' && worst !== 'danger') worst = 'warn'; else if (st === 'info' && worst === 'ok') worst = 'info'; };
 
     // Antivirus / signatures
     const color = lastStatus ? lastStatus.color : 'green';
@@ -858,8 +861,9 @@ function simpleOverall() {
     const openVulns = vs && vs.counts ? (vs.counts.unfixed || 0) + (vs.counts.pro_only || 0) : 0;
     let sysValue = sysLabels[sysState];
     if (sysState === 'ok' && openVulns) sysValue = t('simple.vulns_open', { n: openVulns });
-    rows.push({ state: sysRowState === 'ok' && openVulns ? 'warn' : sysRowState, label: t('simple.row.system'), value: sysValue,
-        action: (sysState === 'security' || sysState === 'updates') ? { label: t('simple.update_system'), fn: "sendToBackend({action:'system_upgrade'})" } : (openVulns ? { label: t('popup.btn.details'), fn: "setViewMode('advanced'); switchTab('security')" } : null) });
+    if (sysRowState === 'ok' && openVulns) bump('info');
+    rows.push({ state: sysRowState === 'ok' && openVulns ? 'info' : sysRowState, label: t('simple.row.system'), value: sysValue,
+        action: (sysState === 'security' || sysState === 'updates') ? { label: t('simple.update_system'), fn: "sendToBackend({action:'system_upgrade'})" } : (openVulns ? { label: t('security.ignore'), fn: "ackAllVulns()" } : null) });
 
     // Menaces / quarantaine
     const danger = alerts.find(a => a.severity === 'danger');
@@ -899,8 +903,8 @@ function renderSimpleView() {
     if (!view) return;
     let { worst, rows } = simpleOverall();
     if (overall && overall.color) {
-        const map = { green: 'ok', yellow: 'warn', blue: 'warn', red: 'danger' };
-        const rank = { ok: 0, warn: 1, danger: 2 };
+        const map = { green: 'ok', yellow: 'warn', blue: 'info', red: 'danger' };   // bleu = information, comme le bouclier du tray
+        const rank = { ok: 0, info: 1, warn: 2, danger: 3 };
         const o = map[overall.color] || 'ok';
         worst = (rank[o] || 0) >= (rank[worst] || 0) ? o : worst;   // le pire des deux : service + vue (sauvegardes)
     }
@@ -911,7 +915,7 @@ function renderSimpleView() {
     $('simpleSub').textContent = t(`simple.sub.${worst}`) + (reasons.length ? ` ${t('simple.sub.reasons', { list: reasons.join(', ') })}` : '');
     $('simpleRows').innerHTML = rows.map(r => `
         <li class="simple-row" data-state="${r.state}">
-            <span class="simple-row-icon">${r.state === 'ok' ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="5,12 10,17 19,7"/></svg>' : r.state === 'neutral' ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="14"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>'}</span>
+            <span class="simple-row-icon">${r.state === 'ok' ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="5,12 10,17 19,7"/></svg>' : (r.state === 'neutral' || r.state === 'info') ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="14"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>'}</span>
             <span class="simple-row-text"><span class="simple-row-label">${escapeHtml(r.label)}</span><span class="simple-row-value" title="${escapeHtml(r.value)}">${escapeHtml(r.value)}</span></span>
             ${r.action ? `<button class="btn ${r.state === 'danger' ? 'btn-danger' : 'btn-secondary'} btn-sm" onclick="${r.action.fn}">${escapeHtml(r.action.label)}</button>` : ''}
         </li>`).join('');
@@ -2494,7 +2498,7 @@ function simulateBackend(data) {
             break;
         }
         case 'acknowledge_vuln': {
-            const v = secData.vulns; const set = new Set(data.cves || []);
+            const v = secData.vulns; const set = new Set(data.all_open && v ? v.items.filter(i => ['unfixed', 'pro_only'].includes(i.status)).map(i => i.cve) : (data.cves || []));
             if (v) {
                 for (const i of v.items || []) if (set.has(i.cve) && ['unfixed', 'pro_only'].includes(i.status)) { i.acknowledged = !data.remove; i.acknowledged_at = data.remove ? null : new Date().toISOString(); }
                 const open = v.items.filter(i => !i.acknowledged && !i.dormant);
@@ -2983,7 +2987,7 @@ const CHECK_FIX = {
 const CHECK_FIX_LABEL = { auto_updates: 'check.auto_updates.action' };
 
 /** Contrôles que l'utilisateur peut ignorer en connaissance de cause (« Ignorer ») : ports ouverts voulus (développement web…). */
-const CHECK_ACK = { open_ports: () => ackAllPorts() };
+const CHECK_ACK = { open_ports: () => ackAllPorts(), open_vulns: () => ackAllVulns() };
 
 // ─── Ports joignables voulus : ignorés par port+programme, ne comptent plus dans la checklist ni le score ───
 function ackPort(key, remove = false) {
