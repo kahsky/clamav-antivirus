@@ -1259,8 +1259,22 @@ def graphical_sessions():
         except KeyError:
             continue
         if uid >= 1000:
-            out.append({"id": sid, "user": props.get("Name"), "uid": uid, "type": props.get("Type")})
+            out.append({"id": sid, "user": props.get("Name"), "uid": uid, "type": props.get("Type"), "age": session_age(sid)})
     return out
+
+
+def session_age(sid):
+    """Secondes depuis l'ouverture de la session (loginctl TimestampMonotonic vs uptime), None si inconnu."""
+    r = run_quiet(["loginctl", "show-session", sid, "-p", "TimestampMonotonic", "--value"], timeout=10)
+    try:
+        started = int((r.stdout or "").strip()) / 1e6
+        with open("/proc/uptime") as f:
+            return max(0.0, float(f.read().split()[0]) - started)
+    except (ValueError, OSError):
+        return None
+
+
+TRAY_PROCESS_RE = r"^(/usr/bin/)?python3(\.[0-9]+)? /opt/clamav-antivirus/clamav-antivirus\.py"
 
 
 def network_identity():
@@ -4671,15 +4685,30 @@ class Daemon:
             uid = s["uid"]
             if s["id"] in (self.tray_stopped.get(uid) or set()):
                 continue
-            r = run_quiet(["pgrep", "-u", str(uid), "-f", "clamav-antivirus.py"], timeout=10)
-            if r.returncode == 0:
+            r = run_quiet(["pgrep", "-u", str(uid), "-f", TRAY_PROCESS_RE], timeout=10)
+            pids = sorted(int(p) for p in (r.stdout or "").split() if p.isdigit())
+            if len(pids) > 1:
+                # Doublons (deux boucliers, notifications en double) : on garde le plus ancien
+                for pid in pids[1:]:
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except OSError:
+                        pass
+                self.write_log(f"duplicate tray for {s['user']}: terminated {pids[1:]}, kept {pids[0]}")
+            if pids:
                 continue
-            if time.time() - self.tray_launched.get(uid, 0) < 30:
+            # Juste après l'ouverture de session, c'est le démarrage automatique du bureau qui lance le bouclier :
+            # on lui laisse 90 s, et il faut que le bus utilisateur existe (gestionnaire systemd --user prêt)
+            if s.get("age") is not None and s["age"] < 90:
+                continue
+            if not os.path.exists(f"/run/user/{uid}/bus"):
+                continue
+            if time.time() - self.tray_launched.get(uid, 0) < 60:
                 continue
             self.tray_launched[uid] = time.time()
             env = {"XDG_RUNTIME_DIR": f"/run/user/{uid}", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus", "HOME": pwd.getpwuid(uid).pw_dir}
             cmd = ["runuser", "-u", s["user"], "--", "env"] + [f"{k}={v}" for k, v in env.items()] + [TRAY_LAUNCHER]
-            rr = run_quiet(cmd, timeout=30)
+            rr = run_quiet(cmd, timeout=40)
             self.write_log(f"tray relaunched for {s['user']} (session {s['id']}) → {rr.returncode}")
 
     def network_info(self):

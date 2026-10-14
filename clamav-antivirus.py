@@ -25,6 +25,7 @@ from gi.repository import Gtk, Gdk, WebKit2, GLib, AppIndicator3
 import subprocess
 import threading
 import socket
+import fcntl
 import json
 import os
 import time
@@ -3077,6 +3078,24 @@ def try_activate_existing():
         return False
 
 
+INSTANCE_LOCK = os.path.join(DATA_DIR, "instance.lock")
+_instance_lock_fd = None
+
+
+def acquire_instance_lock():
+    """Verrou exclusif par utilisateur : deux lancements simultanés (démarrage automatique du bureau + relance par le
+    service système) ne donnent plus deux boucliers et des notifications en double. Le verrou vit avec le processus."""
+    global _instance_lock_fd
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        fd = os.open(INSTANCE_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    _instance_lock_fd = fd
+    return True
+
+
 def start_instance_server(app):
     try:
         os.unlink(INSTANCE_SOCKET)
@@ -3105,7 +3124,12 @@ def start_instance_server(app):
 
 
 def main():
-    if try_activate_existing():
+    if not acquire_instance_lock():
+        # Une instance tourne déjà (ou démarre à la même seconde) : on la fait apparaître et on s'efface
+        for _ in range(10):
+            if try_activate_existing():
+                break
+            time.sleep(0.5)
         sys.exit(0)
     app = ClamAVAntivirusApp(start_hidden="--tray" in sys.argv)
     start_instance_server(app)

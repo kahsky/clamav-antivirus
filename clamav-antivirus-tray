@@ -1,16 +1,30 @@
 #!/bin/sh
 # ClamAV Antivirus GUI — lance le bouclier (tray) dans un service utilisateur transitoire relancé automatiquement
 # s'il est tué (Restart=always). « Quitter » (administrateur) arrête proprement ce service.
+# Une seule instance par session : si le service est déjà actif, on sort ; si le gestionnaire utilisateur (systemd --user)
+# n'est pas encore joignable juste après l'ouverture de session, on attend jusqu'à 20 s au lieu de lancer le programme
+# hors service (c'est ainsi que deux boucliers apparaissaient après un redémarrage : un lancé par le service système
+# avant que la session soit prête, un autre par le démarrage automatique du bureau).
 # Variables de test : CLAMAV_ANTIVIRUS_TRAY_UNIT (nom d'unité), CLAMAV_ANTIVIRUS_TRAY_CMD (commande).
 UNIT="${CLAMAV_ANTIVIRUS_TRAY_UNIT:-clamav-antivirus-tray}"
 CMD="${CLAMAV_ANTIVIRUS_TRAY_CMD:-/usr/bin/python3 /opt/clamav-antivirus/clamav-antivirus.py --tray}"
-if command -v systemd-run >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+LOCKDIR="${XDG_RUNTIME_DIR:-/tmp}"; [ -d "$LOCKDIR" ] && [ -w "$LOCKDIR" ] || LOCKDIR=/tmp
+LOCK="$LOCKDIR/$UNIT.$(id -u).launch.lock"
+if command -v systemd-run >/dev/null 2>&1 && [ -n "$XDG_RUNTIME_DIR" ]; then
+    i=0
+    while ! systemctl --user show-environment >/dev/null 2>&1; do
+        i=$((i + 1))
+        [ "$i" -ge 20 ] && exit 75      # gestionnaire utilisateur absent : on réessaiera (service système toutes les 20 s)
+        sleep 1
+    done
     if systemctl --user is-active --quiet "$UNIT.service"; then
         exit 0
     fi
     systemctl --user reset-failed "$UNIT.service" >/dev/null 2>&1
-    exec systemd-run --user --quiet --unit="$UNIT" --collect \
+    # flock : deux lanceurs simultanés (bureau + service système) ne créent qu'une unité
+    exec flock -n "$LOCK" systemd-run --user --quiet --unit="$UNIT" --collect \
         -p Restart=always -p RestartSec=1 -p KillMode=process \
         --description="ClamAV Antivirus GUI (tray)" /bin/sh -c "exec $CMD"
 fi
-exec $CMD
+# Sans systemd --user : exécution directe, verrouillée (une seule instance)
+exec flock -n "$LOCK" /bin/sh -c "exec $CMD"
