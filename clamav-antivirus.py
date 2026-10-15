@@ -58,6 +58,7 @@ from clamav_common import (  # noqa: E402
 # Réglages propres à l'utilisateur (le reste est géré par le daemon)
 import clamav_backup as backup   # sauvegarde des fichiers de l'utilisateur (droits utilisateur)
 import clamav_extras as extras   # fuites, applications hors dépôts, coffre chiffré, bilan hebdomadaire
+import clamav_distro as distro   # Debian/Mint (apt, ufw) ou Fedora (dnf, firewalld)
 
 USER_DEFAULTS = {
     "view_mode": "simple",
@@ -489,8 +490,7 @@ class ClamAVBackend:
         def run():
             try:
                 proc = subprocess.Popen(
-                    ["pkexec", "bash", "-c",
-                     "apt-get update && apt-get install -y clamav clamav-daemon clamav-freshclam"],
+                    ["pkexec", "bash", "-c", distro.clamav_install_shell()],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
                 )
                 for line in proc.stdout:
@@ -2970,7 +2970,7 @@ class ClamAVAntivirusApp:
         return False
 
     def act_open_update_manager(self, _data):
-        for cmd in (["mintupdate"], ["update-manager"], ["gnome-software", "--mode=updates"]):
+        for cmd in distro.update_manager_cmds():
             if shutil.which(cmd[0]):
                 subprocess.Popen(cmd)
                 return

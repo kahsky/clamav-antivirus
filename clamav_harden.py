@@ -12,6 +12,8 @@ import shutil
 import socket
 import subprocess
 
+import clamav_distro as distro
+
 ROOT = os.environ.get("CLAMAV_ANTIVIRUS_HARDEN_ROOT", "/")
 DRY = ROOT != "/"
 TAG = "# ClamAV Antivirus GUI"
@@ -54,6 +56,10 @@ SSHD_CONF = (f"{TAG} (SSH-7408) — supprimer ce fichier pour revenir aux régla
              "TCPKeepAlive no\nX11Forwarding no\n")
 PACKAGES = {"pwquality": ["libpam-pwquality"], "acct": ["acct"], "auditd": ["auditd"], "fail2ban": ["fail2ban"],
             "pam_tmpdir": ["libpam-tmpdir"], "apt_show_versions": ["apt-show-versions"]}
+if distro.is_rpm():
+    PACKAGES = {"pwquality": ["libpwquality"], "acct": ["psacct"], "auditd": ["audit"], "fail2ban": ["fail2ban"],
+                "pam_tmpdir": [], "apt_show_versions": []}
+RPM_NOT_APPLICABLE = ("purge_rc", "old_kernels", "needrestart", "apt_show_versions", "pam_tmpdir")
 
 # Catalogue : test Lynis → traitement. kind : apply (bouton), gui (réglage ailleurs dans l'application),
 # manual (explication), skip (sans objet ou déconseillé ici). caution : jamais automatique, à lire avant.
@@ -97,8 +103,15 @@ CATALOG = {
 
 
 def catalog_public():
-    """Catalogue pour l'interface (kind, caution, no_revert, action)."""
-    return {t: {k: v for k, v in e.items() if k != "fn"} for t, e in CATALOG.items()}
+    """Catalogue pour l'interface (kind, caution, no_revert, action). Sur Fedora, les traitements propres à
+    dpkg/apt (restes de configuration, anciens noyaux, needrestart…) sont sans objet."""
+    out = {}
+    for t, e in CATALOG.items():
+        pub = {k: v for k, v in e.items() if k != "fn"}
+        if distro.is_rpm() and e.get("fn") in RPM_NOT_APPLICABLE:
+            pub["kind"] = "skip"
+        out[t] = pub
+    return out
 
 
 def is_safe(test):
@@ -158,7 +171,11 @@ def _remove(path):
 
 
 def _apt(args, timeout=1200):
+    """apt-get (Debian/Mint) ou dnf (Fedora) : install / purge + paquets."""
     env = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LC_ALL="C")
+    if distro.is_rpm():
+        action = "remove" if args[0] in ("purge", "remove") else args[0]
+        return _check(_run(["dnf", "-y", "-q", action] + args[1:], timeout=timeout, env=env), "dnf " + action)
     cmd = ["apt-get", "-y", "-q", "-o", "DPkg::Lock::Timeout=180", "-o", "Dpkg::Options::=--force-confdef",
            "-o", "Dpkg::Options::=--force-confold"] + args
     return _check(_run(cmd, timeout=timeout, env=env), "apt-get " + args[0])
@@ -253,12 +270,16 @@ revert_umask = revert_password_age
 
 def _apply_packages(fn):
     pkgs = PACKAGES[fn]
+    if not pkgs:
+        return "sans objet sur cette distribution", {}
     _apt(["install"] + pkgs)
     return "installé : " + ", ".join(pkgs), {}
 
 
 def _revert_packages(fn):
     pkgs = PACKAGES[fn]
+    if not pkgs:
+        return "sans objet sur cette distribution"
     _apt(["purge"] + pkgs)
     return "désinstallé : " + ", ".join(pkgs)
 

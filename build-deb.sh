@@ -8,10 +8,13 @@
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.21.1"
+VERSION="1.22.1"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# --stage-only <dir> : construit seulement l'arborescence (partagée avec build-rpm.sh), sans paquet Debian
+STAGE_ONLY=""
+if [ "${1:-}" = "--stage-only" ]; then STAGE_ONLY="$2"; PKG_DIR="$2"; fi
 
 echo "══════════════════════════════════════════"
 echo "  Building ${APP_NAME} v${VERSION} .deb"
@@ -41,6 +44,7 @@ cp "${SCRIPT_DIR}/clamav_common.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_backup.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_extras.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_harden.py"                "${PKG_DIR}/opt/${APP_NAME}/"
+cp "${SCRIPT_DIR}/clamav_distro.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav-antivirus-tray"           "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav-scan-nemo.sh"             "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/systemd/"*.service               "${PKG_DIR}/lib/systemd/system/"
@@ -99,6 +103,12 @@ if [ -d "${REPO_KEYS}" ]; then
         && echo "  integrity.json signé (clé Dukiwi)"
 else
     echo "  (clé privée absente : integrity.json non signé)"
+fi
+
+if [ -n "$STAGE_ONLY" ]; then
+    rm -rf "${PKG_DIR}/DEBIAN"
+    echo "  arborescence prête dans ${PKG_DIR}"
+    exit 0
 fi
 
 # ── Create DEBIAN/control ──

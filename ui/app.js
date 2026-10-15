@@ -493,6 +493,7 @@ function renderVulns(refreshing = false) {
     const v = secData.vulns;
     $('btnVulnsRefresh').disabled = !!refreshing;
     if (!v || !v.checked_at) { $('vulnsChecked').textContent = refreshing ? t('system.refreshing') : ''; $('vulnList').innerHTML = `<p class="text-muted">${refreshing ? t('system.refreshing') : t('security.vulns.none_yet')}</p>`; $('vulnSummary').innerHTML = ''; return; }
+    if (v.unsupported) { $('vulnsChecked').textContent = ''; $('vulnList').innerHTML = `<p class="text-muted">${t('security.vulns.unsupported')}</p>`; $('vulnSummary').innerHTML = ''; if ($('vulnAckAll')) $('vulnAckAll').hidden = true; if ($('vulnAcked')) $('vulnAcked').hidden = true; return; }
     $('vulnsChecked').textContent = (refreshing ? t('system.refreshing') + ' · ' : '') + t('system.checked', { date: formatDateTime(v.checked_at), rel: formatRelative(v.checked_at) }) + (v.ok === false ? ` · ${t('security.vulns.error', { error: v.error || '' })}` : '');
     const c = v.counts || {};
     const bp = v.by_priority || {};
@@ -1047,6 +1048,7 @@ function renderSecurity(available = true) {
         else if (!ufw.active && ufw.enabled) $('fwSummary').textContent += ` — ${t('firewall.not_loaded')}${ufw.error ? ` (${ufw.error})` : ''}`;
         else if (!ufw.active && ufw.error) $('fwSummary').textContent += ` — ${ufw.error}`;
         if ((ufw.conflicts || []).length) $('fwSummary').textContent += ` — ${t('firewall.conflicts', { names: ufw.conflicts.join(', ') })}`;
+        if (ufw.backend === 'firewalld' && ufw.active) $('fwSummary').textContent += ` — ${t('firewall.firewalld_note', { zone: ufw.zone || '' })}`;
         if (ufw.default_incoming) $('fwDefaultIn').value = ufw.default_incoming;
         if (ufw.default_outgoing) $('fwDefaultOut').value = ufw.default_outgoing;
     }

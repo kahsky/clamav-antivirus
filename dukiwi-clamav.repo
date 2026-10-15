@@ -1,0 +1,7 @@
+[dukiwi-clamav]
+name=Dukiwi ClamAV Antivirus GUI
+baseurl=https://www.dukiwi.com/repo/rpm/fedora/
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://www.dukiwi.com/repo/rpm/dukiwi-clamav.asc

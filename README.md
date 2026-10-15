@@ -1,9 +1,76 @@
 # 🛡️ ClamAV Antivirus GUI
 
-Interface graphique moderne pour **ClamAV** sur Linux Mint.
+Interface graphique moderne pour **ClamAV** avec service système, protection en temps réel, pare-feu,
+centre de sécurité, sauvegardes et durcissement. **Linux Mint 22**, **Ubuntu 24.04 à 26.04** et **Fedora 44+**.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.21.1)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.22.1)
+
+## Installation
+
+### Linux Mint 22 et Ubuntu 24.04 à 26.04 (dépôt APT signé, mises à jour automatiques)
+
+Le dépôt `noble` sert toutes ces versions :
+
+```bash
+sudo mkdir -p /usr/share/keyrings
+curl -fsSL https://www.dukiwi.com/repo/apt/dukiwi-clamav.gpg | sudo tee /usr/share/keyrings/dukiwi-clamav.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/dukiwi-clamav.gpg] https://www.dukiwi.com/repo/apt noble main" | sudo tee /etc/apt/sources.list.d/dukiwi-clamav.list
+echo "msmtp msmtp/apparmor boolean false" | sudo debconf-set-selections   # évite la seule question posée à l'installation (voir ci-dessous)
+sudo apt update && sudo apt install -y clamav-antivirus
+```
+
+Installation sans question : chkrootkit recommande un serveur de courrier et le paquet choisit msmtp, le plus
+léger ; msmtp demande au passage s'il faut activer son profil AppArmor (réponse par défaut : non). La ligne
+`debconf-set-selections` répond d'avance. Sans elle, `DEBIAN_FRONTEND=noninteractive` devant `apt install`
+donne le même résultat.
+
+### Fedora 44+ (et dérivés : Nobara, Ultramarine…) — dépôt dnf signé
+
+```bash
+sudo curl -fsSL -o /etc/yum.repos.d/dukiwi-clamav.repo https://www.dukiwi.com/repo/rpm/dukiwi-clamav.repo
+sudo rpm --import https://www.dukiwi.com/repo/rpm/dukiwi-clamav.asc
+sudo dnf install clamav-antivirus
+```
+
+Paquet RPM « noarch » signé, dépôt dnf signé (RPM et index). Sur Fedora, l'application parle dnf et rpm au lieu
+d'apt et dpkg, firewalld au lieu d'UFW (profils Maison / Public / Entreprise ↔ zones home / public / work),
+SELinux au lieu d'AppArmor dans la checklist, `rpm -V` au lieu de debsums, les avis de sécurité dnf (avec
+leurs CVE) dans État du système ; l'inventaire OSV des failles sans correctif n'existe pas pour Fedora. Sous
+GNOME, l'extension AppIndicator (`gnome-shell-extension-appindicator`, recommandée par le paquet) affiche le
+bouclier. Les mises à jour de l'application arrivent par dnf ou Logiciels.
+
+Les mises à jour arrivent ensuite par le Gestionnaire de mises à jour de Mint, Logiciels d'Ubuntu ou dnf.
+L'application signale aussi elle-même les nouvelles versions (popup ou onglet Sécurité) et peut les installer
+seule si l'option est activée dans Paramètres.
+
+### Téléchargement direct
+
+- Mint / Ubuntu : [clamav-antivirus_1.22.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.22.1_all.deb)
+- Fedora : [clamav-antivirus-1.22.1-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.22.1-1.noarch.rpm)
+- Toutes les versions : [www.dukiwi.com/repo](https://www.dukiwi.com/repo)
+
+### Installer le paquet téléchargé à la main
+
+```bash
+sudo apt install ./clamav-antivirus_1.22.1_all.deb          # Mint / Ubuntu
+sudo dnf install ./clamav-antivirus-1.22.1-1.noarch.rpm      # Fedora
+```
+
+L'installation active le service système et le planificateur, puis lance le scan initial :
+
+```bash
+systemctl status clamav-antivirus-daemon      # service (root)
+systemctl list-timers clamav-antivirus-update # prochaine recherche de MàJ
+journalctl -u clamav-antivirus-daemon -f      # suivre le scan initial
+```
+
+### Désinstaller
+
+```bash
+sudo apt remove clamav-antivirus   # Mint / Ubuntu
+sudo dnf remove clamav-antivirus   # Fedora
+```
 
 ---
 
@@ -153,6 +220,16 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
   `ufw.service` au démarrage et signale un autre gestionnaire de pare-feu actif (firewalld, nftables avec
   `flush ruleset`, netfilter-persistent). Checklist et score recalculés après chaque action pare-feu/SSH.
+- **Fedora : socket clamd activé** — scan.conf livré avec LocalSocket commenté : décommenté par le paquet et par le
+  service, sinon pas de moteur clamd. Paquet RPM construit, signé, installé et vérifié dans un conteneur Fedora 44
+  depuis le dépôt dnf signé.
+- **Fedora et dérivés** — couche de distribution `clamav_distro.py` : dnf (mises à jour, avis de sécurité et
+  CVE via `dnf updateinfo`, redémarrage via `needs-restarting`, dnf-automatic), rpm (propriété des fichiers,
+  `rpm -V` à la place de debsums avec classement des fichiers de configuration), firewalld (zones home / public /
+  work comme profils, services, ports, règles riches, activation), SELinux dans la checklist, `clamd@scan` et
+  `/etc/clamd.d/scan.conf`, mise à jour de l'application par dnf (entrée `rpm` du manifeste), msmtp direct.
+  Paquet RPM noarch (`build-rpm.sh`, `clamav-antivirus.spec`), dépôt dnf signé (`rpm/fedora`) et fichier
+  `.repo` livré par le paquet ; comptage des téléchargements RPM et des lectures de l'index dnf.
 - **Popups sous Ubuntu (Wayland)** — un client Wayland ne peut pas placer ses fenêtres et GNOME centrait les
   notifications en plein écran ; le bouclier utilise le backend X11 de GTK via XWayland quand une session Wayland
   l'offre, et les popups glissent de nouveau depuis le bas. Réglage « Position des notifications » : en bas à
@@ -369,39 +446,17 @@ de ses actes. Le texte complet (12 articles, FR/EN/DE/IT) est affiché dans l'ap
 premier lancement et sous Crédits → Avertissement ; en l'utilisant, vous l'acceptez. Ce texte
 n'est pas un avis juridique.
 
-## Installation via le dépôt APT (recommandé)
-
-Dépôt signé pour Ubuntu 24.04 « noble » et Linux Mint 22 :
-
-```bash
-sudo mkdir -p /usr/share/keyrings
-curl -fsSL https://www.dukiwi.com/repo/apt/dukiwi-clamav.gpg | sudo tee /usr/share/keyrings/dukiwi-clamav.gpg > /dev/null
-echo "deb [signed-by=/usr/share/keyrings/dukiwi-clamav.gpg] https://www.dukiwi.com/repo/apt noble main" | sudo tee /etc/apt/sources.list.d/dukiwi-clamav.list
-echo "msmtp msmtp/apparmor boolean false" | sudo debconf-set-selections   # évite la seule question posée à l'installation (voir ci-dessous)
-sudo apt update && sudo apt install -y clamav-antivirus
-```
-
-Installation sans question : chkrootkit recommande un serveur de courrier et le paquet choisit msmtp, le plus
-léger ; msmtp demande au passage s'il faut activer son profil AppArmor (réponse par défaut : non). La ligne
-`debconf-set-selections` répond d'avance. Sans elle, `DEBIAN_FRONTEND=noninteractive` devant `apt install`
-donne le même résultat.
-
-Les mises à jour arrivent ensuite par le Gestionnaire de mises à jour de Mint. L'application
-signale aussi elle-même les nouvelles versions (popup ou onglet Sécurité) ; leur installation
-demande une authentification administrateur.
-
-## Téléchargement
-
-[Télécharger clamav-antivirus_1.21.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.21.1_all.deb)
-
 ---
 
-## Prérequis
+## Prérequis (lancement depuis les sources)
 
 ```bash
-# Installer les dépendances (Linux Mint 22+)
-sudo apt install clamav clamav-daemon clamav-freshclam \
-    python3-gi gir1.2-webkit2-4.0 gir1.2-appindicator3-0.1
+# Linux Mint / Ubuntu
+sudo apt install clamav clamav-daemon clamav-freshclam python3-gi python3-pyudev python3-apt \
+    gir1.2-webkit2-4.1 gir1.2-ayatanaappindicator3-0.1 gir1.2-gtk-3.0 ufw
+# Fedora
+sudo dnf install clamav clamd clamav-update python3-gobject python3-pyudev webkit2gtk4.1 \
+    libayatana-appindicator-gtk3 gtk3 firewalld
 ```
 
 ---
@@ -416,35 +471,15 @@ python3 clamav-antivirus.py
 
 ---
 
-## Construire le .deb
+## Construire les paquets
 
 ```bash
-chmod +x build-deb.sh
-./build-deb.sh
+./build-deb.sh        # clamav-antivirus_1.22.1_all.deb   (Mint / Ubuntu)
+./build-rpm.sh        # clamav-antivirus-1.22.1-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
 ```
 
-Résultat : `clamav-antivirus_1.21.1_all.deb`
-
-### Installer le .deb
-
-```bash
-sudo dpkg -i clamav-antivirus_1.21.1_all.deb
-sudo apt-get install -f   # résout les dépendances si nécessaire
-```
-
-L'installation active le service système et le planificateur, puis lance le scan initial :
-
-```bash
-systemctl status clamav-antivirus-daemon      # service (root)
-systemctl list-timers clamav-antivirus-update # prochaine recherche de MàJ
-journalctl -u clamav-antivirus-daemon -f      # suivre le scan initial
-```
-
-### Désinstaller
-
-```bash
-sudo dpkg -r clamav-antivirus
-```
+Les deux paquets partagent la même arborescence de fichiers (`build-deb.sh --stage-only`) et le même manifeste
+d'intégrité signé.
 
 ---
 

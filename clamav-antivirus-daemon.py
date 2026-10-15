@@ -64,6 +64,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import clamav_harden as harden  # noqa: E402
+import clamav_distro as distro  # noqa: E402
 from clamav_common import (  # noqa: E402
     VERSION, SYSTEM_STATE_DIR, SYSTEM_LOG_DIR, DAEMON_SOCKET,
     SYSTEM_STATE_FILE, SYSTEM_QUARANTINE_DIR, SYSTEM_PROGRESS_FILE, SYSTEM_SCAN_CACHE_DB, SYSTEM_SECRET_FILE,
@@ -110,7 +111,7 @@ USER_AGENT = f"clamav-antivirus/{VERSION}"
 LOG_MAX_BYTES = 5 * 1024 * 1024
 PROGRESS_INTERVAL = 0.25      # secondes entre deux événements de progression
 PROGRESS_SAVE_INTERVAL = 2.0  # secondes entre deux sauvegardes du fichier de reprise
-CLAMD_CONF = "/etc/clamav/clamd.conf"
+CLAMD_CONF = distro.clamd_conf()                       # Debian : /etc/clamav/clamd.conf ; Fedora : /etc/clamd.d/scan.conf
 USB_MANIFEST = ".clamav"       # manifeste caché à la racine d'un support amovible déjà analysé
 SCAN_BATCH = 100               # fichiers par appel clamdscan (un worker = une connexion clamd)
 SCAN_WORKERS_MAX = 8
@@ -300,7 +301,31 @@ def clamd_socket_path():
                     return ln.split(None, 1)[1].strip()
     except OSError:
         pass
-    return "/var/run/clamav/clamd.ctl"
+    return "/run/clamd.scan/clamd.sock" if distro.is_rpm() else "/var/run/clamav/clamd.ctl"
+
+
+def clamd_enable_local_socket():
+    """Fedora livre /etc/clamd.d/scan.conf avec « #LocalSocket /run/clamd.scan/clamd.sock » commenté : sans socket,
+    clamd@scan ne sert à rien et l'antivirus retomberait sur clamscan (lent). Décommenté une fois, en root."""
+    if not distro.is_rpm() or os.geteuid() != 0:
+        return False
+    try:
+        with open(CLAMD_CONF, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return False
+    if re.search(r"^LocalSocket\s", text, flags=re.M):
+        return False
+    new = re.sub(r"^#\s*LocalSocket\s+(\S+)", r"LocalSocket \1", text, count=1, flags=re.M)
+    if new == text:
+        new = text.rstrip("\n") + "\nLocalSocket /run/clamd.scan/clamd.sock\n"
+    try:
+        with open(CLAMD_CONF, "w", encoding="utf-8") as f:
+            f.write(new)
+    except OSError:
+        return False
+    log("clamd : LocalSocket activé dans " + CLAMD_CONF)
+    return True
 
 
 def clamd_ping(timeout=5):
@@ -324,7 +349,10 @@ def ensure_clamd(wait=90):
         return True
     if os.geteuid() != 0 or not shutil.which("clamdscan"):
         return False
-    run_quiet(["systemctl", "start", "clamav-daemon"], timeout=30)
+    if clamd_enable_local_socket():
+        run_quiet(["systemctl", "restart", distro.clamd_unit()], timeout=60)
+    else:
+        run_quiet(["systemctl", "start", distro.clamd_unit()], timeout=30)
     deadline = time.time() + wait
     while time.time() < deadline:
         if clamd_ping():
@@ -838,7 +866,7 @@ class ActivityMonitor(threading.Thread):
         found = []
         if not shutil.which("clamdscan") or not paths:
             return found
-        r = run_quiet(["clamdscan", "--fdpass", "--no-summary", "--infected"] + list(paths), timeout=60)
+        r = run_quiet(["clamdscan"] + distro.clamdscan_args() + ["--fdpass", "--no-summary", "--infected"] + list(paths), timeout=60)
         for line in (r.stdout or "").splitlines():
             if line.endswith(" FOUND"):
                 found.append(line)
@@ -1124,9 +1152,10 @@ def collect_timeshift_status(list_snapshots=True):
 
 def collect_security_status():
     """État du pare-feu UFW et du service SSH."""
-    ufw = {"installed": shutil.which("ufw") is not None, "active": False, "enabled": False,
-           "default_incoming": "", "default_outgoing": "", "rules": [], "error": ""}
-    if ufw["installed"]:
+    ufw = firewalld_status() if distro.firewall_backend() == "firewalld" else \
+        {"installed": shutil.which("ufw") is not None, "active": False, "enabled": False,
+         "default_incoming": "", "default_outgoing": "", "rules": [], "error": "", "backend": "ufw"}
+    if ufw["installed"] and ufw.get("backend") != "firewalld":
         try:
             with open("/etc/ufw/ufw.conf") as f:
                 ufw["enabled"] = any(line.strip() == "ENABLED=yes" for line in f)
@@ -1334,10 +1363,86 @@ def firewall_running():
     return ufw_chains_loaded()
 
 
+# ── firewalld (Fedora) : zones home / public / work ↔ profils Maison / Public / Entreprise ──
+FIREWALLD_ZONES = {"home": "home", "public": "public", "enterprise": "work"}
+FIREWALLD_SERVICE_PORTS = {"ssh": "22/tcp", "http": "80/tcp", "https": "443/tcp", "mdns": "5353/udp", "samba": "139,445/tcp",
+                           "ipp": "631/tcp", "kdeconnect": "1714:1764/tcp", "dhcpv6-client": "546/udp", "dhcp": "67/udp",
+                           "dns": "53/tcp", "cockpit": "9090/tcp", "ftp": "21/tcp", "smtp": "25/tcp", "vnc-server": "5900:5903/tcp",
+                           "rdp": "3389/tcp", "mysql": "3306/tcp", "postgresql": "5432/tcp", "nfs": "2049/tcp", "ntp": "123/udp"}
+PROFILE_FIREWALLD_SERVICES = {"ssh": "ssh", "cups": "ipp", "samba": "samba", "mdns": "mdns", "kdeconnect": "kdeconnect"}
+
+
+def fwcmd(*args, timeout=60):
+    r = run_quiet(["firewall-cmd", *args], timeout=timeout)
+    return r.returncode == 0, ((r.stdout or "") + (r.stderr or "")).strip()
+
+
+def firewalld_zone():
+    ok, out = fwcmd("--get-default-zone", timeout=15)
+    return out.strip() if ok and out.strip() else "public"
+
+
+def firewalld_rules(zone):
+    """Services, ports et règles riches de la zone, dans le format des règles ufw (to / action / from / comment)
+    pour l'interface et ufw_port_allowed ; kind/spec servent à la suppression."""
+    rules = []
+
+    def add(to, action, frm, comment, kind, spec):
+        rules.append({"number": len(rules) + 1, "to": to, "action": action, "from": frm, "comment": comment,
+                      "v6": False, "raw": spec, "kind": kind, "spec": spec})
+    ok, svcs = fwcmd("--zone", zone, "--list-services", timeout=15)
+    for s in (svcs.split() if ok else []):
+        add(FIREWALLD_SERVICE_PORTS.get(s, f"service {s}"), "ALLOW IN", "Anywhere", s, "service", s)
+    ok, ports = fwcmd("--zone", zone, "--list-ports", timeout=15)
+    for p in (ports.split() if ok else []):
+        add(p, "ALLOW IN", "Anywhere", "", "port", p)
+    ok, rich = fwcmd("--zone", zone, "--list-rich-rules", timeout=15)
+    for ln in (rich.splitlines() if ok else []):
+        ln = ln.strip()
+        if not ln:
+            continue
+        src = re.search(r'source address="([^"]+)"', ln)
+        port = re.search(r'port port="([^"]+)" protocol="([^"]+)"', ln)
+        svc = re.search(r'service name="([^"]+)"', ln)
+        if " accept" in ln:
+            verdict = "LIMIT IN" if "limit value" in ln else "ALLOW IN"
+        elif " reject" in ln:
+            verdict = "REJECT IN"
+        else:
+            verdict = "DENY IN"
+        to = f"{port.group(1).replace('-', ':')}/{port.group(2)}" if port else \
+            (FIREWALLD_SERVICE_PORTS.get(svc.group(1), f"service {svc.group(1)}") if svc else "Anywhere")
+        add(to, verdict, src.group(1) if src else "Anywhere", "rich", "rich", ln)
+    return rules
+
+
+def firewalld_status():
+    fw = {"installed": shutil.which("firewall-cmd") is not None, "backend": "firewalld", "active": False, "enabled": False,
+          "default_incoming": "", "default_outgoing": "allow", "rules": [], "error": "", "zone": "", "conflicts": [], "unit_enabled": False}
+    if not fw["installed"]:
+        return fw
+    fw["enabled"] = fw["unit_enabled"] = unit_enabled("firewalld")
+    ok, state = fwcmd("--state", timeout=15)
+    fw["active"] = ok and "running" in state
+    if not fw["active"]:
+        fw["error"] = "" if (not state or "not running" in state) else state[:200]
+        return fw
+    zone = firewalld_zone()
+    fw["zone"] = zone
+    ok, target = fwcmd("--permanent", "--zone", zone, "--get-target", timeout=15)
+    fw["default_incoming"] = "allow" if ok and target.strip() == "ACCEPT" else ("reject" if "REJECT" in target else "deny")
+    fw["rules"] = firewalld_rules(zone)
+    fw["conflicts"] = firewall_conflicts()
+    return fw
+
+
 def firewall_conflicts():
-    """Autres gestionnaires de pare-feu susceptibles d'effacer les règles UFW (au démarrage ou à la volée)."""
+    """Autres gestionnaires de pare-feu susceptibles d'effacer les règles (au démarrage ou à la volée)."""
     out = []
-    if systemd_is_active("firewalld"):
+    backend = distro.firewall_backend()
+    if backend == "firewalld" and systemd_is_active("ufw"):
+        out.append("ufw")
+    if backend != "firewalld" and systemd_is_active("firewalld"):
         out.append("firewalld")
     if systemd_is_active("nftables"):
         try:
@@ -1632,6 +1737,9 @@ def collect_system_status(previous=None):
     except (OSError, ValueError):
         pass
 
+    if distro.is_rpm():
+        status["reboot_required"] = False
+        return distro.pending_updates(status)          # dnf check-update + updateinfo (avis de sécurité et CVE)
     try:
         import apt
         import apt_pkg
@@ -1762,13 +1870,20 @@ class UpdateChecker:
                 return info
             info.update({k: manifest.get(k, "") for k in ("version", "url", "sha256", "date")})
             info["size"] = int(manifest.get("size") or 0)
+            if distro.is_rpm():
+                rpm = manifest.get("rpm") or {}
+                if not rpm.get("url"):
+                    info["error"] = "manifest:no_rpm"
+                    return info
+                info.update({"url": rpm.get("url", ""), "sha256": rpm.get("sha256", ""), "size": int(rpm.get("size") or 0)})
             if manifest.get("package") != "clamav-antivirus" or not info["version"]:
                 info["error"] = "manifest:invalid"
                 return info
             if not version_gt(info["version"], VERSION):
                 return info
             info["available"] = True
-            deb_path = os.path.join(UPDATES_DIR, os.path.basename(manifest.get("deb") or f"clamav-antivirus_{info['version']}_all.deb"))
+            pkg_name = (manifest.get("rpm") or {}).get("file") if distro.is_rpm() else manifest.get("deb")
+            deb_path = os.path.join(UPDATES_DIR, os.path.basename(pkg_name or (f"clamav-antivirus-{info['version']}-1.noarch.rpm" if distro.is_rpm() else f"clamav-antivirus_{info['version']}_all.deb")))
             if not (os.path.exists(deb_path) and sha256_file(deb_path) == info["sha256"]):
                 try:
                     with open(deb_path + ".part", "wb") as f:
@@ -1796,9 +1911,10 @@ class UpdateChecker:
         if TEST_MODE:
             return True, "test_mode"
         unit = f"clamav-antivirus-upgrade-{int(time.time())}"
+        shell = f"dnf -y install '{path}'" if distro.is_rpm() else f"apt-get install -y --allow-downgrades '{path}'"
         r = run_quiet(["systemd-run", "--unit", unit, "--collect", "--quiet",
                        "-p", "Environment=DEBIAN_FRONTEND=noninteractive",
-                       "/bin/sh", "-c", f"apt-get install -y --allow-downgrades '{path}'"], timeout=30)
+                       "/bin/sh", "-c", shell], timeout=30)
         return r.returncode == 0, ((r.stderr or "") + (r.stdout or "")).strip()[-200:]
 
 
@@ -2078,6 +2194,10 @@ def collect_vulnerabilities(previous=None):
               "embedded": {}, "vendor": {},
               "running_kernel": {}, "dormant_kernels": [],
               "by_priority": {}, "flatpak": [], "snap": [], "cache": {}}
+    if distro.is_rpm():
+        # OSV ne couvre pas Fedora : les avis de sécurité (CVE) viennent de dnf updateinfo (État du système)
+        result.update(ecosystem="unsupported", unsupported=True)
+        return result
     try:
         sources = installed_sources()
         result["sources"] = len(sources)
@@ -2182,6 +2302,8 @@ KNOWN_PORTS = {22: "ssh", 25: "smtp", 53: "dns", 67: "dhcp", 68: "dhcp", 80: "ht
 def sudoers_file_origin(path):
     """(paquet, modifié) pour un fichier sudoers : livré par un paquet dpkg (mintupdate, mintdrivers, mintsystem…)
     et, en root, vérifié inchangé par rapport au paquet (dpkg -V)."""
+    if distro.is_rpm():
+        return distro.owner_verify(path)
     r = run_quiet(["dpkg", "-S", path], timeout=15)
     if r.returncode != 0 or ":" not in (r.stdout or ""):
         return "", False
@@ -2298,13 +2420,9 @@ def collect_checklist(daemon):
     elif not os.path.isdir("/sys/firmware/efi"):
         sb = "na"
     add("secure_boot", sb, 5)
-    # AppArmor
-    try:
-        with open("/sys/module/apparmor/parameters/enabled") as f:
-            aa = f.read().strip() == "Y"
-    except OSError:
-        aa = False
-    add("apparmor", "ok" if aa else "warn", 6)
+    # Contrôle d'accès obligatoire : AppArmor (Debian/Mint) ou SELinux (Fedora)
+    mac_name, mac_on = distro.mac()
+    add(mac_name, "ok" if mac_on else "warn", 6)
     # Mises à jour automatiques
     auto = False
     try:
@@ -2313,7 +2431,7 @@ def collect_checklist(daemon):
     except OSError:
         pass
     # Linux Mint : automatisation du Gestionnaire de mises à jour (timer systemd + fichier témoin)
-    auto = auto or unit_enabled("mintupdate-automation-upgrade.timer") or os.path.exists(MINT_AUTO_UPGRADE_FLAG)
+    auto = auto or unit_enabled("mintupdate-automation-upgrade.timer") or os.path.exists(MINT_AUTO_UPGRADE_FLAG) or distro.auto_updates_enabled()
     add("auto_updates", "ok" if auto else "warn", 6)
     add("security_updates", "ok" if not sysst.get("security") else "fail", 12, sysst.get("security", 0))
     add("reboot", "ok" if not sysst.get("reboot_required") else "warn", 3)
@@ -2397,7 +2515,7 @@ def collect_checklist(daemon):
     high = len({it.get("cve") or it.get("id") for it in vulns.get("items", [])
                 if it.get("status") == "unfixed" and it.get("priority") in ("critical", "high")
                 and not it.get("acknowledged")})   # CVE distinctes, hors failles ignorées par l'utilisateur
-    add("open_vulns", "unknown" if not vulns else ("ok" if not high else "warn"), 6,
+    add("open_vulns", "na" if vulns.get("unsupported") else ("unknown" if not vulns else ("ok" if not high else "warn")), 6,
         f"{counts.get('unfixed', 0)} unfixed, {high} high/critical")
     # Persistance inconnue
     unknown = [it for it in persistence.get("items", []) if not it.get("trusted")]
@@ -2409,7 +2527,7 @@ def collect_checklist(daemon):
         f"{idx}/100" if idx is not None else "")
     # Noyau GA : failles déjà corrigées dans un noyau HWE (indication seulement, la distribution gère le déploiement)
     hwe_fixed = ((vulns or {}).get("counts") or {}).get("kernel_hwe_fixed") or 0
-    add("kernel_hwe", "unknown" if not vulns else ("warn" if hwe_fixed else "ok"), 3, f"{hwe_fixed}" if hwe_fixed else "")
+    add("kernel_hwe", "na" if (vulns or {}).get("unsupported") or distro.is_rpm() else ("unknown" if not vulns else ("warn" if hwe_fixed else "ok")), 3, f"{hwe_fixed}" if hwe_fixed else "")
     # Réponse automatique
     add("auto_response", "ok" if settings.get("auto_response") else "warn", 2)
 
@@ -2617,7 +2735,9 @@ class ConnectionMonitor(threading.Thread):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def dpkg_owners(paths):
-    """{path: paquet} pour une liste de chemins, en un seul appel dpkg -S par lot."""
+    """{path: paquet} pour une liste de chemins, en un seul appel dpkg -S par lot (rpm -qf sur Fedora)."""
+    if distro.is_rpm():
+        return distro.owners(paths)
     owners = {}
     paths = [p for p in dict.fromkeys(paths)]
     for i in range(0, len(paths), 150):
@@ -2808,7 +2928,42 @@ def debsums_verified_paths(failed_lines):
 
 
 INTEGRITY_TOOLS = {"kernel": "uname", "processes": "ps",            # contrôles intégrés (toujours disponibles)
-                   "lynis": "lynis", "unhide": "unhide", "unhide-tcp": "unhide-tcp", "chkrootkit": "chkrootkit", "debsums": "debsums"}
+                   "lynis": "lynis", "unhide": "unhide", "unhide-tcp": "unhide-tcp", "chkrootkit": "chkrootkit"}
+INTEGRITY_TOOLS["rpmverify" if distro.is_rpm() else "debsums"] = "rpm" if distro.is_rpm() else "debsums"   # vérification des paquets
+RPM_VERIFY_RE = re.compile(r"^(missing|[S.M5DLUGTP?]{9})\s+(?:([cdglr])\s+)?(/.*)$")
+RPM_VERIFY_RULES_VERSION = 1
+
+
+def rpm_verify_analysis(lines):
+    """Sortie de rpm -Va → {warnings, benign, notes}. Fichiers de configuration modifiés (attribut c, ou sous /etc) :
+    normal (bénin) ; documentation / fantômes : ignorés ; horodatage seul : ignoré ; contenu modifié (5, S, L, M, U, G)
+    ou fichier manquant : à vérifier."""
+    warnings, benign, notes = [], [], {}
+    for raw in lines:
+        m = RPM_VERIFY_RE.match(raw.strip())
+        if not m:
+            continue
+        flags, attr, path = m.group(1), m.group(2) or "", m.group(3)
+        if attr in ("d", "g", "r", "l") or path.startswith(("/usr/share/doc/", "/usr/share/man/", "/usr/share/info/", "/usr/share/locale/", "/usr/share/licenses/")):
+            continue                                   # documentation, fantômes, licences : sans intérêt
+        is_conf = attr == "c" or path.startswith("/etc/")
+        if flags == "missing":
+            if is_conf:
+                benign.append({"text": raw.strip(), "notes": [{"path": path, "verdict": "benign", "reason": "config_removed"}]})
+            else:
+                warnings.append(raw.strip())
+                notes[raw.strip()] = [{"path": path, "verdict": "unknown", "reason": "missing_file"}]
+            continue
+        if not any(ch in flags for ch in "5SLMUG"):
+            continue                                   # seuls l'horodatage ou les capacités diffèrent
+        if is_conf:
+            benign.append({"text": raw.strip(), "notes": [{"path": path, "verdict": "benign", "reason": "config_modified"}]})
+        elif path.endswith((".pyc", ".pyo")) and "5" in flags:
+            benign.append({"text": raw.strip(), "notes": [{"path": path, "verdict": "benign", "reason": "pyc_rebuilt"}]})
+        else:
+            warnings.append(raw.strip())
+            notes[raw.strip()] = [{"path": path, "verdict": "unknown", "reason": "modified"}]
+    return {"warnings": warnings[:80], "benign": benign[:80], "notes": notes}
 BUILTIN_CHECKS = ("kernel", "processes")
 KERNEL_RULES_VERSION = 1
 PROC_RULES_VERSION = 1
@@ -3215,7 +3370,9 @@ MODULE_TREES = ("/usr/lib/node_modules/", "/usr/lib/python3/dist-packages/", "/u
 
 
 def dpkg_owners(paths):
-    """{chemin: 'paquet, paquet'} pour les chemins livrés par un paquet installé (dpkg -S par lots)."""
+    """{chemin: 'paquet, paquet'} pour les chemins livrés par un paquet installé (dpkg -S par lots ; rpm -qf sur Fedora)."""
+    if distro.is_rpm():
+        return distro.owners(paths)
     owners = {}
     paths = [p for p in paths if p.startswith("/")]
     for i in range(0, len(paths), 200):
@@ -3396,6 +3553,8 @@ _MINT_ADJ = {"at": 0.0, "patterns": [], "paths": set()}
 def mint_adjustments():
     """Fichiers que Linux Mint remplace ou modifie lui-même à chaque démarrage (mintsystem « adjustments ») :
     motifs de destination des .overwrite (glob) et chemins cités par les .execute/.menu. Cache 10 min."""
+    if distro.is_rpm():
+        return [], set()
     if time.time() - _MINT_ADJ["at"] < 600:
         return _MINT_ADJ["patterns"], _MINT_ADJ["paths"]
     patterns, paths = [], set()
@@ -3425,6 +3584,8 @@ def mint_adjustments():
 
 
 def dpkg_diversions():
+    if distro.is_rpm():
+        return set()
     r = run_quiet(["dpkg-divert", "--list"], timeout=30)
     return set(re.findall(r"^diversion of (\S+) to ", r.stdout or "", flags=re.M))
 
@@ -3513,8 +3674,11 @@ def run_integrity_checks(collect_verified=False, cancel_event=None, progress=Non
              "lynis": ["lynis", "audit", "system", "--quick", "--no-colors"],
              "unhide": ["unhide", "quick"],
              "unhide-tcp": ["unhide-tcp"],
-             "chkrootkit": ["chkrootkit"],
-             "debsums": ["debsums"]}
+             "chkrootkit": ["chkrootkit"]}
+    if distro.is_rpm():
+        tools["rpmverify"] = ["rpm", "-Va"]
+    else:
+        tools["debsums"] = ["debsums"]
 
     def report(name, percent, detail="", state="running", warnings=None):
         if progress is not None:
@@ -3559,6 +3723,10 @@ def run_integrity_checks(collect_verified=False, cancel_event=None, progress=Non
                 chk = chkrootkit_analysis(out)
                 lines = chk["warnings"]
                 entry["benign"], entry["notes"], entry["rules"] = chk["benign"], chk["notes"], CHK_RULES_VERSION
+            elif name == "rpmverify":
+                ra = rpm_verify_analysis(lines)
+                lines = ra["warnings"]
+                entry["benign"], entry["notes"], entry["rules"] = ra["benign"], ra["notes"], RPM_VERIFY_RULES_VERSION
             elif name == "debsums":
                 lines = [ln for ln in lines if "FAILED" in ln or "REPLACED" in ln or "missing file" in ln][:160]
                 if collect_verified:
@@ -3655,7 +3823,7 @@ def mail_send_now(cfg, subject, body):
     """Envoi par sendmail -t (msmtp lit /etc/msmtprc ; un autre serveur de courrier utilise sa propre configuration)."""
     if not cfg.get("to"):
         return False, "no recipient"
-    cmd = [sendmail_path(), "-t", "-i"]
+    cmd = distro.sendmail_cmd()
     try:
         r = subprocess.run(cmd, input=mail_build(cfg, subject, body), capture_output=True, timeout=120)
     except Exception as e:  # noqa: BLE001
@@ -4329,7 +4497,7 @@ class Daemon:
                 by_path = {e[0]: e for e in batch}
                 with open(list_path, "w") as f:
                     f.write("".join(e[0] + "\n" for e in batch))
-                cmd = prefix + ["clamdscan", "--fdpass", "--no-summary", "--stdout",
+                cmd = prefix + ["clamdscan"] + distro.clamdscan_args() + ["--fdpass", "--no-summary", "--stdout",
                                 f"--move={SYSTEM_QUARANTINE_DIR}", f"--file-list={list_path}"]
                 clean, seen, rc_b, tail = self._run_clamdscan_batch(job, cmd, by_path, tick)
                 if rc_b == 2 and seen == 0 and not job.cancel_event.is_set():
@@ -4617,8 +4785,7 @@ class Daemon:
             if unit:
                 r = run_quiet(["systemd-run", "--unit", unit, "--collect", "--quiet", "--wait", "--pipe",
                                "-p", "Environment=DEBIAN_FRONTEND=noninteractive",
-                               "/bin/sh", "-c", "apt-get update -q && apt-get upgrade -y -q "
-                               "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"], timeout=3600)
+                               "/bin/sh", "-c", distro.upgrade_shell()], timeout=3600)
                 ok, detail = r.returncode == 0, ((r.stderr or "") + (r.stdout or "")).strip()[-300:]
             else:
                 time.sleep(2)
@@ -4921,8 +5088,97 @@ class Daemon:
             self.refresh_overall()
         self.broadcast({"event": "network_changed", "network": net, "profile": profile, "new": new, "changed": changed})
 
+    def firewalld_apply_profile(self, profile):
+        """Fedora : zone par défaut home / public / work, interface du réseau courant (et sa connexion NetworkManager)
+        rattachée à la zone, services du profil ajoutés à la zone, firewalld démarré."""
+        zone = FIREWALLD_ZONES[profile]
+        errors = []
+        if not systemd_is_active("firewalld"):
+            run_quiet(["systemctl", "enable", "--now", "firewalld"], timeout=90)
+        ok, text = fwcmd("--set-default-zone", zone)
+        if not ok:
+            errors.append(text[:80])
+        net = network_identity() or {}
+        if net.get("device"):
+            fwcmd("--permanent", "--zone", zone, "--change-interface", net["device"])
+            if shutil.which("nmcli") and str(net.get("key", "")).startswith("nm:"):
+                run_quiet(["nmcli", "connection", "modify", net["key"][3:], "connection.zone", zone], timeout=20)
+        wanted = {PROFILE_FIREWALLD_SERVICES[s] for s in profile_services(profile) if s in PROFILE_FIREWALLD_SERVICES}
+        ok2, current = fwcmd("--permanent", "--zone", zone, "--list-services")
+        current = set(current.split()) if ok2 else set()
+        for s in sorted(wanted - current):
+            ok3, t = fwcmd("--permanent", "--zone", zone, "--add-service", s)
+            if not ok3:
+                errors.append(t[:80])
+        for s in sorted((current & set(PROFILE_FIREWALLD_SERVICES.values())) - wanted):
+            fwcmd("--permanent", "--zone", zone, "--remove-service", s)
+        if profile == "public":
+            fwcmd("--permanent", "--zone", zone, "--remove-service", "ssh")   # Public : aucun service ouvert
+        fwcmd("--reload")
+        self.write_log(f"firewalld profile {profile} (zone {zone}): services {sorted(wanted)}, {len(errors)} error(s)")
+        return not errors, "; ".join(errors)[:300]
+
+    def firewalld_command(self, cmd, req):
+        """Commandes de la page Pare-feu sur firewalld (activer, politiques, règles)."""
+        zone = firewalld_zone()
+        if cmd == "firewall_set":
+            if req.get("enabled"):
+                r = run_quiet(["systemctl", "enable", "--now", "firewalld"], timeout=90)
+                if req.get("allow_ssh"):
+                    fwcmd("--permanent", "--zone", zone, "--add-service", "ssh")
+                    fwcmd("--reload")
+                ok, state = fwcmd("--state", timeout=20)
+                self.write_log(f"firewalld enable → {r.returncode} ({state})")
+                return ok and "running" in state, "" if ok and "running" in state else (state or (r.stderr or "").strip())[:300]
+            r = run_quiet(["systemctl", "disable", "--now", "firewalld"], timeout=90)
+            self.write_log(f"firewalld disable → {r.returncode}")
+            return r.returncode == 0, ((r.stderr or "") + (r.stdout or "")).strip()[:300]
+        if cmd == "firewall_defaults":
+            policy = str(req.get("incoming", "")).lower()
+            if policy not in VALID_POLICY:
+                return False, "invalid_policy"
+            target = {"allow": "ACCEPT", "deny": "DROP", "reject": "%%REJECT%%"}[policy]
+            ok, text = fwcmd("--permanent", "--zone", zone, "--set-target", target)
+            fwcmd("--reload")
+            return ok, text[:300]
+        if cmd == "firewall_rule_add":
+            action = str(req.get("rule_action") or req.get("action") or "allow").lower()
+            proto = str(req.get("proto", "tcp")).lower()
+            port = str(req.get("port", "")).strip()
+            if action not in VALID_ACTION or proto not in VALID_PROTO or not re.fullmatch(r"\d{1,5}(:\d{1,5})?(,\d{1,5})*", port):
+                return False, "invalid_rule"
+            errors = []
+            for pr in (["tcp", "udp"] if proto == "any" else [proto]):
+                for single in port.split(","):
+                    single = single.replace(":", "-")
+                    if action == "allow":
+                        ok, t = fwcmd("--permanent", "--zone", zone, "--add-port", f"{single}/{pr}")
+                    else:
+                        verb = {"deny": "drop", "reject": "reject", "limit": 'accept limit value="25/m"'}[action]
+                        ok, t = fwcmd("--permanent", "--zone", zone, "--add-rich-rule", f'rule family="ipv4" port port="{single}" protocol="{pr}" {verb}')
+                    if not ok:
+                        errors.append(t[:80])
+            fwcmd("--reload")
+            self.write_log(f"firewalld rule add {action} {port}/{proto} → {len(errors)} error(s)")
+            return not errors, "; ".join(errors)[:300]
+        if cmd == "firewall_rule_delete":
+            try:
+                number = int(req.get("number"))
+            except (TypeError, ValueError):
+                return False, "invalid_rule"
+            rule = next((r for r in firewalld_rules(zone) if r["number"] == number), None)
+            if not rule:
+                return False, "invalid_rule"
+            flag = {"service": "--remove-service", "port": "--remove-port"}.get(rule["kind"], "--remove-rich-rule")
+            ok, t = fwcmd("--permanent", "--zone", zone, flag, rule["spec"])
+            fwcmd("--reload")
+            return ok, t[:300]
+        return False, "unknown"
+
     def apply_firewall_profile(self, profile):
         """Retire les anciennes règles du profil, applique les politiques, ajoute les règles du profil, active UFW."""
+        if distro.firewall_backend() == "firewalld":
+            return self.firewalld_apply_profile(profile)
         r = run_quiet(["ufw", "status", "numbered"], timeout=30)
         for rule in sorted(parse_ufw_numbered(r.stdout or ""), key=lambda x: -x["number"]):
             if PROFILE_TAG in (rule.get("comment") or "") or PROFILE_TAG in (rule.get("raw") or ""):
@@ -6148,7 +6404,9 @@ class Daemon:
                 return {"ok": True, "method": "test"}
             if os.geteuid() != 0:
                 return {"ok": False, "error": "root_required"}
-            if os.path.exists(MINT_AUTOMATION):
+            if distro.is_rpm():
+                ok, method, detail = distro.auto_updates_enable()
+            elif os.path.exists(MINT_AUTOMATION):
                 r = run_quiet([MINT_AUTOMATION, "upgrade", "enable"], timeout=120)
                 ok = r.returncode == 0 and (unit_enabled("mintupdate-automation-upgrade.timer")
                                             or os.path.exists(MINT_AUTO_UPGRADE_FLAG))
@@ -6175,7 +6433,7 @@ class Daemon:
                 return {"ok": True, "detail": "test_mode"}
             r = run_quiet(["systemd-run", "--unit", f"clamav-antivirus-pkg-{int(time.time())}", "--collect", "--quiet",
                            "-p", "Environment=DEBIAN_FRONTEND=noninteractive",
-                           "/bin/sh", "-c", f"apt-get install -y {name}"], timeout=30)
+                           "/bin/sh", "-c", distro.install_shell([name])], timeout=30)
             return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else "command_failed",
                     "detail": ((r.stderr or "") + (r.stdout or "")).strip()[-200:]}
 
@@ -6184,7 +6442,7 @@ class Daemon:
                 return {"ok": True, "detail": "test_mode"}
             r = run_quiet(["systemd-run", "--unit", f"clamav-antivirus-tools-{int(time.time())}", "--collect", "--quiet",
                            "-p", "Environment=DEBIAN_FRONTEND=noninteractive",
-                           "/bin/sh", "-c", "apt-get install -y lynis unhide chkrootkit debsums"], timeout=30)
+                           "/bin/sh", "-c", distro.install_shell(distro.tools_packages())], timeout=30)
             return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else "command_failed",
                     "detail": ((r.stderr or "") + (r.stdout or "")).strip()[-200:]}
 
@@ -6205,7 +6463,7 @@ class Daemon:
         if cmd == "install_phased":
             sysst = self.state.get("system_status") or {}
             names = sorted({p["name"] for p in sysst.get("packages", []) if p.get("category") == "phased"})
-            if not names:
+            if not names or distro.is_rpm():
                 return {"ok": False, "error": "nothing_phased"}
             if TEST_MODE:
                 return {"ok": True, "detail": "test_mode", "packages": names}
@@ -6715,6 +6973,8 @@ class Daemon:
 
     def security_command(self, cmd, req):
         """Actions pare-feu / SSH demandées depuis la page Pare-feu."""
+        if cmd != "ssh_set" and distro.firewall_backend() == "firewalld":
+            return self.firewalld_command(cmd, req)
         if cmd == "firewall_set":
             if req.get("enabled"):
                 if req.get("allow_ssh"):
@@ -6752,7 +7012,7 @@ class Daemon:
             if not (shutil.which("sshd") or os.path.exists("/usr/sbin/sshd")):
                 return False, "ssh_not_installed"
             action = "enable" if req.get("enabled") else "disable"
-            r = run_quiet(["systemctl", action, "--now", "ssh"], timeout=60)
+            r = run_quiet(["systemctl", action, "--now", distro.ssh_unit()], timeout=60)
             self.write_log(f"ssh: {action} → {r.returncode}")
             return r.returncode == 0, ((r.stdout or "") + (r.stderr or "")).strip()[:300]
         return False, "unknown"
