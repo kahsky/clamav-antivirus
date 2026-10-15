@@ -1406,6 +1406,8 @@ class ClamAVAntivirusApp:
         elif et == "integrity" and ev.get("after_scan"):
             # intégrité vérifiée au début d'une analyse complète : le bilan arrive avec la fin du scan
             self.send_to_js("securityData", {"type": "integrity", "data": ev.get("integrity") or {}, "available": True, "after_scan": True})
+        elif et == "mail":
+            self.send_to_js("mailStatus", {"mail": ev.get("mail"), "available": True})
         elif et in ("vulns", "checklist", "integrity", "persistence", "app_update", "integrity_running", "suspended"):
             self.send_to_js("securityData", {"type": et, "data": ev.get(et) or ev.get("update") or {},
                                              "available": True})
@@ -1638,7 +1640,9 @@ class ClamAVAntivirusApp:
                "nothing_phased": "msg.nothing_phased", "nothing_to_upgrade": "msg.nothing_to_upgrade",
                "busy_upgrade": "msg.system_upgrading", "busy_timeshift": "msg.timeshift_checking",
                "auto_updates_unavailable": "msg.auto_updates_unavailable", "busy_hardening": "msg.harden_busy",
-               "nothing_to_harden": "msg.harden_nothing", "firewall_not_active": "msg.firewall_not_active"}.get(err)
+               "nothing_to_harden": "msg.harden_nothing", "firewall_not_active": "msg.firewall_not_active",
+               "mail_failed": "msg.mail_failed", "invalid_host": "msg.mail_invalid", "invalid_port": "msg.mail_invalid",
+               "invalid_from": "msg.mail_invalid", "invalid_to": "msg.mail_invalid", "incomplete": "msg.mail_incomplete"}.get(err)
         if key:
             return self.T(key, path=resp.get("path", ""), detail=str(resp.get("detail") or "")[:200])
         return err or self.T("msg.daemon_unavailable")
@@ -2415,6 +2419,42 @@ class ClamAVAntivirusApp:
         save_state(upd)
         self.send_to_js("operationResult", {"status": "success", "message": self.T("msg.hibp_saved")})
         self.act_get_settings({})
+
+    # ── Notifications par courrier ──
+    def act_mail_status(self, _data):
+        resp = DaemonClient.request("mail_status")
+        self.send_to_js("mailStatus", {"mail": resp.get("mail") if resp.get("ok") else None, "available": bool(resp.get("ok"))})
+
+    def act_mail_configure(self, data):
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "settings", "message": self.T("msg.mail_saved")})
+                self.send_to_js("mailStatus", {"mail": resp.get("mail"), "available": True})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "settings", "message": self.daemon_error(resp)})
+            return False
+        self.run_admin("mail_configure", {"mail": data.get("mail") or {}, "password": str(data.get("password") or "")}, done)
+
+    def act_mail_test(self, _data):
+        self.send_to_js("operationResult", {"status": "info", "op": "settings", "message": self.T("msg.mail_sending")})
+
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "settings", "message": self.T("msg.mail_test_ok")})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "settings", "message": self.daemon_error(resp)})
+            self.act_mail_status({})
+            return False
+        self.run_admin("mail_test", {}, done)
+
+    def act_mail_flush(self, _data):
+        def done(resp):
+            key = "msg.mail_flushed" if resp.get("ok") else None
+            self.send_to_js("operationResult", {"status": "success" if resp.get("ok") else "error", "op": "settings",
+                                                "message": self.T(key) if key else self.daemon_error(resp)})
+            self.act_mail_status({})
+            return False
+        self.run_admin("mail_flush", {}, done)
 
     def act_hibp_check(self, data):
         state = load_state()

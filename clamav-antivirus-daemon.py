@@ -37,6 +37,8 @@ import hashlib
 import hmac
 import ipaddress
 import fnmatch
+import email.message
+import email.utils
 import glob
 import json
 import os
@@ -67,7 +69,7 @@ from clamav_common import (  # noqa: E402
     SYSTEM_STATE_FILE, SYSTEM_QUARANTINE_DIR, SYSTEM_PROGRESS_FILE, SYSTEM_SCAN_CACHE_DB, SYSTEM_SECRET_FILE,
     quarantine_index_add, quarantine_enrich, parse_moved_line,
     SYSTEM_FILELIST_CACHE, FIRST_SCAN_FLAG, SYSTEM_LOG_FILE, USB_MOUNT_ROOT,
-    SYSTEM_SETTINGS_FILE, DEFAULT_SETTINGS, DAEMON_ALLOWED_ROOTS,
+    SYSTEM_SETTINGS_FILE, DEFAULT_SETTINGS, DAEMON_ALLOWED_ROOTS, LANGUAGES,
     BURST_PID_COOLDOWN_SEC, BURST_GLOBAL_COOLDOWN, BURST_IGNORE_PREFIXES, BURST_IGNORE_PARTS,
     LineSocket, peer_credentials, daemon_connect, daemon_request, find_command,
     is_noise_line, classify_line, db_last_update, db_files_info, t,
@@ -3577,6 +3579,143 @@ def run_integrity_checks(collect_verified=False, cancel_event=None, progress=Non
 # Daemon
 # ═══════════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Notifications par courrier (msmtp ou tout serveur de courrier du système, via sendmail)
+# ═══════════════════════════════════════════════════════════════════════════
+
+MAIL_CONFIG_FILE = os.path.join(SYSTEM_STATE_DIR, "msmtprc") if TEST_MODE else "/etc/msmtprc"
+MAIL_LOG_FILE = os.path.join(SYSTEM_LOG_DIR, "msmtp.log")
+MAIL_MAX_PER_DAY = 30
+MAIL_QUEUE_MAX = 200
+MAIL_DEFAULT = {"enabled": False, "host": "", "port": 587, "security": "starttls", "user": "", "from": "", "to": [],
+                "frequency": "daily", "hour": 8, "day": 0, "events": {"danger": True, "scan": False, "report": True},
+                "lang": "fr", "password_set": False, "last_sent": None, "last_error": "", "last_digest": "", "sent_day": "", "sent_today": 0}
+MAIL_ADDR_RE = re.compile(r"^[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+MAIL_HOST_RE = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
+
+
+def sendmail_path():
+    return os.environ.get("CLAMAV_ANTIVIRUS_SENDMAIL") or shutil.which("sendmail") or "/usr/sbin/sendmail"
+
+
+def mail_transport():
+    """« msmtp » si sendmail est msmtp (réglages SMTP écrits dans /etc/msmtprc), sinon le nom du serveur de courrier du
+    système (postfix, exim4…) qui sera utilisé tel quel, ou "" sans aucun transport."""
+    p = sendmail_path()
+    if not os.path.exists(p):
+        return ""
+    real = os.path.basename(os.path.realpath(p))
+    return "msmtp" if "msmtp" in real else (real or "sendmail")
+
+
+def mail_read_password():
+    try:
+        with open(MAIL_CONFIG_FILE, encoding="utf-8") as f:
+            for ln in f:
+                if ln.startswith("password "):
+                    return ln[len("password "):].rstrip("\n")
+    except OSError:
+        pass
+    return ""
+
+
+def mail_write_config(cfg, password):
+    """/etc/msmtprc (root, 600) : compte par défaut utilisé par tout programme du système appelant sendmail."""
+    lines = ["# Généré par ClamAV Antivirus GUI — Paramètres › Notifications par courrier. Lisible par root seulement.",
+             "defaults", f"logfile {MAIL_LOG_FILE}", "tls_trust_file /etc/ssl/certs/ca-certificates.crt", "",
+             "account default", f"host {cfg['host']}", f"port {cfg['port']}", f"from {cfg['from']}"]
+    sec = cfg.get("security")
+    lines += ["tls on", "tls_starttls on"] if sec == "starttls" else (["tls on", "tls_starttls off"] if sec == "tls" else ["tls off"])
+    if cfg.get("user"):
+        lines += ["auth on", f"user {cfg['user']}", f"password {password}"]
+    else:
+        lines += ["auth off"]
+    tmp = MAIL_CONFIG_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, MAIL_CONFIG_FILE)
+
+
+def mail_build(cfg, subject, body):
+    msg = email.message.EmailMessage()
+    host = socket.gethostname()
+    msg["From"] = cfg.get("from") or f"clamav-antivirus@{host}"
+    msg["To"] = ", ".join(cfg.get("to") or [])
+    msg["Subject"] = f"[ClamAV Antivirus · {host}] {subject}"
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg["Message-ID"] = email.utils.make_msgid(domain=host)
+    msg["X-Mailer"] = f"ClamAV Antivirus GUI {VERSION}"
+    msg.set_content(body)
+    return msg.as_bytes()
+
+
+def mail_send_now(cfg, subject, body):
+    """Envoi par sendmail -t (msmtp lit /etc/msmtprc ; un autre serveur de courrier utilise sa propre configuration)."""
+    if not cfg.get("to"):
+        return False, "no recipient"
+    cmd = [sendmail_path(), "-t", "-i"]
+    try:
+        r = subprocess.run(cmd, input=mail_build(cfg, subject, body), capture_output=True, timeout=120)
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)[:300]
+    err = (r.stderr or b"").decode("utf-8", "replace").strip()
+    return r.returncode == 0, ("" if r.returncode == 0 else (err or f"sendmail exit {r.returncode}")[-300:])
+
+
+def mail_sanitize(incoming, current):
+    """Réglages reçus de l'interface → configuration valide (sans mot de passe) ou (None, erreur)."""
+    cfg = dict(MAIL_DEFAULT, **(current or {}))
+    inc = incoming if isinstance(incoming, dict) else {}
+    cfg["enabled"] = bool(inc.get("enabled", cfg["enabled"]))
+    host = str(inc.get("host", cfg["host"]) or "").strip().lower()
+    if host and not MAIL_HOST_RE.match(host):
+        return None, "invalid_host"
+    cfg["host"] = host
+    try:
+        port = int(inc.get("port", cfg["port"]))
+    except (TypeError, ValueError):
+        return None, "invalid_port"
+    if not 1 <= port <= 65535:
+        return None, "invalid_port"
+    cfg["port"] = port
+    sec = str(inc.get("security", cfg["security"]) or "starttls")
+    if sec not in ("starttls", "tls", "none"):
+        return None, "invalid_security"
+    cfg["security"] = sec
+    cfg["user"] = str(inc.get("user", cfg["user"]) or "").strip()[:200]
+    sender = str(inc.get("from", cfg["from"]) or "").strip()
+    if sender and not MAIL_ADDR_RE.match(sender):
+        return None, "invalid_from"
+    cfg["from"] = sender
+    to_raw = inc.get("to", cfg["to"])
+    if isinstance(to_raw, str):
+        to_raw = re.split(r"[,;\s]+", to_raw)
+    to = [a.strip() for a in (to_raw or []) if a and a.strip()]
+    for a in to:
+        if not MAIL_ADDR_RE.match(a):
+            return None, "invalid_to"
+    cfg["to"] = to[:10]
+    freq = str(inc.get("frequency", cfg["frequency"]) or "daily")
+    if freq not in ("immediate", "daily", "weekly"):
+        return None, "invalid_frequency"
+    cfg["frequency"] = freq
+    try:
+        cfg["hour"] = max(0, min(23, int(inc.get("hour", cfg["hour"]))))
+        cfg["day"] = max(0, min(6, int(inc.get("day", cfg["day"]))))
+    except (TypeError, ValueError):
+        return None, "invalid_time"
+    ev = inc.get("events", cfg["events"])
+    if isinstance(ev, dict):
+        cfg["events"] = {k: bool(ev.get(k, cfg["events"].get(k))) for k in ("danger", "scan", "report")}
+    lang = str(inc.get("lang", cfg["lang"]) or "fr")
+    cfg["lang"] = lang if lang in LANGUAGES else "fr"
+    if cfg["enabled"] and (not cfg["to"] or (mail_transport() == "msmtp" and not cfg["host"])):
+        return None, "incomplete"
+    return cfg, ""
+
+
 class Daemon:
     def __init__(self):
         self.state = State()
@@ -3584,6 +3723,7 @@ class Daemon:
         self.sub_lock = threading.Lock()
         self.queue = deque()
         self.usb_priority_job = None            # clé USB analysée pendant qu'un scan est en pause
+        self.last_mail_tick = 0.0
         self.queue_lock = threading.Condition()
         self.current = None
         self.shutdown = threading.Event()
@@ -3688,6 +3828,8 @@ class Daemon:
             except OSError:
                 alert["suspended"] = False
         self.state.prepend("alerts", alert, ALERTS_MAX)
+        if alert.get("severity") == "danger":
+            self.mail_alert_event(alert)
         if alert.get("kind") == "upload":
             self.write_log(f"⚠ upload: {alert.get('gb')} GB sent in {alert.get('window_hours')} h "
                            f"(threshold {alert.get('threshold_gb')} GB)")
@@ -3806,6 +3948,8 @@ class Daemon:
             "integrity_warnings": getattr(job, "integrity_warnings", None), "skipped": getattr(job, "skipped", 0),
             "elapsed": time.time() - (job.started_at or time.time()),
         })
+        if job.kind == "scan" and status in ("clean", "infected") and (not job.usb or job.infected):
+            self.mail_scan_event(job, status)
 
     # ── Scan ─────────────────────────────────────────────────────────────
     def _save_progress(self, job, in_progress=True):
@@ -4674,6 +4818,12 @@ class Daemon:
                     self._builtin_refresh()             # noyau et processus : veille comportementale toutes les 5 min
             except Exception as e:  # noqa: BLE001
                 log(f"Veille noyau/processus : {e}")
+            try:
+                if time.time() - self.last_mail_tick >= 60:
+                    self.last_mail_tick = time.time()
+                    self.mail_tick()
+            except Exception as e:  # noqa: BLE001
+                log(f"Courrier : {e}")
             self.shutdown.wait(10)
 
     def check_tray(self):
@@ -5134,6 +5284,132 @@ class Daemon:
         result["warnings"] = total + len(app.get("modified") or []) + len(app.get("missing") or [])
         return result
 
+    # ── Notifications par courrier ────────────────────────────────────────
+    def mail_cfg(self):
+        return dict(MAIL_DEFAULT, **(self.state.get("mail") or {}))
+
+    def mail_public(self):
+        cfg = self.mail_cfg()
+        return dict(cfg, transport=mail_transport(), queued=len(self.state.get("mail_queue") or []), hostname=socket.gethostname())
+
+    def mail_event(self, kind, title, body):
+        """Événement à notifier (si les courriers sont activés et ce type choisi) : envoyé tout de suite (immédiat)
+        ou groupé dans le prochain bilan (quotidien, hebdomadaire)."""
+        cfg = self.mail_cfg()
+        if not cfg.get("enabled") or not (cfg.get("events") or {}).get(kind):
+            return
+        queue = list(self.state.get("mail_queue") or [])
+        queue.append({"t": now_iso(), "kind": kind, "title": str(title)[:200], "body": str(body)[:2000]})
+        self.state.update(mail_queue=queue[-MAIL_QUEUE_MAX:])
+        if cfg.get("frequency") == "immediate":
+            self.last_mail_tick = 0                 # le prochain tour de boucle (≤ 10 s) envoie
+
+    def mail_alert_event(self, alert):
+        lang = self.mail_cfg().get("lang") or "fr"
+        kind = alert.get("kind") or "?"
+        title = t(lang, f"mail.alert.{kind}") if t(lang, f"mail.alert.{kind}") != f"mail.alert.{kind}" else t(lang, "mail.alert.generic", kind=kind)
+        lines = []
+        for k, label in (("comm", "mail.field.program"), ("exe", "mail.field.path"), ("title", "mail.field.title"), ("detail", "mail.field.detail"),
+                         ("ip", "mail.field.ip"), ("top_dir", "mail.field.folder"), ("count", "mail.field.count")):
+            v = alert.get(k)
+            if v not in (None, "", 0, []):
+                lines.append(f"{t(lang, label)} : {v}")
+        for r in (alert.get("reasons") or [])[:5]:
+            lines.append(f"- {t(lang, f'alert.reason.{r}') if t(lang, f'alert.reason.{r}') != f'alert.reason.{r}' else r}")
+        self.mail_event("danger", title, "\n".join(lines))
+
+    def mail_scan_event(self, job, status):
+        lang = self.mail_cfg().get("lang") or "fr"
+        title = t(lang, "mail.scan.infected" if status == "infected" else "mail.scan.clean", n=job.infected)
+        body = t(lang, "mail.scan.body", path=job.path, files=job.total + job.cached, infected=job.infected,
+                 minutes=int((time.time() - (job.started_at or time.time())) // 60))
+        if job.threats:
+            body += "\n" + "\n".join(f"- {th}" for th in job.threats[-20:])
+        self.mail_event("scan", title, body)
+
+    def mail_summary(self, lang):
+        """Bilan de l'état du système en quelques lignes (pour les courriers quotidiens / hebdomadaires)."""
+        ov = self.overall or {}
+        color = ov.get("color") or "green"
+        reasons = ", ".join(t(lang, f"overall.reason.{r}") for r in (ov.get("reasons") or [])[:5])
+        ck = self.state.get("checklist") or {}
+        db = db_last_update()
+        last = self.state.get("last_scan") or {}
+        vulns = (self.state.get("vulns") or {}).get("counts") or {}
+        sysst = self.state.get("system_status") or {}
+        integ = self.state.get("integrity") or {}
+        lines = [t(lang, "mail.summary.title"),
+                 f"- {t(lang, 'mail.summary.overall')} : {t(lang, f'mail.color.{color}')}" + (f" ({reasons})" if reasons else ""),
+                 f"- {t(lang, 'mail.summary.score')} : {ck.get('score', '—')} ({ck.get('grade', '—')})",
+                 f"- {t(lang, 'mail.summary.signatures')} : {db.strftime('%Y-%m-%d %H:%M') if db else '—'}",
+                 f"- {t(lang, 'mail.summary.last_scan')} : {str(last.get('date', '—'))[:16]} — {last.get('infected', 0)} {t(lang, 'mail.summary.threats')}",
+                 f"- {t(lang, 'mail.summary.updates')} : {sysst.get('security', 0)} / {sysst.get('upgradable', 0)}",
+                 f"- {t(lang, 'mail.summary.vulns')} : {vulns.get('unfixed', 0)}",
+                 f"- {t(lang, 'mail.summary.integrity')} : {integ.get('warnings', '—')}"]
+        return "\n".join(lines)
+
+    def mail_deliver(self, subject, body, kind="digest"):
+        """Envoi avec plafond quotidien et journal ; met à jour last_sent / last_error."""
+        cfg = self.mail_cfg()
+        today = gmdate_today = time.strftime("%Y-%m-%d")
+        sent_today = cfg.get("sent_today") or 0 if cfg.get("sent_day") == today else 0
+        if sent_today >= MAIL_MAX_PER_DAY:
+            self.write_log(f"mail: daily cap reached ({MAIL_MAX_PER_DAY}), {kind} not sent")
+            return False, "daily_cap"
+        lang = cfg.get("lang") or "fr"
+        footer = "\n\n-- \n" + t(lang, "mail.footer", host=socket.gethostname(), version=VERSION)
+        ok, err = mail_send_now(cfg, subject, body + footer)
+        mail = dict(self.state.get("mail") or {})
+        mail.update(sent_day=today, sent_today=sent_today + (1 if ok else 0), last_error=err if not ok else "",
+                    last_sent=now_iso() if ok else mail.get("last_sent"))
+        self.state.update(mail=mail)
+        self.write_log(f"mail {kind} → {'sent' if ok else 'FAILED: ' + err[:120]} ({', '.join(cfg.get('to') or [])})")
+        self.broadcast({"event": "mail", "mail": self.mail_public()})
+        return ok, err
+
+    def mail_flush(self, force=False):
+        """Envoie ce qui est en attente : tout de suite (immédiat) ou sous forme de bilan (quotidien / hebdomadaire)."""
+        cfg = self.mail_cfg()
+        lang = cfg.get("lang") or "fr"
+        queue = list(self.state.get("mail_queue") or [])
+        with_summary = bool((cfg.get("events") or {}).get("report")) and (force or cfg.get("frequency") != "immediate")
+        if not queue and not with_summary:
+            return True, "nothing"
+        if queue and cfg.get("frequency") == "immediate" and not force:
+            subject = queue[0]["title"] if len(queue) == 1 else t(lang, "mail.subject.events", n=len(queue))
+        else:
+            subject = t(lang, "mail.subject.digest") + (f" — {queue[0]['title']}" if len(queue) == 1 else (f" — {t(lang, 'mail.subject.events', n=len(queue))}" if queue else ""))
+        parts = []
+        for e in queue:
+            parts.append(f"{e['t'][:16].replace('T', ' ')} · {e['title']}" + (f"\n{e['body']}" if e.get("body") else ""))
+        body = "\n\n".join(parts) if parts else t(lang, "mail.none")
+        if with_summary:
+            body += "\n\n" + self.mail_summary(lang)
+        ok, err = self.mail_deliver(subject, body, "digest" if with_summary else "events")
+        if ok or err == "no recipient":
+            self.state.update(mail_queue=[])
+            if with_summary:
+                mail = dict(self.state.get("mail") or {})
+                mail["last_digest"] = time.strftime("%Y-%m-%d")
+                self.state.update(mail=mail)
+        return ok, err
+
+    def mail_tick(self):
+        cfg = self.mail_cfg()
+        if not cfg.get("enabled"):
+            return
+        now = time.localtime()
+        queue = self.state.get("mail_queue") or []
+        if cfg.get("frequency") == "immediate":
+            if queue:
+                self.mail_flush()
+            return
+        due = now.tm_hour == int(cfg.get("hour") or 0) and cfg.get("last_digest") != time.strftime("%Y-%m-%d")
+        if cfg.get("frequency") == "weekly":
+            due = due and now.tm_wday == int(cfg.get("day") or 0)
+        if due:
+            self.mail_flush()
+
     def _builtin_refresh(self, initial=False):
         """Contrôles intégrés (noyau, processus) recalculés sur place : nouvel avertissement non approuvé → alerte
         (popup) et bouclier rouge ; disparition (processus terminé) → retour au vert. Pas de relance des outils."""
@@ -5565,7 +5841,7 @@ class Daemon:
             # L'utilisateur sait sur quel réseau il est : le service applique le profil sans mot de passe, même en
             # mode famille et pour un compte sans droits d'administration (décision 2026-09-29).
             return False
-        if cmd in ("timeshift_disable", "harden_revert"):
+        if cmd in ("timeshift_disable", "harden_revert", "mail_configure", "mail_test", "mail_flush"):
             return True
         if cmd == "ssh_set":
             return bool(req.get("enabled"))
@@ -6053,6 +6329,41 @@ class Daemon:
                     trusted_now = True
             self.write_log(f"USB scan skipped by user: {devnode} ({info.get('label') or info.get('model')})")
             return {"ok": True, "trusted": trusted_now, "mount_now": running is None, "usb": info}
+
+        if cmd == "mail_status":
+            return {"ok": True, "mail": self.mail_public()}
+
+        if cmd == "mail_configure":
+            # Réglages SMTP (administrateur) : /etc/msmtprc réécrit (mot de passe conservé si non fourni), état mémorisé
+            cfg, err = mail_sanitize(req.get("mail"), self.state.get("mail"))
+            if cfg is None:
+                return {"ok": False, "error": err}
+            password = str(req.get("password") or "")
+            if not password:
+                password = mail_read_password()
+            if mail_transport() == "msmtp" and cfg.get("host"):
+                try:
+                    mail_write_config(cfg, password)
+                except OSError as e:
+                    return {"ok": False, "error": "command_failed", "detail": str(e)[:200]}
+            cfg["password_set"] = bool(password) or not cfg.get("user")
+            for k in ("last_sent", "last_error", "last_digest", "sent_day", "sent_today"):
+                cfg[k] = (self.state.get("mail") or {}).get(k, MAIL_DEFAULT[k])
+            self.state.update(mail=cfg)
+            self.write_log(f"mail configured: {'enabled' if cfg['enabled'] else 'disabled'}, {cfg['frequency']}, to {', '.join(cfg['to'])}, "
+                           f"{cfg['host'] or mail_transport()}:{cfg['port']} {cfg['security']}")
+            self.broadcast({"event": "mail", "mail": self.mail_public()})
+            return {"ok": True, "mail": self.mail_public()}
+
+        if cmd == "mail_test":
+            cfg = self.mail_cfg()
+            lang = cfg.get("lang") or "fr"
+            ok, err = self.mail_deliver(t(lang, "mail.subject.test"), t(lang, "mail.test.body", host=socket.gethostname()) + "\n\n" + self.mail_summary(lang), "test")
+            return {"ok": ok, "error": "" if ok else "mail_failed", "detail": err}
+
+        if cmd == "mail_flush":
+            ok, err = self.mail_flush(force=True)
+            return {"ok": ok, "error": "" if ok else "mail_failed", "detail": err}
 
         if cmd == "ignore_check":
             # « Ignorer » un contrôle de disponibilité (sauvegarde des fichiers, Timeshift) : jamais de mot de passe

@@ -165,6 +165,7 @@ function onBackendMessage(msg) {
         case 'alertsList':      alerts = data.alerts || []; renderAlerts(data.available !== false); break;
         case 'securityStatus':  onSecurityStatus(data); break;
         case 'settingsData':    onSettingsData(data); break;
+        case 'mailStatus':      onMailStatus(data); break;
         case 'trustedList':     onTrustedList(data); break;
         case 'backupStatus':    onBackupStatus(data); break;
         case 'hibpResult':      onHibpResult(data); break;
@@ -1127,6 +1128,7 @@ async function sshToggle(enabled) {
 
 function loadSettings() {
     sendToBackend({ action: 'get_settings' });
+    sendToBackend({ action: 'mail_status' });
     sendToBackend({ action: 'get_trusted' });
 }
 
@@ -1232,6 +1234,42 @@ function onSettingsData(data) {
         el.disabled = data.available === false;
     });
 }
+
+// ─── Notifications par courrier ─────────────────────────────────────────────
+let mailData = null;
+
+function onMailStatus(data) {
+    mailData = data && data.mail ? data.mail : null;
+    const m = mailData || {};
+    if (!$('cardMail')) return;
+    if (data && data.available && mailData) {
+        $('mailEnabled').checked = !!m.enabled;
+        $('mailHost').value = m.host || ''; $('mailPort').value = m.port || 587; $('mailSecurity').value = m.security || 'starttls';
+        $('mailUser').value = m.user || ''; $('mailPassword').value = ''; $('mailPassword').placeholder = m.password_set ? '••••••••' : '';
+        $('mailFrom').value = m.from || ''; $('mailTo').value = (m.to || []).join(', ');
+        $('mailFrequency').value = m.frequency || 'daily'; $('mailHour').value = m.hour ?? 8; $('mailDay').value = m.day ?? 0; $('mailLang').value = m.lang || lang;
+        const ev = m.events || {}; $('mailEvDanger').checked = ev.danger !== false; $('mailEvScan').checked = !!ev.scan; $('mailEvReport').checked = ev.report !== false;
+    }
+    const parts = [];
+    if (m.transport && m.transport !== 'msmtp') parts.push(t('settings.mail.transport_other', { name: m.transport }));
+    if (!m.transport) parts.push(t('settings.mail.transport_none'));
+    if (m.last_sent) parts.push(t('settings.mail.last_sent', { rel: formatRelative(m.last_sent) }));
+    if (m.last_error) parts.push(t('settings.mail.last_error', { error: m.last_error }));
+    if (m.queued) parts.push(t('settings.mail.queued', { n: m.queued }));
+    $('mailStatusLine').textContent = parts.join(' · ');
+    const smtp = !m.transport || m.transport === 'msmtp';
+    ['mailHost', 'mailPort', 'mailSecurity', 'mailUser', 'mailPassword', 'mailFrom'].forEach(id => { if ($(id)) $(id).disabled = !smtp; });
+}
+
+function saveMail() {
+    const mail = { enabled: $('mailEnabled').checked, host: $('mailHost').value.trim(), port: parseInt($('mailPort').value, 10) || 587,
+        security: $('mailSecurity').value, user: $('mailUser').value.trim(), from: $('mailFrom').value.trim(), to: $('mailTo').value,
+        frequency: $('mailFrequency').value, hour: parseInt($('mailHour').value, 10) || 0, day: parseInt($('mailDay').value, 10) || 0, lang: $('mailLang').value,
+        events: { danger: $('mailEvDanger').checked, scan: $('mailEvScan').checked, report: $('mailEvReport').checked } };
+    sendToBackend({ action: 'mail_configure', mail, password: $('mailPassword').value });
+}
+function testMail() { sendToBackend({ action: 'mail_test' }); }
+function flushMail() { sendToBackend({ action: 'mail_flush' }); }
 
 function saveSettings() {
     const [h, m] = ($('setUpdateTime').value || '07:00').split(':').map(x => parseInt(x, 10));
@@ -2517,6 +2555,16 @@ function simulateBackend(data) {
             reply('operationResult', { status: 'success', message: t(data.remove ? 'msg.ports_unacknowledged' : 'msg.ports_acknowledged', { n: set.size }) });
             break;
         }
+        case 'mail_status':
+            reply('mailStatus', { available: true, mail: { enabled: false, host: '', port: 587, security: 'starttls', user: '', from: '', to: [], frequency: 'daily', hour: 8, day: 0, events: { danger: true, scan: false, report: true }, lang: 'fr', password_set: false, transport: 'msmtp', queued: 0, last_sent: null, last_error: '' } });
+            break;
+        case 'mail_configure':
+            reply('operationResult', { status: 'success', message: t('msg.mail_saved') });
+            reply('mailStatus', { available: true, mail: Object.assign({ transport: 'msmtp', queued: 0, password_set: !!data.password }, data.mail, { to: String(data.mail.to || '').split(/[,;\s]+/).filter(Boolean) }) });
+            break;
+        case 'mail_test': case 'mail_flush':
+            reply('operationResult', { status: 'success', message: t(data.action === 'mail_test' ? 'msg.mail_test_ok' : 'msg.mail_flushed') });
+            break;
         case 'acknowledge_vuln': {
             const v = secData.vulns; const set = new Set(data.all_open && v ? v.items.filter(i => ['unfixed', 'pro_only'].includes(i.status)).map(i => i.cve) : (data.cves || []));
             if (v) {

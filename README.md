@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.20.7)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.21.0)
 
 ---
 
@@ -153,6 +153,13 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
   `ufw.service` au démarrage et signale un autre gestionnaire de pare-feu actif (firewalld, nftables avec
   `flush ruleset`, netfilter-persistent). Checklist et score recalculés après chaque action pare-feu/SSH.
+- **Notifications par courrier** — Paramètres › Notifications par courrier (administrateur) : serveur SMTP, port,
+  STARTTLS / TLS / aucun, identifiant, mot de passe, expéditeur, destinataires, fréquence immédiate / quotidienne /
+  hebdomadaire (heure et jour du bilan), langue, événements choisis (alertes graves, résultat des analyses, bilan de
+  l'état). Désactivé par défaut : rien n'est envoyé. Le service écrit /etc/msmtprc (root, 600) et envoie par
+  sendmail ; un autre serveur de courrier du système est utilisé tel quel. Courrier de test, bilan à la demande,
+  plafond de 30 envois par jour, journal. L'interface prévient que tout programme du système avec les droits
+  administrateur pourra alors envoyer des courriers avec ce compte.
 - **Installable sur Ubuntu 26.04** — dépendances `pkexec | policykit-1` (le paquet de transition policykit-1
   n'existe plus) et `gir1.2-ayatanaappindicator3-0.1 | gir1.2-appindicator3-0.1` (libappindicator retiré) ; le
   bouclier utilise l'indicateur Ayatana quand il est présent. Sur GNOME, l'extension AppIndicator
@@ -366,8 +373,14 @@ Dépôt signé pour Ubuntu 24.04 « noble » et Linux Mint 22 :
 sudo mkdir -p /usr/share/keyrings
 curl -fsSL https://www.dukiwi.com/repo/apt/dukiwi-clamav.gpg | sudo tee /usr/share/keyrings/dukiwi-clamav.gpg > /dev/null
 echo "deb [signed-by=/usr/share/keyrings/dukiwi-clamav.gpg] https://www.dukiwi.com/repo/apt noble main" | sudo tee /etc/apt/sources.list.d/dukiwi-clamav.list
-sudo apt update && sudo apt install clamav-antivirus
+echo "msmtp msmtp/apparmor boolean false" | sudo debconf-set-selections   # évite la seule question posée à l'installation (voir ci-dessous)
+sudo apt update && sudo apt install -y clamav-antivirus
 ```
+
+Installation sans question : chkrootkit recommande un serveur de courrier et le paquet choisit msmtp, le plus
+léger ; msmtp demande au passage s'il faut activer son profil AppArmor (réponse par défaut : non). La ligne
+`debconf-set-selections` répond d'avance. Sans elle, `DEBIAN_FRONTEND=noninteractive` devant `apt install`
+donne le même résultat.
 
 Les mises à jour arrivent ensuite par le Gestionnaire de mises à jour de Mint. L'application
 signale aussi elle-même les nouvelles versions (popup ou onglet Sécurité) ; leur installation
@@ -375,7 +388,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.20.7_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.20.7_all.deb)
+[Télécharger clamav-antivirus_1.21.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.21.0_all.deb)
 
 ---
 
@@ -406,12 +419,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.20.7_all.deb`
+Résultat : `clamav-antivirus_1.21.0_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.20.7_all.deb
+sudo dpkg -i clamav-antivirus_1.21.0_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

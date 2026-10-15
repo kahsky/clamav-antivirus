@@ -2982,3 +2982,8 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .simple-view[data-state="info"]   { background: radial-gradient(ellipse at 50% 18%, rgba(59,130,246,0.12), transparent 55%), var(--bg-primary); }
 .simple-view[data-state="info"] .simple-shield { color: var(--accent-blue); filter: drop-shadow(0 0 22px rgba(59,130,246,0.35)); }
 .simple-row[data-state="info"] .simple-row-icon { background: rgba(59,130,246,0.14); color: var(--accent-blue); }
+
+/* ── v1.21.0 : notifications par courrier ── */
+.settings-grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px 16px; }
+.settings-grid-2 .setting-col .input-field { width: 100%; }
+.mail-warning { color: var(--accent-amber); border: 1px solid rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); border-radius: var(--radius-sm); padding: 8px 10px; }

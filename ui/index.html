@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.20.7 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.21.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -1203,6 +1203,39 @@
                     <label class="setting-row"><span data-i18n="settings.scan_cache_days">Ne pas relire un fichier inchangé déjà vérifié pendant (jours, 0 = désactivé)</span><input type="number" id="setScanCacheDays" class="input-field input-sm" min="0" max="365"></label>
                     <p class="text-muted setting-note" data-i18n="settings.scan_cache_days.note">Le service mémorise l'empreinte (taille, dates, inode) de chaque fichier sain ; sur une clé USB, un fichier caché .clamav signé par cette installation joue le même rôle. Un fichier modifié est toujours relu. L'analyse passe par clamd (base en mémoire, plusieurs fichiers en parallèle).</p>
                     <p class="text-muted" data-i18n="settings.schedule.note">Les mises à jour sont aussi recherchées 5 minutes après chaque démarrage.</p>
+                </div>
+
+                <div class="card settings-card settings-card-wide" id="cardMail">
+                    <h4 data-i18n="settings.mail">Notifications par courrier</h4>
+                    <p class="text-muted" data-i18n="settings.mail.intro">Désactivé par défaut : rien n'est envoyé. Une fois activé, le service envoie les événements choisis à la fréquence choisie, par le petit serveur de courrier msmtp installé avec l'application (ou par le serveur de courrier du système s'il y en a un).</p>
+                    <p class="setting-note mail-warning" data-i18n="settings.mail.warning">Attention : les réglages SMTP sont enregistrés dans /etc/msmtprc, lisible par l'administrateur seulement. Tous les programmes du système fonctionnant avec ses droits (services, tâches planifiées, rapport quotidien de chkrootkit…) pourront alors envoyer des courriers avec ce compte. Utilisez de préférence un compte ou un mot de passe d'application dédié.</p>
+                    <label class="setting-row toggle"><span data-i18n="settings.mail.enabled">Activer les notifications par courrier</span><input type="checkbox" id="mailEnabled"></label>
+                    <div class="settings-grid-2">
+                        <label class="setting-col"><span data-i18n="settings.mail.host">Serveur SMTP</span><input type="text" id="mailHost" class="input-field" placeholder="smtp.office365.com" autocomplete="off"></label>
+                        <label class="setting-col"><span data-i18n="settings.mail.port">Port</span><input type="number" id="mailPort" class="input-field input-sm" min="1" max="65535" value="587"></label>
+                        <label class="setting-col"><span data-i18n="settings.mail.security">Chiffrement</span>
+                            <select id="mailSecurity" class="lang-select"><option value="starttls" data-i18n="settings.mail.security.starttls">STARTTLS (port 587)</option><option value="tls" data-i18n="settings.mail.security.tls">TLS direct (port 465)</option><option value="none" data-i18n="settings.mail.security.none">Aucun (relais interne, port 25)</option></select></label>
+                        <label class="setting-col"><span data-i18n="settings.mail.user">Identifiant</span><input type="text" id="mailUser" class="input-field" autocomplete="off"></label>
+                        <label class="setting-col"><span data-i18n="settings.mail.password">Mot de passe (laisser vide pour conserver)</span><input type="password" id="mailPassword" class="input-field" autocomplete="new-password"></label>
+                        <label class="setting-col"><span data-i18n="settings.mail.from">Adresse d'expéditeur</span><input type="text" id="mailFrom" class="input-field" placeholder="antivirus@exemple.ch"></label>
+                        <label class="setting-col"><span data-i18n="settings.mail.to">Destinataires (séparés par des virgules)</span><input type="text" id="mailTo" class="input-field" placeholder="admin@exemple.ch"></label>
+                        <label class="setting-col"><span data-i18n="settings.mail.frequency">Fréquence</span>
+                            <select id="mailFrequency" class="lang-select"><option value="immediate" data-i18n="settings.mail.frequency.immediate">Immédiate (à chaque événement)</option><option value="daily" data-i18n="settings.mail.frequency.daily">Quotidienne (bilan)</option><option value="weekly" data-i18n="settings.mail.frequency.weekly">Hebdomadaire (bilan)</option></select></label>
+                        <label class="setting-col"><span data-i18n="settings.mail.hour">Heure du bilan</span><input type="number" id="mailHour" class="input-field input-sm" min="0" max="23" value="8"></label>
+                        <label class="setting-col"><span data-i18n="settings.mail.day">Jour du bilan hebdomadaire</span>
+                            <select id="mailDay" class="lang-select"><option value="0" data-i18n="day.mon">Lundi</option><option value="1" data-i18n="day.tue">Mardi</option><option value="2" data-i18n="day.wed">Mercredi</option><option value="3" data-i18n="day.thu">Jeudi</option><option value="4" data-i18n="day.fri">Vendredi</option><option value="5" data-i18n="day.sat">Samedi</option><option value="6" data-i18n="day.sun">Dimanche</option></select></label>
+                        <label class="setting-col"><span data-i18n="settings.mail.lang">Langue des courriers</span>
+                            <select id="mailLang" class="lang-select"><option value="fr">Français</option><option value="en">English</option><option value="de">Deutsch</option><option value="it">Italiano</option></select></label>
+                    </div>
+                    <label class="setting-row toggle"><span data-i18n="settings.mail.ev_danger">Alertes graves (menace trouvée, rootkit, processus suspect, programme suspendu)</span><input type="checkbox" id="mailEvDanger" checked></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.mail.ev_scan">Résultat de chaque analyse complète (et des clés USB infectées)</span><input type="checkbox" id="mailEvScan"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.mail.ev_report">Bilan de l'état du système dans chaque courrier quotidien ou hebdomadaire</span><input type="checkbox" id="mailEvReport" checked></label>
+                    <p class="text-muted setting-note" id="mailStatusLine"></p>
+                    <div class="log-actions-right">
+                        <button class="btn btn-secondary btn-sm" onclick="testMail()" data-i18n="settings.mail.test">Envoyer un courrier de test</button>
+                        <button class="btn btn-secondary btn-sm" onclick="flushMail()" data-i18n="settings.mail.flush">Envoyer le bilan maintenant</button>
+                        <button class="btn btn-primary btn-sm" onclick="saveMail()" data-i18n="settings.mail.save">Enregistrer</button>
+                    </div>
                 </div>
 
                 <div class="card settings-card settings-card-wide">
