@@ -6,6 +6,7 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
 ![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=77063153)
 
+
 ## Installation
 
 ### Linux Mint 22 et Ubuntu 24.04 à 26.04 (dépôt APT signé, mises à jour automatiques)
