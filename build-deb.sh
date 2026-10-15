@@ -8,7 +8,7 @@
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.20.6"
+VERSION="1.20.7"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -109,7 +109,7 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
-Depends: python3 (>= 3.8), python3-gi, python3-pyudev, python3-apt, gir1.2-webkit2-4.1, gir1.2-appindicator3-0.1, gir1.2-gtk-3.0, policykit-1, clamav, clamav-daemon, clamav-freshclam, lynis, unhide, chkrootkit, debsums, msmtp-mta | mail-transport-agent, zenity, systemd, udev, udisks2
+Depends: python3 (>= 3.8), python3-gi, python3-pyudev, python3-apt, gir1.2-webkit2-4.1, gir1.2-ayatanaappindicator3-0.1 | gir1.2-appindicator3-0.1, gir1.2-gtk-3.0, pkexec | policykit-1, clamav, clamav-daemon, clamav-freshclam, lynis, unhide, chkrootkit, debsums, msmtp-mta | mail-transport-agent, zenity, systemd, udev, udisks2
 Recommends: libnotify-bin, mintupdate | update-manager, timeshift, rclone, rsync, gocryptfs, flatpak
 Maintainer: Dukiwi SA <info@dukiwi.ch>
 Homepage: https://dukiwi.ch

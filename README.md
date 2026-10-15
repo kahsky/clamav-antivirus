@@ -3,7 +3,7 @@
 Interface graphique moderne pour **ClamAV** sur Linux Mint.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.20.6)
+![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.20.7)
 
 ---
 
@@ -153,6 +153,10 @@ Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
   `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
   `ufw.service` au démarrage et signale un autre gestionnaire de pare-feu actif (firewalld, nftables avec
   `flush ruleset`, netfilter-persistent). Checklist et score recalculés après chaque action pare-feu/SSH.
+- **Installable sur Ubuntu 26.04** — dépendances `pkexec | policykit-1` (le paquet de transition policykit-1
+  n'existe plus) et `gir1.2-ayatanaappindicator3-0.1 | gir1.2-appindicator3-0.1` (libappindicator retiré) ; le
+  bouclier utilise l'indicateur Ayatana quand il est présent. Sur GNOME, l'extension AppIndicator
+  (gnome-shell-extension-appindicator, installée par défaut sur Ubuntu) est nécessaire pour voir l'icône.
 - **Un seul bouclier par session** — après un redémarrage, deux icônes et des notifications en double pouvaient
   apparaître : le service système relançait le bouclier avant que la session soit prête (repli hors service), puis le
   démarrage automatique du bureau en lançait un second. Désormais : verrou d'instance exclusif dans le programme,
@@ -371,7 +375,7 @@ demande une authentification administrateur.
 
 ## Téléchargement
 
-[Télécharger clamav-antivirus_1.20.6_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.20.6_all.deb)
+[Télécharger clamav-antivirus_1.20.7_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.20.7_all.deb)
 
 ---
 
@@ -402,12 +406,12 @@ chmod +x build-deb.sh
 ./build-deb.sh
 ```
 
-Résultat : `clamav-antivirus_1.20.6_all.deb`
+Résultat : `clamav-antivirus_1.20.7_all.deb`
 
 ### Installer le .deb
 
 ```bash
-sudo dpkg -i clamav-antivirus_1.20.6_all.deb
+sudo dpkg -i clamav-antivirus_1.20.7_all.deb
 sudo apt-get install -f   # résout les dépendances si nécessaire
 ```
 

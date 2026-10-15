@@ -19,9 +19,15 @@ import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 gi.require_version('WebKit2', '4.1')
-gi.require_version('AppIndicator3', '0.1')
+# Indicateur de zone de notification : Ayatana (maintenu, seul présent sur Ubuntu 26.04) ou l'ancien libappindicator
+try:
+    gi.require_version('AyatanaAppIndicator3', '0.1')
+    from gi.repository import AyatanaAppIndicator3 as AppIndicator3
+except (ValueError, ImportError):
+    gi.require_version('AppIndicator3', '0.1')
+    from gi.repository import AppIndicator3
 
-from gi.repository import Gtk, Gdk, WebKit2, GLib, AppIndicator3
+from gi.repository import Gtk, Gdk, WebKit2, GLib
 import subprocess
 import threading
 import socket
