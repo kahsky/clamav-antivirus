@@ -4,7 +4,6 @@ Interface graphique moderne pour **ClamAV** avec service système, protection en
 centre de sécurité, sauvegardes et durcissement. **Linux Mint 22**, **Ubuntu 24.04 à 26.04** et **Fedora 44+**.
 Développé par **Dukiwi SA** — Estavayer-le-Lac, Suisse.
 
-![Interface ClamAV Antivirus GUI](https://www.dukiwi.com/imgs/clamav-antivirus.png?v=1.22.1)
 
 ## Installation
 
