@@ -47,15 +47,15 @@ seule si l'option est activée dans Paramètres.
 
 ### Téléchargement direct
 
-- Mint / Ubuntu : [clamav-antivirus_1.24.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.24.0_all.deb)
-- Fedora : [clamav-antivirus-1.24.0-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.24.0-1.noarch.rpm)
+- Mint / Ubuntu : [clamav-antivirus_1.24.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.24.1_all.deb)
+- Fedora : [clamav-antivirus-1.24.1-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.24.1-1.noarch.rpm)
 - Toutes les versions : [www.dukiwi.com/repo](https://www.dukiwi.com/repo)
 
 ### Installer le paquet téléchargé à la main
 
 ```bash
-sudo apt install ./clamav-antivirus_1.24.0_all.deb          # Mint / Ubuntu
-sudo dnf install ./clamav-antivirus-1.24.0-1.noarch.rpm      # Fedora
+sudo apt install ./clamav-antivirus_1.24.1_all.deb          # Mint / Ubuntu
+sudo dnf install ./clamav-antivirus-1.24.1-1.noarch.rpm      # Fedora
 ```
 
 L'installation active le service système et le planificateur, puis lance le scan initial :
@@ -224,6 +224,15 @@ sudo dnf remove clamav-antivirus   # Fedora
 - **Télémétrie après le premier scan complet et à la demande** — le premier scan complet terminé après l'accord
   déclenche l'envoi du rapport anonyme sans attendre la semaine (mesures de performance) ; bouton « Envoyer la
   télémétrie maintenant » dans Paramètres.
+- **chkrootkit « INFECTED » : quatre règles de faux positifs vérifiées** — un media center Ubuntu affichait des
+  constats « INFECTED » de chkrootkit alors que le scan ClamAV complet (221 788 fichiers) était sain. Règles
+  intégrées (version 6, relevés existants reclassés au démarrage sans relancer l'outil) : « Checking `ls'...
+  INFECTED » → bénin si le binaire est livré par un paquet et intact d'après lui (dpkg -V / rpm -V), à vérifier
+  d'urgence s'il est modifié ; « Possible Suckit: /sbin/init INFECTED » → bénin si l'init réel (systemd) est intact
+  d'après son paquet ; « chkproc: Possible LKM Trojan installed » → les processus terminés entre les deux lectures
+  de chkproc ou visibles normalement par ps sont bénins, un processus présent dans /proc mais caché à ps reste à
+  vérifier ; « Possible Slapper / Scalper Worm installed » → même analyse que les bindshells (programme qui écoute
+  vraiment sur les ports 2001, 2002, 4156, 1978, 1812, 2015 : paquet ou application de magasin → bénin).
 - **Contrôle des liens et des courriels : extensions Thunderbird, Firefox, Chrome, Chromium, Edge, Brave** — module
   `clamav_urlguard.py` du service : listes de sites malveillants téléchargées plusieurs fois par jour (OpenPhish et
   Phishing.Database sur GitHub, URLhaus chez abuse.ch ; requêtes conditionnelles ETag, index compacts d'empreintes
@@ -529,8 +538,8 @@ python3 clamav-antivirus.py
 ## Construire les paquets
 
 ```bash
-./build-deb.sh        # clamav-antivirus_1.24.0_all.deb   (Mint / Ubuntu)
-./build-rpm.sh        # clamav-antivirus-1.24.0-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
+./build-deb.sh        # clamav-antivirus_1.24.1_all.deb   (Mint / Ubuntu)
+./build-rpm.sh        # clamav-antivirus-1.24.1-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
 ```
 
 Les deux paquets partagent la même arborescence de fichiers (`build-deb.sh --stage-only`) et le même manifeste

@@ -3260,7 +3260,7 @@ def parse_lynis_report(path="/var/log/lynis-report.dat", log_path="/var/log/lyni
     return rep
 
 
-CHK_RULES_VERSION = 5              # règles de classification intégrées ; un relevé plus ancien est refait au démarrage
+CHK_RULES_VERSION = 6              # règles de classification intégrées ; un relevé plus ancien est refait au démarrage
 CHK_NOISE = ("RTNETLINK answers", "ip: ", "ifconfig:", "ls: ", "find: ", "grep: ", "netstat:", "ss: ", "Usage:",
              "/usr/sbin/chkrootkit:", "chkrootkit:", "chkproc:", "chkdirs:", "chkutmp:", "eth", "wlan")   # messages d'outils, pas des constats
 CHK_NOISE = tuple(x for x in CHK_NOISE if x not in ("eth", "wlan"))
@@ -3490,16 +3490,79 @@ def local_ip_octets():
 APP_STORE_PREFIXES = ("/app/", "/snap/", "/var/lib/flatpak/", "/var/lib/snapd/")
 
 
-def classify_bindshell(head):
-    """Verdict intégré pour « Potential bindshell installed: infected ports: … » : quel programme écoute vraiment
-    sur ces ports ? Livré par un paquet ou une application de magasin → bénin ; aucun processus (détection passagère,
-    ou dernier octet d'une adresse IP pris pour un port) → bénin ; programme hors dpkg → à vérifier."""
-    m = re.search(r"infected ports:\s*(.*)", head, flags=re.I)
+SLAPPER_PORTS = (2002, 4156, 1978, 1812, 2015)      # ports TCP du test « Slapper Worm » de chkrootkit
+SCALPER_PORTS = (2001,)                              # port TCP du test « Scalper Worm »
+CHK_BIN_DIRS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin")
+
+
+def package_file_origin(path):
+    """(paquet, modifié) pour un fichier : livré par un paquet (dpkg -S / rpm -qf) et, en root, vérifié inchangé
+    par rapport au paquet (dpkg -V / rpm -V)."""
+    return sudoers_file_origin(path)
+
+
+def classify_infected_binary(head):
+    """Verdict intégré pour « Checking `ls'... INFECTED » : chkrootkit a trouvé dans le binaire des motifs de rootkits
+    connus. Binaire livré par un paquet et intact d'après lui (somme de contrôle) → les motifs sont dans le programme
+    d'origine : faux positif. Modifié ou hors paquet → à vérifier d'urgence."""
+    m = re.search(r"Checking `([^']+)'", head)
     if not m:
         return None
-    ports = [int(p) for p in re.findall(r"\d+", m.group(1))]
-    if not ports:
-        return None
+    name = m.group(1)
+    path = shutil.which(name, path=":".join(CHK_BIN_DIRS)) or shutil.which(name) or ""
+    if not path:
+        return [{"path": name, "verdict": "unknown", "reason": "binary_missing"}]
+    real = os.path.realpath(path)
+    pkg, modified = package_file_origin(real)
+    if not pkg:
+        return [{"path": real, "verdict": "unknown", "reason": "binary_unknown"}]
+    if modified:
+        return [{"path": real, "verdict": "unknown", "reason": "binary_modified", "package": pkg}]
+    return [{"path": real, "verdict": "benign", "reason": "binary_verified", "package": pkg}]
+
+
+def classify_init(head):
+    """« Possible Suckit: /sbin/init INFECTED » : init réel (systemd…) livré par un paquet et intact → faux positif."""
+    real = os.path.realpath("/sbin/init")
+    pkg, modified = package_file_origin(real)
+    if not pkg:
+        return [{"path": real, "verdict": "unknown", "reason": "init_unknown"}]
+    if modified:
+        return [{"path": real, "verdict": "unknown", "reason": "init_modified", "package": pkg}]
+    return [{"path": real, "verdict": "benign", "reason": "init_verified", "package": pkg}]
+
+
+def classify_lkm(lines):
+    """« chkproc: Possible LKM Trojan installed » : chkproc compare /proc et ps à deux instants ; un processus terminé
+    entre les deux (ou visible normalement maintenant) est un faux positif ; un processus présent mais absent de ps
+    reste à vérifier (rootkit à module noyau)."""
+    pids = []
+    for ln in lines:
+        for m in re.finditer(r"PID\s+(\d+)", ln):
+            pid = int(m.group(1))
+            if pid not in pids:
+                pids.append(pid)
+    if not pids:
+        return [{"path": (lines[0].strip() if lines else "chkproc"), "verdict": "unknown", "reason": "lkm"}]
+    visible = set()
+    r = run_quiet(["ps", "-eo", "pid="], timeout=20)
+    for tok in (r.stdout or "").split():
+        if tok.isdigit():
+            visible.add(int(tok))
+    notes = []
+    for pid in pids:
+        if not os.path.exists(f"/proc/{pid}"):
+            notes.append({"path": f"PID {pid}", "verdict": "benign", "reason": "pid_transient"})
+        elif pid in visible:
+            notes.append({"path": f"PID {pid} ({_read_text(f'/proc/{pid}/comm') or '?'})", "verdict": "benign", "reason": "pid_visible"})
+        else:
+            notes.append({"path": f"PID {pid}", "verdict": "unknown", "reason": "pid_hidden"})
+    return notes
+
+
+def classify_ports(ports):
+    """Qui écoute vraiment sur ces ports ? Livré par un paquet ou une application de magasin → bénin ; aucun processus
+    (détection passagère, ou dernier octet d'une adresse IP pris pour un port) → bénin ; programme hors paquet → à vérifier."""
     listeners = listening_ports()
     octets = local_ip_octets()
     notes, exes = [], {}
@@ -3528,6 +3591,17 @@ def classify_bindshell(head):
     return notes
 
 
+def classify_bindshell(head):
+    """Verdict intégré pour « Potential bindshell installed: infected ports: … » (voir classify_ports)."""
+    m = re.search(r"infected ports:\s*(.*)", head, flags=re.I)
+    if not m:
+        return None
+    ports = [int(p) for p in re.findall(r"\d+", m.group(1))]
+    if not ports:
+        return None
+    return classify_ports(ports)
+
+
 def chkrootkit_analysis(out):
     """Sortie de chkrootkit -q → {warnings, benign, notes} : les constats « suspicious files » dont tous les chemins
     sont bénins deviennent des faux positifs connus (non comptés) ; les autres gardent une note par chemin."""
@@ -3538,6 +3612,18 @@ def chkrootkit_analysis(out):
         verdicts = None
         if "bindshell" in head:
             verdicts = classify_bindshell(lines[0])
+        elif head.startswith("checking `") and "infected" in head:
+            verdicts = classify_infected_binary(lines[0])          # « Checking `ls'... INFECTED »
+        elif "suckit" in head and "init" in head:
+            verdicts = classify_init(lines[0])
+        elif "chkproc" in head and "lkm" in head:
+            verdicts = classify_lkm(lines[1:])
+        elif "chkdirs" in head and "lkm" in head:
+            verdicts = [{"path": ln.strip(), "verdict": "unknown", "reason": "lkm_dirs"} for ln in lines[1:] if ln.strip()] or None
+        elif "slapper" in head:
+            verdicts = classify_ports(list(SLAPPER_PORTS))
+        elif "scalper" in head:
+            verdicts = classify_ports(list(SCALPER_PORTS))
         elif len(lines) > 1:
             paths = [ln.strip() for ln in lines[1:] if ln.strip().startswith("/")]
             if "suspicious files" in head:
