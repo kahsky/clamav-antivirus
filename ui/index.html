@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.23.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.24.0 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -820,6 +820,32 @@
                 <details class="ports-details" id="honeypotEventsDetails"><summary data-i18n="honeypot.events">Dernières connexions aux leurres</summary><div id="honeypotEvents" class="honeypot-events"></div></details>
             </div>
 
+            <div class="card card-urlguard" id="cardUrlGuard">
+                <div class="card-title-row">
+                    <h4 data-i18n="urlguard.title">Liens et courriels</h4>
+                    <div class="log-actions-right">
+                        <span class="text-muted" id="urlguardState"></span>
+                        <button class="btn btn-secondary btn-sm" onclick="urlguardRefresh()" data-i18n="urlguard.refresh">Actualiser les listes</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadSecurityData('urlguard', true)" data-i18n="system.refresh">Actualiser</button>
+                    </div>
+                </div>
+                <p class="text-muted alerts-intro" data-i18n="urlguard.intro">Les extensions pour Thunderbird, Firefox, Chrome, Chromium, Edge et Brave demandent au service, avant d'ouvrir un lien ou d'afficher un courriel, s'il est sûr : listes de sites d'hameçonnage et de logiciels malveillants (OpenPhish, URLhaus, Phishing.Database, mises à jour plusieurs fois par jour) et heuristiques (sites sosies d'une marque, caractères trompeurs, raccourcisseurs résolus, pages de connexion sans chiffrement, lien dont le texte affiché n'est pas la destination…). Les pièces jointes des courriels sont analysées par ClamAV. Un lien dangereux affiche une page d'avertissement avec « Retour », « Ouvrir quand même » et « Toujours autoriser ce site ».</p>
+                <p class="honeypot-ports-line" id="urlguardCounters"></p>
+                <h5 class="sub-title" data-i18n="urlguard.clients.title">Extensions</h5>
+                <div id="urlguardClients" class="urlguard-clients"></div>
+                <details class="ports-details" id="urlguardHelp"><summary data-i18n="urlguard.help.title">Installer les extensions</summary><div class="urlguard-help">
+                    <p data-i18n="urlguard.help.thunderbird">Thunderbird : l'extension « Protection des courriels » est installée automatiquement au prochain démarrage de Thunderbird (politique d'entreprise, fichier local). Un bandeau apparaît en haut de chaque message.</p>
+                    <p data-i18n="urlguard.help.chrome">Chrome, Chromium, Edge, Brave : l'extension « Contrôle des liens » est installée automatiquement au prochain démarrage du navigateur (politique d'entreprise, téléchargée depuis le dépôt Dukiwi). Sans Internet, ou pour un navigateur Flatpak/Snap : chrome://extensions › Mode développeur › Charger l'extension non empaquetée › /opt/clamav-antivirus/extensions/urlguard-chromium.</p>
+                    <p data-i18n="urlguard.help.firefox">Firefox : Mozilla exige une extension signée. Dès que l'extension signée est publiée sur le dépôt Dukiwi, elle s'installe automatiquement ; en attendant, about:debugging › Ce Firefox › Charger un module temporaire › /opt/clamav-antivirus/extensions/urlguard-firefox/manifest.json (à refaire à chaque démarrage).</p>
+                    <p data-i18n="urlguard.help.note">Les navigateurs installés en Flatpak ou Snap (Chromium Snap d'Ubuntu notamment) ne peuvent pas toujours dialoguer avec l'hôte natif : la ligne « extension jamais vue » reste alors affichée.</p>
+                </div></details>
+                <h5 class="sub-title" data-i18n="urlguard.feeds.title">Listes de sites malveillants</h5>
+                <div id="urlguardFeeds" class="urlguard-feeds"></div>
+                <h5 class="sub-title" data-i18n="urlguard.events.title">Derniers liens signalés</h5>
+                <div id="urlguardEvents" class="urlguard-events"></div>
+                <details class="ports-details"><summary data-i18n="urlguard.allowed.title">Sites toujours autorisés</summary><div id="urlguardAllowed" class="urlguard-allowed"></div></details>
+            </div>
+
             <div class="card card-vulns">
                 <div class="card-title-row">
                     <h4 data-i18n="security.vulns.title">Failles connues des programmes installés</h4>
@@ -1187,6 +1213,10 @@
                     <label class="setting-row toggle"><span data-i18n="settings.family_mode">Mode famille : réglages et actions sensibles réservés à un administrateur</span><input type="checkbox" id="setFamilyMode"></label>
                     <label class="setting-row toggle"><span data-i18n="settings.auto_response">Suspendre automatiquement un programme jugé dangereux, puis demander</span><input type="checkbox" id="setAutoResponse"></label>
                     <label class="setting-row toggle"><span data-i18n="settings.connection_monitor">Surveiller les connexions sortantes</span><input type="checkbox" id="setConnectionMonitor"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.url_guard">Contrôle des liens (extensions Thunderbird et navigateurs) : listes de sites malveillants et heuristiques</span><input type="checkbox" id="setUrlGuard"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.url_guard_resolve">Résoudre les adresses raccourcies (bit.ly, t.co…) pour contrôler la destination réelle</span><input type="checkbox" id="setUrlGuardResolve"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.mail_scan">Analyser les pièces jointes des courriels avec ClamAV (Thunderbird)</span><input type="checkbox" id="setMailScan"></label>
+                    <p class="text-muted setting-note" data-i18n="settings.url_guard.note">Actif par défaut. Les listes (OpenPhish et Phishing.Database sur GitHub, URLhaus chez abuse.ch) sont téléchargées par le service plusieurs fois par jour ; aucune adresse visitée n'est envoyée ailleurs qu'au service de cet ordinateur (sauf le raccourcisseur lui-même, interrogé pour connaître la destination).</p>
                     <label class="setting-row toggle"><span data-i18n="settings.honeypot">Pot de miel réseau : ports leurres à l'écoute, balayages de ports signalés</span><input type="checkbox" id="setHoneypot"></label>
                     <p class="text-muted setting-note" data-i18n="settings.honeypot.note">Actif par défaut. Les ports leurres (deux ports hauts tirés au sort, 23 et 2323) sont ouverts dans le pare-feu et apparaissent comme « pot de miel » dans les ports en écoute ; aucun service ne tourne derrière. Un appareil qui les touche ou balaie d'autres ports fermés est signalé par un popup, avec un bouton pour le bloquer.</p>
                     <label class="setting-row toggle"><span data-i18n="settings.geoip">Géolocaliser les adresses distantes (ip-api.com)</span><input type="checkbox" id="setGeoip"></label>

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ClamAV Antivirus GUI</title>
+    <link rel="stylesheet" href="warning.css">
+</head>
+<body>
+    <main class="card">
+        <div class="head">
+            <img src="icons/128.png" alt="" class="shield">
+            <div>
+                <h1 id="title"></h1>
+                <p class="lead" id="lead"></p>
+            </div>
+        </div>
+        <p class="url"><span id="host" class="host"></span><br><code id="url"></code></p>
+        <h2 id="whyTitle"></h2>
+        <ul id="reasons"></ul>
+        <p class="meta" id="meta"></p>
+        <div class="actions">
+            <button class="btn primary" id="btnBack"></button>
+            <button class="btn" id="btnOpen"></button>
+            <button class="btn subtle" id="btnAllow"></button>
+        </div>
+        <p class="foot" id="foot"></p>
+    </main>
+    <script src="warning.js"></script>
+</body>
+</html>

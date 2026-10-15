@@ -66,6 +66,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import clamav_harden as harden  # noqa: E402
 import clamav_distro as distro  # noqa: E402
 import clamav_honeypot  # noqa: E402
+import clamav_urlguard  # noqa: E402
 from clamav_common import (  # noqa: E402
     VERSION, SYSTEM_STATE_DIR, SYSTEM_LOG_DIR, DAEMON_SOCKET,
     SYSTEM_STATE_FILE, SYSTEM_QUARANTINE_DIR, SYSTEM_PROGRESS_FILE, SYSTEM_SCAN_CACHE_DB, SYSTEM_SECRET_FILE,
@@ -1341,7 +1342,11 @@ def network_identity():
 
 
 UFW_RULE_COMMANDS = ("allow", "deny", "reject", "limit", "insert", "prepend")
-FEATURES_OPT_IN = ("honeypot",)               # protections avancées proposées à l'utilisateur (jamais activées d'office)
+FEATURES_OPT_IN = ("honeypot",)
+URLGUARD_DIR = os.path.join(SYSTEM_STATE_DIR, "urlguard")          # index des listes de sites malveillants
+MAIL_TMP_PREFIX = "/tmp/clamav-antivirus-mail-"                       # pièces jointes déposées par l'hôte natif (par uid)
+BROWSER_BINARIES = {"thunderbird": ("thunderbird",), "firefox": ("firefox", "firefox-esr"), "chrome": ("google-chrome", "google-chrome-stable"),
+                    "chromium": ("chromium", "chromium-browser"), "edge": ("microsoft-edge", "microsoft-edge-stable"), "brave": ("brave-browser", "brave")}               # protections avancées proposées à l'utilisateur (jamais activées d'office)
 
 
 UFW_INIT = os.environ.get("CLAMAV_ANTIVIRUS_UFW_INIT") or next((p for p in ("/lib/ufw/ufw-init", "/usr/lib/ufw/ufw-init") if os.path.exists(p)), "/lib/ufw/ufw-init")
@@ -3910,6 +3915,8 @@ class Daemon:
         self.usb = UsbWatcher(self)
         self.honeypot = clamav_honeypot.Honeypot(self, {"log": log, "write_log": self.write_log, "ufw": self.ufw,
                                                          "parse_ufw_numbered": parse_ufw_numbered})
+        self.urlguard = clamav_urlguard.UrlGuard(self, URLGUARD_DIR, log=log)
+        self.last_urlguard_check = 0.0
         self.unlocked = {}          # uid -> expiry (session administrateur)
         self.suspended = {}         # pid -> info (processus suspendus par la réponse automatique)
         self._trusted_set = {t.get("exe") for t in (self.state.get("trusted_programs") or []) if t.get("exe")}
@@ -4013,6 +4020,8 @@ class Daemon:
             self.write_log(f"⚠ connection {alert['severity']}: {alert.get('comm')} (pid {alert.get('pid')}) → {alert.get('ip')}:{alert.get('port')} {alert.get('country', '')}")
         elif alert.get("kind") in ("persistence", "integrity", "update", "timeshift"):
             self.write_log(f"⚠ {alert.get('kind')}: {alert.get('title', '')} {alert.get('detail', '')}")
+        elif alert.get("kind") in ("mail", "url"):
+            self.write_log(f"⚠ {alert.get('kind')} {alert.get('severity')}: {alert.get('title', '')} — {alert.get('detail', '')} ({alert.get('source', '')})")
         elif alert.get("kind") == "honeypot":
             self.write_log(f"⚠ honeypot {alert.get('severity')}: {alert.get('ip')} ({alert.get('host') or '?'}) "
                            f"{alert.get('detail', '')} — {', '.join(alert.get('reasons') or [])}")
@@ -5973,7 +5982,7 @@ class Daemon:
         vulns = (self.state.get("vulns") or {}).get("counts") or {}
         payload = {
             "install_id": install_id, "version": VERSION, "os": pretty, "kernel": os.uname().release, "arch": os.uname().machine,
-            "settings": {k: self.settings.get(k) for k in ("family_mode", "firewall_profile", "backup_check", "timeshift_check", "auto_response", "connection_monitor", "honeypot",
+            "settings": {k: self.settings.get(k) for k in ("family_mode", "firewall_profile", "backup_check", "timeshift_check", "auto_response", "connection_monitor", "honeypot", "url_guard",
                                                              "auto_harden", "scan_cache_days", "integrity_weekly", "weekly_scan")},
             "checklist": {"score": checklist.get("score"), "grade": checklist.get("grade"),
                           "fail": [i["key"] for i in checklist.get("items", []) if i.get("status") == "fail"],
@@ -6178,6 +6187,10 @@ class Daemon:
                 if time.time() - self.last_daily > 86400 and not self.daily_running:
                     threading.Thread(target=self.daily_tasks, daemon=True).start()
                 self.check_weekly_integrity()
+                if time.time() - self.last_urlguard_check > 900 and self.settings.get("url_guard") is not False \
+                        and self.urlguard.feeds_stale() and not self.urlguard.refreshing:
+                    self.last_urlguard_check = time.time()
+                    threading.Thread(target=self.urlguard.refresh, daemon=True, name="urlguard-refresh").start()
                 for uid, exp in list(self.unlocked.items()):
                     if exp < time.time():
                         self.unlocked.pop(uid, None)
@@ -6229,6 +6242,7 @@ class Daemon:
             if state.get("checklist") else None,
             "integrity_summary": self.integrity_summary(),
             "honeypot_summary": self.honeypot.summary(),
+            "urlguard_summary": self.urlguard.summary(),
             "persistence_summary": (state.get("persistence") or {}).get("counts"),
             "connections_active": self.connections.active,
             "alerts": (state.get("alerts") or [])[:10],
@@ -6356,6 +6370,74 @@ class Daemon:
 
         if cmd == "honeypot":
             return {"ok": True, "honeypot": self.honeypot.snapshot()}
+
+        # ── Contrôle des liens et des courriels (extensions Thunderbird / navigateurs, via l'hôte natif) ──
+        if cmd == "url_check":
+            if self.settings.get("url_guard") is False:
+                return {"ok": True, "enabled": False, "results": []}
+            urls = req.get("urls") if isinstance(req.get("urls"), list) else [req.get("url")]
+            results = self.urlguard.check_many([u for u in urls if u][:200], req.get("context") or {}, str(req.get("source") or "")[:20])
+            return {"ok": True, "enabled": True, "results": results}
+
+        if cmd == "url_report":
+            verdict, action = str(req.get("verdict") or "")[:10], str(req.get("action") or "")[:20]
+            self.urlguard.report(req.get("url") or "", verdict, action, str(req.get("source") or "")[:20])
+            if action == "opened" and verdict == "danger":
+                self.write_log(f"⚠ url opened anyway ({req.get('source')}): {str(req.get('url'))[:200]}")
+            self.broadcast({"event": "urlguard", "summary": self.urlguard.summary()})
+            return {"ok": True}
+
+        if cmd == "url_allow":
+            ok = self.urlguard.allow(req.get("host") or "", remove=bool(req.get("remove")), by=str(req.get("source") or "")[:20])
+            self.write_log(f"url {'unallow' if req.get('remove') else 'allow'} {req.get('host')} (uid {uid})")
+            return {"ok": ok, "error": "" if ok else "invalid_host"}
+
+        if cmd == "urlguard_hello":
+            self.urlguard.hello(str(req.get("app") or "other"), str(req.get("version") or ""), uid)
+            return {"ok": True, "version": VERSION, "enabled": self.settings.get("url_guard") is not False,
+                    "mail_scan": self.settings.get("mail_scan_attachments") is not False}
+
+        if cmd == "urlguard":
+            snap = self.urlguard.snapshot()
+            snap["browsers"] = {app: any(shutil.which(b) for b in bins) or any(os.path.exists(p) for p in (f"/snap/bin/{bins[0]}", f"/var/lib/flatpak/exports/bin/{bins[0]}"))
+                                for app, bins in BROWSER_BINARIES.items()}
+            return {"ok": True, "urlguard": snap}
+
+        if cmd == "urlguard_refresh":
+            if not self.urlguard.refreshing:
+                threading.Thread(target=self.urlguard.refresh, kwargs={"force": True}, daemon=True).start()
+            return {"ok": True, "refreshing": True}
+
+        if cmd == "url_scan":
+            # Pièce jointe déposée par l'hôte natif dans /tmp/clamav-antivirus-mail-<uid>/ : vérification de l'appartenance, clamd
+            if self.settings.get("mail_scan_attachments") is False:
+                return {"ok": True, "enabled": False, "infected": False}
+            path = os.path.realpath(str(req.get("path") or ""))
+            name = str(req.get("name") or os.path.basename(path))[:200]
+            if not path.startswith(f"{MAIL_TMP_PREFIX}{uid}/") or not os.path.isfile(path):
+                return {"ok": False, "error": "forbidden"}
+            try:
+                st = os.stat(path)
+            except OSError:
+                return {"ok": False, "error": "not_found"}
+            if st.st_uid != uid or st.st_size > 200 * 1024 ** 2:
+                return {"ok": False, "error": "forbidden"}
+            if not clamd_ping():
+                return {"ok": False, "error": "clamd_unavailable"}
+            found = ActivityMonitor.clamd_check([path])
+            signature = found[0].rsplit(":", 1)[-1].replace(" FOUND", "").strip() if found else ""
+            source = str(req.get("source") or "thunderbird")[:20]
+            if found:
+                self.urlguard.record({"t": now_iso(), "source": source, "url": name, "host": "", "verdict": "danger",
+                                      "reasons": ["infected_attachment"], "action": "attachment_infected", "signature": signature})
+                self.publish_alert({"kind": "mail", "severity": "danger", "time": now_iso(), "title": name, "detail": signature,
+                                    "source": source, "sender": str(req.get("sender") or "")[:120], "subject": str(req.get("subject") or "")[:200],
+                                    "reasons": ["infected_attachment"], "comm": "", "exe": "", "pid": 0, "user": "", "count": 0,
+                                    "top_dir": "", "sample": [], "cmdline": ""})
+            else:
+                with self.urlguard.lock:
+                    self.urlguard.counters["attachments"] = self.urlguard.counters.get("attachments", 0) + 1
+            return {"ok": True, "enabled": True, "infected": bool(found), "signature": signature, "engine": "clamd"}
 
         if cmd == "honeypot_block":
             ok, text = self.honeypot.block(str(req.get("ip") or ""), remove=bool(req.get("remove")))
@@ -7151,6 +7233,11 @@ class Daemon:
         def warmup():
             self.refresh_security(force=True, broadcast=False)
             self.refresh_overall()
+            if self.settings.get("url_guard") is not False and self.urlguard.feeds_stale():
+                try:
+                    self.urlguard.refresh()
+                except Exception as e:  # noqa: BLE001
+                    log(f"Listes de sites malveillants : {e}")
             time.sleep(90)
             if not self.shutdown.is_set():
                 self.daily_tasks()

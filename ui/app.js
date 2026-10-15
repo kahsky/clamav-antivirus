@@ -116,7 +116,7 @@ function locale() {
 // « Ignorer », « C'est normal », « Faire confiance », « Réafficher »… : le service recalcule bouclier, score et listes.
 // Trois secondes après, tout l'état affiché est relu pour montrer le nouveau statut sans changer d'onglet.
 const RELOAD_AFTER_ACTIONS = new Set(['acknowledge_vuln', 'acknowledge_port', 'acknowledge_integrity', 'acknowledge_persistence',
-    'ignore_check', 'timeshift_ignore', 'trust_program', 'untrust_program', 'untrust_usb', 'honeypot_block', 'honeypot_ignore', 'honeypot_forget', 'feature_answer']);
+    'ignore_check', 'timeshift_ignore', 'trust_program', 'untrust_program', 'untrust_usb', 'honeypot_block', 'honeypot_ignore', 'honeypot_forget', 'feature_answer', 'url_allow']);
 let statusReloadTimer = null;
 
 function scheduleStatusReload(delay = 3000) {
@@ -179,6 +179,7 @@ function onBackendMessage(msg) {
         case 'backupTimeshift': if (backupData) { backupData.timeshift = data; renderBackupTab(); renderBackupWizard(); } if (lastStatus && lastStatus.backup) { lastStatus.backup.timeshift = data; renderSimpleView(); } break;
         case 'securityData':    onSecurityData(data); break;
         case 'honeypotUpdate':  onHoneypotUpdate(data); break;
+        case 'urlguardUpdate':  onUrlguardUpdate(data); break;
         case 'overall':         overall = data; renderSimpleView(); renderAdmin(); break;
         case 'error':           showToast(data.message, 'error'); break;
     }
@@ -227,7 +228,7 @@ function switchTab(tabId) {
     } else if (tabId === 'settings') {
         loadSettings();
     } else if (tabId === 'security') {
-        ['checklist', 'vulns', 'integrity', 'app_update', 'honeypot'].forEach(k => loadSecurityData(k));
+        ['checklist', 'vulns', 'integrity', 'app_update', 'honeypot', 'urlguard'].forEach(k => loadSecurityData(k));
     }
     if (tabId === 'system') { loadSecurityData('connections'); loadSecurityData('persistence'); }
     if (tabId === 'awareness') renderAwareness('awarenessList');
@@ -419,11 +420,12 @@ function onSecurityData(data) {
     else if (type === 'connections') renderConnections();
     else if (type === 'app_update') renderAppUpdate();
     else if (type === 'honeypot') renderHoneypot();
+    else if (type === 'urlguard') renderUrlGuard();
     renderSecurityBadge();
 }
 
 function renderSecurityUnavailable(type) {
-    const map = { vulns: 'vulnList', checklist: 'checklistList', integrity: 'integrityList', persistence: 'persistenceList', connections: 'connectionsList', honeypot: 'honeypotList' };
+    const map = { vulns: 'vulnList', checklist: 'checklistList', integrity: 'integrityList', persistence: 'persistenceList', connections: 'connectionsList', honeypot: 'honeypotList', urlguard: 'urlguardClients' };
     if (map[type]) $(map[type]).innerHTML = `<p class="text-muted">${t('system.unavailable')}</p>`;
     if (type === 'app_update') { $('appUpdateSummary').textContent = t('system.unavailable'); }
 }
@@ -1216,6 +1218,9 @@ function onSettingsData(data) {
     $('setAutoResponse').checked = sys.auto_response !== false;
     $('setConnectionMonitor').checked = sys.connection_monitor !== false;
     if ($('setHoneypot')) $('setHoneypot').checked = !!sys.honeypot;
+    if ($('setUrlGuard')) $('setUrlGuard').checked = sys.url_guard !== false;
+    if ($('setUrlGuardResolve')) $('setUrlGuardResolve').checked = sys.url_guard_resolve !== false;
+    if ($('setMailScan')) $('setMailScan').checked = sys.mail_scan_attachments !== false;
     $('setGeoip').checked = sys.geoip_lookup !== false;
     if ($('setGeoipKey')) $('setGeoipKey').value = sys.geoip_api_key || '';
     if ($('geoipStats')) {
@@ -1230,7 +1235,7 @@ function onSettingsData(data) {
     if ($('setScanCacheDays')) $('setScanCacheDays').value = sys.scan_cache_days ?? 30;
     if ($('telemetryLast')) $('telemetryLast').textContent = data.telemetry_sent ? t('settings.telemetry.last', { rel: formatRelative(data.telemetry_sent) }) : '';
     const locked = new Set(data.locked || []);
-    const map = { setUploadMonitor: 'upload_monitor', setUploadGb: 'upload_alert_gb', setUploadHours: 'upload_window_hours', setBurstMonitor: 'burst_monitor', setBurstInfo: 'burst_info_threshold', setBurstDanger: 'burst_danger_threshold', setBurstWindow: 'burst_window_sec', setUsbAuto: 'usb_auto_scan', setUsbMax: 'usb_auto_scan_max_gib', setUpdateTime: 'update_hour', setFamilyMode: 'family_mode', setAutoResponse: 'auto_response', setConnectionMonitor: 'connection_monitor', setHoneypot: 'honeypot', setGeoip: 'geoip_lookup', setGeoipKey: 'geoip_api_key', setIntegrityWeekly: 'integrity_weekly', setIntegrityDay: 'integrity_day', setIntegrityHour: 'integrity_hour', setAppUpdateCheck: 'app_update_check', setAppUpdateAuto: 'app_update_auto', setWeekly: 'weekly_scan', setWeeklyDay: 'weekly_scan_day', setWeeklyHour: 'weekly_scan_hour', setBackupCheck: 'backup_check', setTimeshiftCheck: 'timeshift_check', setTelemetry: 'telemetry', setAutoHarden: 'auto_harden', setScanCacheDays: 'scan_cache_days' };
+    const map = { setUploadMonitor: 'upload_monitor', setUploadGb: 'upload_alert_gb', setUploadHours: 'upload_window_hours', setBurstMonitor: 'burst_monitor', setBurstInfo: 'burst_info_threshold', setBurstDanger: 'burst_danger_threshold', setBurstWindow: 'burst_window_sec', setUsbAuto: 'usb_auto_scan', setUsbMax: 'usb_auto_scan_max_gib', setUpdateTime: 'update_hour', setFamilyMode: 'family_mode', setAutoResponse: 'auto_response', setConnectionMonitor: 'connection_monitor', setHoneypot: 'honeypot', setUrlGuard: 'url_guard', setUrlGuardResolve: 'url_guard_resolve', setMailScan: 'mail_scan_attachments', setGeoip: 'geoip_lookup', setGeoipKey: 'geoip_api_key', setIntegrityWeekly: 'integrity_weekly', setIntegrityDay: 'integrity_day', setIntegrityHour: 'integrity_hour', setAppUpdateCheck: 'app_update_check', setAppUpdateAuto: 'app_update_auto', setWeekly: 'weekly_scan', setWeeklyDay: 'weekly_scan_day', setWeeklyHour: 'weekly_scan_hour', setBackupCheck: 'backup_check', setTimeshiftCheck: 'timeshift_check', setTelemetry: 'telemetry', setAutoHarden: 'auto_harden', setScanCacheDays: 'scan_cache_days' };
     Object.entries(map).forEach(([id, key]) => { const el = $(id); if (!el) return; const row = el.closest('.setting-row'); if (locked.has(key)) { el.disabled = true; if (row) { row.classList.add('locked'); row.title = t('settings.locked_note'); } } else if (row) { row.classList.remove('locked'); row.title = ''; } });
     const banner = $('policyBanner');
     if (banner) { banner.hidden = !data.policy; if (data.policy) banner.textContent = t('settings.policy.banner', { name: data.policy.name || '—', signed: data.policy.signed ? t('settings.policy.signed') : '', n: (data.locked || []).length }) + (data.allowlist && data.allowlist.version ? ' · ' + t('settings.allowlist', { version: data.allowlist.version, n: data.allowlist.patterns || 0 }) : ''); }
@@ -1305,6 +1310,9 @@ function saveSettings() {
         auto_response: $('setAutoResponse').checked,
         connection_monitor: $('setConnectionMonitor').checked,
         honeypot: $('setHoneypot') ? $('setHoneypot').checked : false,
+        url_guard: $('setUrlGuard') ? $('setUrlGuard').checked : true,
+        url_guard_resolve: $('setUrlGuardResolve') ? $('setUrlGuardResolve').checked : true,
+        mail_scan_attachments: $('setMailScan') ? $('setMailScan').checked : true,
         geoip_lookup: $('setGeoip').checked,
         geoip_api_key: $('setGeoipKey') ? $('setGeoipKey').value.trim() : '',
         integrity_weekly: $('setIntegrityWeekly').checked,
@@ -1694,6 +1702,17 @@ function renderAlerts(available = true) {
             <div class="alert-body">${t('popup.connection.body', { program: escapeHtml(a.comm || '?'), ip: escapeHtml(a.ip || ''), port: escapeHtml(String(a.port || '')), where: escapeHtml([a.country, a.org].filter(Boolean).join(' · ') || '?') })}</div>
             ${a.exe ? `<div class="alert-exe">${escapeHtml(a.exe)}${a.exe_replaced ? ` · ${t('system.exe_replaced')}` : ''}</div>` : ''}
             <div class="alert-actions">${a.flagged || !a.exe ? '' : `<button class="btn btn-secondary btn-sm" onclick="trustProgram('${escapeJs(a.exe)}','${escapeJs(a.comm || '')}')">${t('popup.btn.its_me')}</button> `}${a.suspended ? `<button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'kill'})">${t('popup.btn.kill')}</button> <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'continue'})">${t('popup.btn.resume')}</button>` : ''}</div>
+        </div>`;
+        }
+        if (a.kind === 'mail') {
+            return `
+        <div class="alert-item alert-danger">
+            <div class="alert-head">
+                <span class="badge badge-red">${t('system.alert.mail')}</span>
+                <span class="alert-program">${escapeHtml(a.title || '?')}</span>
+                <span class="alert-meta">${formatDateTime(a.time)}${a.sender ? ` · ${escapeHtml(a.sender)}` : ''}</span>
+            </div>
+            <div class="alert-body">${t('popup.mail.body', { name: escapeHtml(a.title || '?'), signature: escapeHtml(a.detail || '?') })}${a.subject ? `<div class="alert-exe">${escapeHtml(a.subject)}</div>` : ''}</div>
         </div>`;
         }
         if (a.kind === 'honeypot') {
@@ -2671,6 +2690,12 @@ function simulateBackend(data) {
                 persistence: { checked_at: now, counts: { items: 5, untrusted: 1, extensions: 2, ext_outside_store: 1 }, items: [{ kind: 'autostart', path: '/home/user/.config/autostart/Conky.desktop', name: 'Conky', exec: 'conky -d', user: 'user', trusted: false, owner: '' }, { kind: 'cron', path: '/etc/cron.daily/apt-compat', name: 'apt-compat', exec: '', trusted: true, owner: 'apt' }], extensions: [{ browser: 'chrome', user: 'user', id: 'abcd', name: 'uBlock Origin', version: '1.60', from_store: true, enabled: true }, { browser: 'chrome', user: 'user', id: 'efgh', name: 'Mystery Helper', version: '0.1', from_store: false, enabled: true }] },
                 connections: { checked_at: now, blocklist_size: 1234, processes: [{ pid: 5099, comm: 'chrome', exe: '/opt/google/chrome/chrome', user: 'user', trusted: true, remotes: { '140.82.112.26': { ip: '140.82.112.26', ports: ['443'], flagged: false, country: 'US', org: 'GitHub' } } }, { pid: 777, comm: 'miner', exe: '/tmp/miner', user: 'user', trusted: false, remotes: { '185.220.101.1': { ip: '185.220.101.1', ports: ['4444'], flagged: true, country: 'DE', org: 'Hetzner' } } }] },
                 app_update: { checked_at: now, current: '1.7.0', available: true, verified: true, downloaded: true, version: '1.8.0', size: 102400, date: now, error: '' },
+                urlguard: { enabled: true, feeds_ok: 4, entries: 447874, refreshing: false, mail_scan: true, counters: { checked: 312, danger: 4, warn: 9, blocked: 3, opened: 1, attachments: 27 },
+                    browsers: { thunderbird: true, firefox: true, chrome: true, chromium: false, edge: true, brave: false },
+                    clients: { thunderbird: { version: '1.24.0', last: new Date(Date.now() - 600e3).toISOString() }, chrome: { version: '1.24.0', last: new Date(Date.now() - 60e3).toISOString() } },
+                    feeds: [{ name: 'openphish', label: 'OpenPhish', kind: 'urls', home: '#', count: 1060, hosts: 281, fetched_at: new Date(Date.now() - 3600e3).toISOString(), error: '' }, { name: 'urlhaus', label: 'URLhaus (abuse.ch)', kind: 'urls', home: '#', count: 54648, hosts: 1793, fetched_at: new Date(Date.now() - 3600e3).toISOString(), error: '' }, { name: 'phishing_db', label: 'Phishing.Database', kind: 'domains', home: '#', count: 392163, hosts: 0, fetched_at: new Date(Date.now() - 86400e3 * 2).toISOString(), error: '' }, { name: 'phishing_db_new', label: 'Phishing.Database (nouveaux)', kind: 'domains', home: '#', count: 3, hosts: 0, fetched_at: null, error: 'HTTP 503' }],
+                    events: [{ t: new Date(Date.now() - 60e3).toISOString(), source: 'chrome', url: 'https://paypa1.com/login', host: 'paypa1.com', verdict: 'danger', reasons: ['homoglyph'], action: 'blocked' }, { t: new Date(Date.now() - 600e3).toISOString(), source: 'thunderbird', url: 'https://bit.ly/3abc', host: 'bit.ly', verdict: 'danger', reasons: ['shortener', 'shortener_danger'], action: 'checked' }, { t: new Date(Date.now() - 900e3).toISOString(), source: 'thunderbird', url: 'facture.pdf.exe', host: '', verdict: 'danger', reasons: ['infected_attachment'], action: 'attachment_infected', signature: 'Win.Trojan.Agent-123' }, { t: new Date(Date.now() - 7200e3).toISOString(), source: 'firefox', url: 'http://203.0.113.9/update/account', host: '203.0.113.9', verdict: 'danger', reasons: ['ip_host', 'insecure_login', 'phishing_pattern'], action: 'opened' }, { t: new Date(Date.now() - 86400e3).toISOString(), source: 'edge', url: 'https://cutt.ly/xyz', host: 'cutt.ly', verdict: 'warn', reasons: ['shortener'], action: 'checked' }],
+                    allowed: { 'intranet.example.ch': { t: new Date().toISOString(), by: 'firefox' } } },
                 honeypot: { enabled: true, active: true, ports: [23, 2323, 24187, 29901], fw_log: true, fw_managed: true, backend: 'ufw', sources_24h: 2, danger_24h: 1, blocked: 0, answered: true, started_at: now,
                     sources: [{ ip: '192.168.1.77', host: 'android-7f3a.local', mac: 'a4:50:46:12:9b:c0', local: true, gateway: false, first: new Date(Date.now() - 1800e3).toISOString(), last: new Date(Date.now() - 120e3).toISOString(), count: 4, ports: [23, 2323, 24187], fw_ports: ['22/tcp', '80/tcp', '445/tcp', '3389/tcp', '8080/tcp'], intents: { probe: 2, login: 1, http: 1 }, samples: ['login=admin +password', 'GET /'], severity: 'danger', blocked: false, ignored: false },
                               { ip: '192.168.1.1', host: 'fritz.box', mac: '3c:37:12:aa:bb:cc', local: true, gateway: true, first: new Date(Date.now() - 86000e3).toISOString(), last: new Date(Date.now() - 7200e3).toISOString(), count: 1, ports: [2323], fw_ports: [], intents: { probe: 1 }, samples: [], severity: 'warn', blocked: false, ignored: true },
@@ -3170,6 +3195,38 @@ function renderHoneypot() {
     }).join('') : `<p class="text-muted">${t(h.enabled ? 'honeypot.sources.none' : 'honeypot.sources.off')}</p>`);
     const events = h.events || [];
     ev.innerHTML = events.length ? events.slice(0, 60).map(e => `<div class="honeypot-event${e.fw ? ' fw' : ''}"><span>${formatDateTime(e.t)}</span><span>${escapeHtml(e.ip || '')}</span><span>${e.port}${e.fw ? '/' + escapeHtml(e.detail || '') : ''}</span><span>${e.fw ? t('honeypot.intent.fw') : t(`honeypot.intent.${e.intent}`)}${!e.fw && e.detail ? ` — ${escapeHtml(e.detail)}` : ''}</span></div>`).join('') : `<p class="text-muted">${t('honeypot.events.none')}</p>`;
+}
+
+// ─── Contrôle des liens et des courriels (extensions) ────────────────────────
+const URLGUARD_APPS = ['thunderbird', 'firefox', 'chrome', 'chromium', 'edge', 'brave'];
+
+function urlguardRefresh() { sendToBackend({ action: 'urlguard_refresh' }); }
+function urlguardAllow(host, remove = false) { if (host) sendToBackend({ action: 'url_allow', host, remove }); }
+function onUrlguardUpdate(summary) {
+    if (lastStatus && summary) lastStatus.urlguard_summary = summary;
+    if (currentTab === 'security') loadSecurityData('urlguard');
+}
+
+function renderUrlGuard() {
+    const u = secData.urlguard;
+    const clients = $('urlguardClients'), feeds = $('urlguardFeeds'), events = $('urlguardEvents'), allowed = $('urlguardAllowed');
+    if (!clients) return;
+    if (!u) { clients.innerHTML = `<p class="text-muted">${t('system.unavailable')}</p>`; feeds.innerHTML = ''; events.innerHTML = ''; allowed.innerHTML = ''; $('urlguardState').textContent = ''; return; }
+    $('urlguardState').textContent = u.enabled === false ? t('urlguard.state.inactive') : u.refreshing ? t('urlguard.refreshing') : t('urlguard.state.active', { n: (u.entries || 0).toLocaleString(lang) });
+    const c = u.counters || {};
+    $('urlguardCounters').textContent = t('urlguard.counters', { checked: c.checked || 0, blocked: c.blocked || 0, warn: c.warn || 0, attachments: c.attachments || 0 });
+    clients.innerHTML = URLGUARD_APPS.map(app => {
+        const present = u.browsers ? u.browsers[app] !== false : true;
+        const cl = (u.clients || {})[app];
+        const cls = cl ? 'connected' : present ? 'never' : 'absent';
+        const text = cl ? t('urlguard.client.connected', { rel: formatRelative(cl.last), v: cl.version || '' }) : present ? t('urlguard.client.never') : t('urlguard.client.absent');
+        return `<div class="urlguard-client ${cls}"><span class="ug-dot"></span><span class="ug-name">${t(`urlguard.client.${app}`)}</span><span class="text-muted">${escapeHtml(text)}</span></div>`;
+    }).join('');
+    feeds.innerHTML = (u.feeds || []).map(f => `<div class="urlguard-feed${f.error ? ' error' : ''}"><span class="ug-name">${escapeHtml(f.label)}</span><span class="ug-count">${t(f.kind === 'domains' ? 'urlguard.feed.domains' : 'urlguard.feed.urls', { n: (f.count || 0).toLocaleString(lang) })}</span><span class="text-muted">${f.fetched_at ? formatRelative(f.fetched_at) : t('urlguard.feed.never')}${f.error ? ` · ${t('urlguard.feed.error', { error: escapeHtml(f.error) })}` : ''}</span>${f.home && f.home !== '#' ? `<a class="text-muted" href="#" onclick="sendToBackend({action:'open_url', url:'${escapeJs(f.home)}'}); return false;">${escapeHtml(f.home.replace(/^https?:\/\//, ''))}</a>` : ''}</div>`).join('');
+    const ev = u.events || [];
+    events.innerHTML = ev.length ? ev.slice(0, 40).map(e => `<div class="urlguard-event ${e.verdict || ''}"><span>${formatDateTime(e.t)}</span><span>${t(`urlguard.client.${e.source}`) !== `urlguard.client.${e.source}` ? t(`urlguard.client.${e.source}`) : escapeHtml(e.source || '')}</span><span><span class="ug-host" title="${escapeHtml(e.url || '')}">${escapeHtml(e.host || e.url || '')}</span><div class="ug-reasons">${(e.reasons || []).map(r => t(`urlguard.reason.${r}`) !== `urlguard.reason.${r}` ? t(`urlguard.reason.${r}`) : r).join(', ')}${e.signature ? ` · ${escapeHtml(e.signature)}` : ''}</div></span><span class="scope-badge ${e.action === 'blocked' || e.action === 'attachment_infected' ? 'scope-danger' : e.action === 'opened' ? 'scope-phased' : 'scope-user'}">${t(`urlguard.action.${e.action}`) !== `urlguard.action.${e.action}` ? t(`urlguard.action.${e.action}`) : escapeHtml(e.action || '')}</span></div>`).join('') : `<p class="text-muted">${t('urlguard.events.none')}</p>`;
+    const al = Object.keys(u.allowed || {});
+    allowed.innerHTML = al.length ? al.map(h => `<span class="ug-allowed">${escapeHtml(h)}<button onclick="urlguardAllow('${escapeJs(h)}', true)" title="${escapeHtml(t('urlguard.allowed.remove'))}">✕</button></span>`).join('') : `<p class="text-muted">${t('urlguard.allowed.none')}</p>`;
 }
 
 function ackPort(key, remove = false) {

@@ -3012,3 +3012,28 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .honeypot-ports-line { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
 .ports-list .port-item.verdict-honeypot { border-color: rgba(59,130,246,0.35); }
 @media (max-width: 900px) { .honeypot-event { grid-template-columns: 1fr 1fr; } }
+
+/* ── v1.24.0 : contrôle des liens et des courriels (extensions) ── */
+.urlguard-clients { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 12px; }
+.urlguard-client { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.urlguard-client .ug-name { font-weight: 600; min-width: 110px; }
+.urlguard-client .ug-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex: none; }
+.urlguard-client.connected .ug-dot { background: var(--accent-green); }
+.urlguard-client.absent { opacity: 0.55; }
+.urlguard-client.never .ug-dot { background: var(--accent-amber); }
+.urlguard-help p { font-size: 12px; color: var(--text-secondary); margin: 6px 0; line-height: 1.5; }
+.urlguard-feeds { display: flex; flex-direction: column; gap: 4px; }
+.urlguard-feed { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 12px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.urlguard-feed .ug-count { font-family: var(--font-mono); }
+.urlguard-feed.error { border-color: rgba(245,158,11,0.4); }
+.urlguard-events { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.urlguard-event { display: grid; grid-template-columns: 140px 90px 1fr auto; gap: 10px; align-items: center; padding: 4px 8px; border-radius: 6px; }
+.urlguard-event:nth-child(odd) { background: rgba(255,255,255,0.03); }
+.urlguard-event .ug-host { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.urlguard-event .ug-reasons { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+.urlguard-event.danger .ug-host { color: var(--accent-red); }
+.urlguard-event.warn .ug-host { color: var(--accent-amber); }
+.urlguard-allowed { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.urlguard-allowed .ug-allowed { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 12px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; }
+.urlguard-allowed .ug-allowed button { background: none; border: 0; color: var(--text-muted); cursor: pointer; font-size: 13px; padding: 0 2px; }
+@media (max-width: 900px) { .urlguard-event { grid-template-columns: 1fr 1fr; } }

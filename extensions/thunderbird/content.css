@@ -1,0 +1,19 @@
+#clamav-urlguard-banner.ug-banner { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; font: 13px/1.45 system-ui, "Segoe UI", Roboto, sans-serif; color: #111; background: #eef2f7; border: 1px solid #cbd5e1; }
+#clamav-urlguard-banner.ug-safe { background: #ecfdf5; border-color: #86efac; color: #14532d; }
+#clamav-urlguard-banner.ug-warn { background: #fffbeb; border-color: #fcd34d; color: #78350f; }
+#clamav-urlguard-banner.ug-danger { background: #fef2f2; border-color: #fca5a5; color: #7f1d1d; }
+#clamav-urlguard-banner .ug-logo { font-size: 18px; line-height: 1; }
+#clamav-urlguard-banner .ug-body { flex: 1; min-width: 0; }
+#clamav-urlguard-banner .ug-line { word-break: break-word; }
+#clamav-urlguard-banner .ug-atts:empty { display: none; }
+a.ug-link-danger { outline: 2px solid #ef4444 !important; outline-offset: 1px; background: rgba(239,68,68,0.12) !important; border-radius: 3px; }
+a.ug-link-warn { outline: 2px dashed #f59e0b !important; outline-offset: 1px; border-radius: 3px; }
+#clamav-urlguard-banner .ug-confirm { flex-basis: 100%; margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: #fff; border: 1px solid #fca5a5; color: #111; }
+#clamav-urlguard-banner .ug-confirm-title { font-weight: 700; color: #b91c1c; margin-bottom: 4px; }
+#clamav-urlguard-banner .ug-confirm-url { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; color: #374151; }
+#clamav-urlguard-banner .ug-confirm ul { margin: 6px 0; padding-left: 18px; }
+#clamav-urlguard-banner .ug-confirm-meta { font-size: 12px; color: #6b7280; word-break: break-all; }
+#clamav-urlguard-banner .ug-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+#clamav-urlguard-banner .ug-btn { border: 1px solid #cbd5e1; background: #f8fafc; color: #111; border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+#clamav-urlguard-banner .ug-btn-primary { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
+#clamav-urlguard-banner .ug-btn-subtle { color: #6b7280; }

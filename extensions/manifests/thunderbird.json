@@ -1,0 +1,13 @@
+{
+  "manifest_version": 2,
+  "name": "__MSG_mail_name__",
+  "short_name": "ClamAV Mail Guard",
+  "description": "__MSG_mail_desc__",
+  "version": "__VERSION__",
+  "default_locale": "fr",
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "background": { "scripts": [ "client.js", "background.js" ] },
+  "message_display_action": { "default_icon": { "16": "icons/16.png", "32": "icons/32.png" }, "default_title": "__MSG_mail_name__", "default_popup": "popup.html" },
+  "permissions": [ "nativeMessaging", "messagesRead", "messagesModify", "accountsRead", "notifications", "storage", "tabs" ],
+  "browser_specific_settings": { "gecko": { "id": "mailguard@clamav-antivirus.dukiwi.com", "strict_min_version": "115.0" } }
+}

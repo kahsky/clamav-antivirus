@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""
+ClamAV Antivirus GUI — branchement des extensions dans les navigateurs et Thunderbird (root, à l'installation du paquet).
+
+install : écrit le manifeste de l'hôte de messagerie native pour Firefox/Thunderbird (/usr/lib[64]/mozilla) et pour
+          Chrome, Chromium, Edge, Brave ; dépose une politique Chrome/Chromium/Edge/Brave (extension installée depuis
+          l'URL de mise à jour du dépôt Dukiwi, hôte natif autorisé) ; fusionne dans policies.json de Thunderbird
+          (XPI local) et de Firefox (XPI signé sur le dépôt) la clé ExtensionSettings, sans toucher aux autres
+          politiques. Les fichiers créés sont notés dans /var/lib/clamav-antivirus/browser-setup.json.
+remove  : retire tout ce qui a été écrit (les policies.json préexistants retrouvent leur contenu).
+(c) 2026 Dukiwi SA - Estavayer-le-Lac
+"""
+
+import json
+import os
+import sys
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+EXT_DIR = os.environ.get("CLAMAV_SETUP_EXT_DIR") or os.path.join(APP_DIR, "extensions")
+INFO = os.path.join(EXT_DIR, "manifest-info.json")
+HOST = os.path.join(APP_DIR, "clamav-antivirus-native-host")
+NAME = "clamav_antivirus"
+ROOT = os.environ.get("CLAMAV_SETUP_ROOT", "")            # préfixe de test (jamais en production)
+STATE = ROOT + "/var/lib/clamav-antivirus/browser-setup.json"
+DESC = "ClamAV Antivirus GUI — contrôle des liens et des courriels"
+
+MOZILLA_HOST_DIRS = [ROOT + "/usr/lib/mozilla/native-messaging-hosts"] + ([ROOT + "/usr/lib64/mozilla/native-messaging-hosts"] if os.path.isdir("/usr/lib64") else [])
+CHROME_HOST_DIRS = [ROOT + d for d in ("/etc/opt/chrome/native-messaging-hosts", "/etc/chromium/native-messaging-hosts",
+                                        "/etc/opt/edge/native-messaging-hosts", "/etc/opt/brave/native-messaging-hosts")]
+CHROME_POLICY_DIRS = [ROOT + d for d in ("/etc/opt/chrome/policies/managed", "/etc/chromium/policies/managed",
+                                          "/etc/opt/edge/policies/managed", "/etc/brave/policies/managed")]
+MOZILLA_POLICIES = {ROOT + "/etc/thunderbird/policies/policies.json": "thunderbird", ROOT + "/etc/firefox/policies/policies.json": "firefox"}
+
+
+def load_info():
+    try:
+        with open(INFO, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def load_state():
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {"written": [], "merged": []}
+
+
+def save_state(st):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    write_json(STATE, st)
+
+
+def mozilla_entry(info, app):
+    if app == "thunderbird":
+        return {"mailguard@clamav-antivirus.dukiwi.com": {"installation_mode": "normal_installed",
+                                                          "install_url": "file://" + info.get("thunderbird_xpi", "/opt/clamav-antivirus/extensions/clamav-antivirus-mailguard.xpi")}}
+    return {"urlguard@clamav-antivirus.dukiwi.com": {"installation_mode": "normal_installed",
+                                                     "install_url": info.get("firefox_xpi_url", "https://www.dukiwi.com/repo/extensions/clamav-antivirus-urlguard-firefox.xpi")}}
+
+
+def install():
+    info = load_info()
+    st = load_state()
+    written = set(st.get("written") or [])
+    merged = set(st.get("merged") or [])
+    moz = {"name": NAME, "description": DESC, "path": HOST, "type": "stdio", "allowed_extensions": info.get("gecko_ids") or []}
+    for d in MOZILLA_HOST_DIRS:
+        p = os.path.join(d, NAME + ".json")
+        write_json(p, moz)
+        written.add(p)
+    if info.get("chrome_id"):
+        chrome = {"name": NAME, "description": DESC, "path": HOST, "type": "stdio", "allowed_origins": [f"chrome-extension://{info['chrome_id']}/"]}
+        for d in CHROME_HOST_DIRS:
+            p = os.path.join(d, NAME + ".json")
+            write_json(p, chrome)
+            written.add(p)
+        policy = {"ExtensionSettings": {info["chrome_id"]: {"installation_mode": "normal_installed", "update_url": info.get("update_url", "")}},
+                  "NativeMessagingAllowlist": [NAME]}
+        for d in CHROME_POLICY_DIRS:
+            p = os.path.join(d, "clamav-antivirus.json")
+            write_json(p, policy)
+            written.add(p)
+    for path, app in MOZILLA_POLICIES.items():
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            existed = True
+        except (OSError, ValueError):
+            data, existed = {"policies": {}}, False
+        pol = data.setdefault("policies", {})
+        ext = pol.setdefault("ExtensionSettings", {})
+        ext.update(mozilla_entry(info, app))
+        write_json(path, data)
+        merged.add(path)
+        if not existed:
+            written.add(path)
+    save_state({"written": sorted(written), "merged": sorted(merged), "chrome_id": info.get("chrome_id", ""), "version": info.get("version", "")})
+
+
+def remove():
+    st = load_state()
+    written = set(st.get("written") or [])
+    for path in sorted(st.get("merged") or []):
+        if path in written:
+            continue                                      # fichier créé par nous : supprimé plus bas
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            ext = data.get("policies", {}).get("ExtensionSettings", {})
+            for key in ("mailguard@clamav-antivirus.dukiwi.com", "urlguard@clamav-antivirus.dukiwi.com"):
+                ext.pop(key, None)
+            if not ext:
+                data.get("policies", {}).pop("ExtensionSettings", None)
+            write_json(path, data)
+        except (OSError, ValueError):
+            pass
+    for path in sorted(written):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    try:
+        os.unlink(STATE)
+    except OSError:
+        pass
+
+
+def main():
+    action = sys.argv[1] if len(sys.argv) > 1 else ""
+    if action == "install":
+        install()
+    elif action == "remove":
+        remove()
+    else:
+        print(__doc__)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

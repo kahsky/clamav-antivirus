@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.23.1"
+VERSION = "1.24.0"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -117,6 +117,11 @@ DEFAULT_SETTINGS = {
     # Pot de miel réseau : ports leurres à l'écoute, balayages signalés. Actif par défaut (décision 2026-10-15),
     # désactivable dans Paramètres › Sécurité et famille (administrateur en mode famille)
     "honeypot": True,
+    # Contrôle des liens (extensions Thunderbird et navigateurs) : listes de sites malveillants + heuristiques ;
+    # raccourcisseurs résolus par le service ; pièces jointes des courriels analysées par clamd
+    "url_guard": True,
+    "url_guard_resolve": True,
+    "mail_scan_attachments": True,
 }
 
 SETTINGS_LIMITS = {

@@ -1238,6 +1238,14 @@ class ClamAVAntivirusApp:
         if kind == "honeypot":
             self.show_honeypot_alert(alert)
             return
+        if kind == "mail":
+            # Pièce jointe infectée dans un courriel (Thunderbird → hôte natif → clamd) : toujours affiché
+            body = T("popup.mail.body", name=alert.get("title") or "?", signature=alert.get("detail") or "?")
+            meta = " · ".join(x for x in (alert.get("sender"), alert.get("subject")) if x)
+            self.popup("danger", T("popup.mail.title"), body, meta=meta or None,
+                       buttons=[(T("popup.btn.details"), None, lambda: self.show_tab("security"))],
+                       on_activate=lambda: self.show_tab("security"))
+            return
         if kind == "upload":
             if not self.popups_enabled("upload"):
                 return
@@ -1379,6 +1387,8 @@ class ClamAVAntivirusApp:
             self.send_to_js("alertEvent", ev.get("alert") or {})
         elif et == "honeypot":
             self.send_to_js("honeypotUpdate", ev.get("summary") or {})
+        elif et == "urlguard":
+            self.send_to_js("urlguardUpdate", ev.get("summary") or {})
         elif et == "usb_ask":
             self.ask_usb(ev.get("usb") or {})
         elif et == "usb_done":
@@ -1702,7 +1712,8 @@ class ClamAVAntivirusApp:
                "nothing_to_harden": "msg.harden_nothing", "firewall_not_active": "msg.firewall_not_active",
                "mail_failed": "msg.mail_failed", "invalid_host": "msg.mail_invalid", "invalid_port": "msg.mail_invalid",
                "invalid_from": "msg.mail_invalid", "invalid_to": "msg.mail_invalid", "incomplete": "msg.mail_incomplete",
-               "invalid_ip": "msg.honeypot_invalid_ip", "invalid_feature": "msg.forbidden"}.get(err)
+               "invalid_ip": "msg.honeypot_invalid_ip", "invalid_feature": "msg.forbidden", "clamd_unavailable": "msg.clamd_unavailable",
+               "invalid_host": "msg.url_invalid_host"}.get(err)
         if key:
             return self.T(key, path=resp.get("path", ""), detail=str(resp.get("detail") or "")[:200])
         return err or self.T("msg.daemon_unavailable")
@@ -2051,6 +2062,36 @@ class ClamAVAntivirusApp:
                 self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
             self.act_get_security_data({"type": "honeypot"})
             self.refresh_daemon_status_now()
+            return False
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ── Contrôle des liens : listes, sites autorisés ──
+    def act_urlguard_refresh(self, _data):
+        def worker():
+            resp = daemon_request("urlguard_refresh", timeout=30)
+            GLib.idle_add(self.send_to_js, "operationResult", {"status": "info" if resp.get("ok") else "error", "op": "security",
+                                                                "message": self.T("msg.urlguard_refreshing") if resp.get("ok") else self.daemon_error(resp)})
+            if resp.get("ok"):
+                time.sleep(12)
+                GLib.idle_add(self.act_get_security_data, {"type": "urlguard"})
+        threading.Thread(target=worker, daemon=True).start()
+
+    def act_url_allow(self, data):
+        host = str(data.get("host") or "").strip()
+        remove = bool(data.get("remove"))
+        if not host:
+            return
+
+        def worker():
+            resp = daemon_request("url_allow", timeout=20, host=host, remove=remove, source="gui")
+            GLib.idle_add(done, resp)
+
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "security", "message": self.T("msg.url_unallowed" if remove else "msg.url_allowed", host=host)})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
+            self.act_get_security_data({"type": "urlguard"})
             return False
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2928,7 +2969,7 @@ class ClamAVAntivirusApp:
         """Données du centre de sécurité : vulns, checklist, intégrité, persistance, connexions, mise à jour."""
         kind = data.get("type")
         cmd = {"vulns": "vulns", "checklist": "checklist", "integrity": "integrity", "persistence": "persistence",
-               "connections": "connections", "app_update": "check_update", "honeypot": "honeypot"}.get(kind)
+               "connections": "connections", "app_update": "check_update", "honeypot": "honeypot", "urlguard": "urlguard"}.get(kind)
         if not cmd:
             return
         params = {}
@@ -3231,6 +3272,7 @@ class ClamAVAntivirusApp:
             "checklist_summary": (ds or {}).get("checklist_summary"),
             "integrity_summary": (ds or {}).get("integrity_summary"),
             "honeypot_summary": (ds or {}).get("honeypot_summary"),
+            "urlguard_summary": (ds or {}).get("urlguard_summary"),
             # Protections à proposer au démarrage (réponse mémorisée par le service). Le pot de miel est actif par
             # défaut (décision 2026-10-15) : liste vide, mécanisme conservé pour de futures protections.
             "features_to_ask": [f for f in FEATURES_PROPOSED if ds is not None and not dstate.get(f"{f}_answered")],

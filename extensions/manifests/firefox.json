@@ -1,0 +1,13 @@
+{
+  "manifest_version": 2,
+  "name": "__MSG_ext_name__",
+  "short_name": "ClamAV Link Guard",
+  "description": "__MSG_ext_desc__",
+  "version": "__VERSION__",
+  "default_locale": "fr",
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "background": { "scripts": [ "client.js", "background.js" ] },
+  "browser_action": { "default_icon": { "16": "icons/16.png", "32": "icons/32.png" }, "default_title": "__MSG_ext_name__", "default_popup": "popup.html" },
+  "permissions": [ "nativeMessaging", "webNavigation", "tabs", "notifications", "storage", "webRequest", "webRequestBlocking", "http://*/*", "https://*/*" ],
+  "browser_specific_settings": { "gecko": { "id": "urlguard@clamav-antivirus.dukiwi.com", "strict_min_version": "115.0" } }
+}

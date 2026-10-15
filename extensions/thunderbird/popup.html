@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        :root { color-scheme: light dark; }
+        body { margin: 0; width: 320px; font: 13px/1.45 system-ui, "Segoe UI", Roboto, sans-serif; padding: 12px 14px; }
+        h1 { font-size: 14px; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+        h1 img { width: 20px; height: 20px; }
+        .state { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+        .dot { width: 9px; height: 9px; border-radius: 50%; background: #64748b; flex: none; }
+        .dot.ok { background: #22c55e; } .dot.bad { background: #ef4444; } .dot.off { background: #d97706; }
+        ul { margin: 6px 0 0; padding-left: 18px; }
+        li { word-break: break-all; margin: 2px 0; }
+        li.danger { color: #dc2626; } li.warn { color: #d97706; }
+        .muted { opacity: 0.7; font-size: 12px; }
+        h2 { font-size: 12px; margin: 10px 0 2px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; }
+    </style>
+</head>
+<body>
+    <h1><img src="icons/32.png" alt=""><span id="name"></span></h1>
+    <div class="state"><span class="dot" id="dot"></span><span id="stateText"></span></div>
+    <h2 id="linksTitle"></h2><ul id="links"></ul>
+    <h2 id="attsTitle"></h2><ul id="atts"></ul>
+    <script src="popup.js"></script>
+</body>
+</html>

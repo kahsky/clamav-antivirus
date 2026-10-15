@@ -47,15 +47,15 @@ seule si l'option est activée dans Paramètres.
 
 ### Téléchargement direct
 
-- Mint / Ubuntu : [clamav-antivirus_1.23.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.23.1_all.deb)
-- Fedora : [clamav-antivirus-1.23.1-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.23.1-1.noarch.rpm)
+- Mint / Ubuntu : [clamav-antivirus_1.24.0_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.24.0_all.deb)
+- Fedora : [clamav-antivirus-1.24.0-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.24.0-1.noarch.rpm)
 - Toutes les versions : [www.dukiwi.com/repo](https://www.dukiwi.com/repo)
 
 ### Installer le paquet téléchargé à la main
 
 ```bash
-sudo apt install ./clamav-antivirus_1.23.1_all.deb          # Mint / Ubuntu
-sudo dnf install ./clamav-antivirus-1.23.1-1.noarch.rpm      # Fedora
+sudo apt install ./clamav-antivirus_1.24.0_all.deb          # Mint / Ubuntu
+sudo dnf install ./clamav-antivirus-1.24.0-1.noarch.rpm      # Fedora
 ```
 
 L'installation active le service système et le planificateur, puis lance le scan initial :
@@ -224,6 +224,36 @@ sudo dnf remove clamav-antivirus   # Fedora
 - **Télémétrie après le premier scan complet et à la demande** — le premier scan complet terminé après l'accord
   déclenche l'envoi du rapport anonyme sans attendre la semaine (mesures de performance) ; bouton « Envoyer la
   télémétrie maintenant » dans Paramètres.
+- **Contrôle des liens et des courriels : extensions Thunderbird, Firefox, Chrome, Chromium, Edge, Brave** — module
+  `clamav_urlguard.py` du service : listes de sites malveillants téléchargées plusieurs fois par jour (OpenPhish et
+  Phishing.Database sur GitHub, URLhaus chez abuse.ch ; requêtes conditionnelles ETag, index compacts d'empreintes
+  triées : 4 Mo pour 450 000 entrées, 0,4 ms par contrôle) et heuristiques sans liste : adresse IP brute, identifiant
+  avant un « @ », punycode, marque imitée (caractères remplacés « paypa1 », faute de frappe sur touche voisine, marque
+  en sous-domaine, vrai domaine d'une marque en tête d'un autre hôte « paypal.com.exemple.ru », combinaison
+  « paypal-secure »), raccourcisseurs résolus (HEAD sans suivre, 3 sauts) puis contrôlés, page de connexion sans
+  chiffrement, téléchargement d'exécutable, lien dont le texte affiché est une autre adresse (courriels). Verdict sûr /
+  prudence / danger ; les imitations de marque seules sont « prudence », « danger » avec une page de connexion, un
+  domaine douteux ou du punycode (« stream » n'est pas « steam »). Sites « toujours autorisés » par l'utilisateur.
+  Hôte de messagerie native `clamav-antivirus-native-host` (relais vers le socket du service, navigateur reconnu par le
+  processus parent) ; commandes `url_check`, `url_report`, `url_allow`, `url_scan` (pièce jointe déposée dans
+  `/tmp/clamav-antivirus-mail-<uid>/`, propriétaire vérifié, clamd → popup rouge « Pièce jointe infectée »),
+  `urlguard`, `urlguard_refresh`, `urlguard_hello`. Extension navigateur (`extensions/browser`, MV3 Chrome/Edge/Brave/
+  Chromium, MV2 Firefox avec requête bloquante) : page d'avertissement « Retour / Ouvrir quand même / Toujours
+  autoriser ce site », notification pour « prudence », badge, popup d'état. Extension Thunderbird
+  (`extensions/thunderbird`, MV2) : bandeau en haut de chaque message (liens vérifiés, dangereux encadrés en rouge et
+  clic intercepté avec confirmation dans le message), pièces jointes analysées par clamd à l'affichage et à l'arrivée
+  des courriels (notification + popup du service). Installation automatique : `clamav-antivirus-browser-setup`
+  (postinst / %post) écrit les manifestes natifs (`/usr/lib[64]/mozilla`, `/etc/opt/chrome`, `/etc/chromium`,
+  `/etc/opt/edge`, `/etc/opt/brave`), une politique Chrome/Chromium/Edge/Brave (`ExtensionSettings` depuis
+  `https://www.dukiwi.com/repo/extensions/urlguard-update.xml`, CRX3 signé par `crx3-pack.py` avec la clé
+  `repo/keys/chrome-extension.pem`, jamais dans git) et fusionne `ExtensionSettings` dans `policies.json` de
+  Thunderbird (XPI local) et de Firefox (XPI signé sur le dépôt : Mozilla exige la signature AMO, à faire par
+  `web-ext sign --channel unlisted` puis dépôt du fichier dans `repo/extensions/`). `build-extensions.sh` produit
+  XPI, ZIP, CRX, update.xml et `manifest-info.json` ; `publish.sh` les copie dans `repo/extensions/`. Carte
+  Sécurité › Liens et courriels (extensions vues, listes, derniers liens signalés, sites autorisés, aide
+  d'installation), réglages `url_guard`, `url_guard_resolve`, `mail_scan_attachments` (actifs par défaut). Testé :
+  hôte natif (hello, check, allow, EICAR en pièce jointe reconnu), Edge headless avec l'extension (hameçonnage et
+  sosie redirigés vers la page d'avertissement, site sain laissé passer), Thunderbird headless (extension acceptée).
 - **Arrêt du service immédiat** — après « Daemon arrêté », l'interpréteur attendait les pools de threads encore en
   vol (requêtes OSV des tâches quotidiennes, lancées 15 s après le démarrage) : `systemctl stop` et la mise à niveau
   du paquet pouvaient patienter plusieurs minutes. Le service sort maintenant tout de suite (état déjà écrit de
@@ -499,8 +529,8 @@ python3 clamav-antivirus.py
 ## Construire les paquets
 
 ```bash
-./build-deb.sh        # clamav-antivirus_1.23.1_all.deb   (Mint / Ubuntu)
-./build-rpm.sh        # clamav-antivirus-1.23.1-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
+./build-deb.sh        # clamav-antivirus_1.24.0_all.deb   (Mint / Ubuntu)
+./build-rpm.sh        # clamav-antivirus-1.24.0-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
 ```
 
 Les deux paquets partagent la même arborescence de fichiers (`build-deb.sh --stage-only`) et le même manifeste

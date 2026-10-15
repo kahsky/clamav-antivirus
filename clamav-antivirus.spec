@@ -69,6 +69,7 @@ systemctl enable clamav-freshclam.service >/dev/null 2>&1 || true
 systemctl start clamav-freshclam.service >/dev/null 2>&1 || true
 systemctl daemon-reload >/dev/null 2>&1 || true
 udevadm control --reload-rules >/dev/null 2>&1 || true
+/opt/clamav-antivirus/clamav-antivirus-browser-setup install >/dev/null 2>&1 || true
 systemctl enable clamav-antivirus-daemon.service >/dev/null 2>&1 || true
 systemctl enable clamav-antivirus-update.timer >/dev/null 2>&1 || true
 systemctl restart clamav-antivirus-daemon.service >/dev/null 2>&1 || true
@@ -79,6 +80,7 @@ if command -v restorecon >/dev/null 2>&1; then restorecon -R /opt/clamav-antivir
 
 %preun
 if [ "$1" = "0" ]; then
+    /opt/clamav-antivirus/clamav-antivirus-browser-setup remove >/dev/null 2>&1 || true
     pkill -f "/opt/clamav-antivirus/clamav-antivirus.py" >/dev/null 2>&1 || true
     systemctl stop clamav-antivirus-update.timer >/dev/null 2>&1 || true
     systemctl disable clamav-antivirus-update.timer >/dev/null 2>&1 || true

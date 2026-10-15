@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""
+ClamAV Antivirus GUI — hôte de messagerie native (Thunderbird, Firefox, Chrome, Chromium, Edge, Brave).
+
+Lancé par le navigateur (sans droits particuliers, dans la session de l'utilisateur) pour l'extension « Contrôle des
+liens ». Protocole native messaging : messages JSON précédés de leur longueur (4 octets, boutisme natif) sur
+stdin/stdout. Chaque message porte un `id` renvoyé dans la réponse. L'hôte ne fait que relayer au service système
+(socket Unix) : il ne décide rien lui-même.
+
+Commandes : hello {version} · check {urls:[url | {url,text,sender}], context} · report {url, verdict, action} ·
+allow {host, remove} · scan {name, data (base64), sender, subject} · status
+(c) 2026 Dukiwi SA - Estavayer-le-Lac
+"""
+
+import base64
+import json
+import os
+import struct
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from clamav_common import VERSION, daemon_request  # noqa: E402
+
+APPS = {"thunderbird": "thunderbird", "firefox": "firefox", "firefox-esr": "firefox", "firefox-bin": "firefox", "chrome": "chrome",
+        "google-chrome": "chrome", "chromium": "chromium", "chromium-browser": "chromium", "msedge": "edge", "microsoft-edge": "edge",
+        "brave": "brave", "brave-browser": "brave"}
+MAX_ATTACHMENT = 200 * 1024 ** 2
+
+
+def detect_app():
+    """Navigateur appelant : nom du processus parent (fiable), sinon l'identité donnée par l'extension."""
+    try:
+        with open(f"/proc/{os.getppid()}/comm", encoding="utf-8", errors="replace") as f:
+            comm = f.read().strip()
+        if comm in APPS:
+            return APPS[comm]
+        exe = os.readlink(f"/proc/{os.getppid()}/exe")
+        for key, app in APPS.items():
+            if f"/{key}" in exe:
+                return app
+    except OSError:
+        pass
+    for arg in sys.argv[1:]:
+        if arg.startswith("chrome-extension://"):
+            return "chrome"
+        if "@clamav-antivirus" in arg:
+            return "firefox"
+    return "other"
+
+
+def read_message():
+    raw = sys.stdin.buffer.read(4)
+    if len(raw) < 4:
+        return None
+    (length,) = struct.unpack("=I", raw)
+    data = sys.stdin.buffer.read(length)
+    if len(data) < length:
+        return None
+    try:
+        return json.loads(data.decode("utf-8"))
+    except ValueError:
+        return {}
+
+
+def send_message(obj):
+    data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack("=I", len(data)) + data)
+    sys.stdout.buffer.flush()
+
+
+def mail_tmp_dir():
+    path = f"/tmp/clamav-antivirus-mail-{os.getuid()}"
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+    return path
+
+
+def handle(msg, app):
+    cmd = str(msg.get("cmd") or "")
+    claimed = str(msg.get("app") or "")
+    source = app if app != "other" else (claimed if claimed in APPS.values() else "other")
+    if cmd == "hello":
+        resp = daemon_request("urlguard_hello", timeout=10, app=source, version=str(msg.get("version") or ""))
+        return {"ok": bool(resp.get("ok")), "daemon": bool(resp.get("ok")), "version": VERSION, "app": source,
+                "enabled": resp.get("enabled", True), "mail_scan": resp.get("mail_scan", True),
+                "error": "" if resp.get("ok") else "daemon_unavailable"}
+    if cmd == "check":
+        urls = msg.get("urls") if isinstance(msg.get("urls"), list) else [msg.get("url")]
+        resp = daemon_request("url_check", timeout=30, urls=urls[:200], context=msg.get("context") or {}, source=source,
+                              client_version=str(msg.get("version") or ""))
+        if not resp.get("ok"):
+            return {"ok": False, "error": resp.get("error") or "daemon_unavailable", "results": []}
+        return {"ok": True, "enabled": resp.get("enabled", True), "results": resp.get("results") or []}
+    if cmd == "report":
+        resp = daemon_request("url_report", timeout=10, url=msg.get("url") or "", verdict=msg.get("verdict") or "",
+                              action=msg.get("action") or "", source=source)
+        return {"ok": bool(resp.get("ok"))}
+    if cmd == "allow":
+        resp = daemon_request("url_allow", timeout=10, host=msg.get("host") or "", remove=bool(msg.get("remove")), source=source)
+        return {"ok": bool(resp.get("ok")), "error": resp.get("error", "")}
+    if cmd == "scan":
+        try:
+            data = base64.b64decode(str(msg.get("data") or ""), validate=False)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "invalid_data"}
+        if not data or len(data) > MAX_ATTACHMENT:
+            return {"ok": False, "error": "too_large" if data else "empty"}
+        fd, path = tempfile.mkstemp(prefix="att-", dir=mail_tmp_dir())
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.chmod(path, 0o600)
+            resp = daemon_request("url_scan", timeout=240, path=path, name=str(msg.get("name") or "")[:200], source=source,
+                                  sender=str(msg.get("sender") or "")[:120], subject=str(msg.get("subject") or "")[:200])
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        if not resp.get("ok"):
+            return {"ok": False, "error": resp.get("error") or "daemon_unavailable", "infected": False}
+        return {"ok": True, "enabled": resp.get("enabled", True), "infected": bool(resp.get("infected")),
+                "signature": resp.get("signature", ""), "name": msg.get("name")}
+    if cmd == "status":
+        resp = daemon_request("status", timeout=10)
+        return {"ok": bool(resp.get("ok")), "urlguard": resp.get("urlguard_summary"), "version": VERSION}
+    return {"ok": False, "error": "unknown_command"}
+
+
+def main():
+    app = detect_app()
+    while True:
+        msg = read_message()
+        if msg is None:
+            break
+        if not isinstance(msg, dict):
+            continue
+        try:
+            resp = handle(msg, app)
+        except Exception as e:  # noqa: BLE001
+            resp = {"ok": False, "error": f"host_error: {e}"[:200]}
+        resp["id"] = msg.get("id")
+        try:
+            send_message(resp)
+        except (OSError, ValueError):
+            break
+
+
+if __name__ == "__main__":
+    main()

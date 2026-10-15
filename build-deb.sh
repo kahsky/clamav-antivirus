@@ -8,7 +8,7 @@
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.23.1"
+VERSION="1.24.0"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -46,6 +46,13 @@ cp "${SCRIPT_DIR}/clamav_extras.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_harden.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_distro.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_honeypot.py"              "${PKG_DIR}/opt/${APP_NAME}/"
+cp "${SCRIPT_DIR}/clamav_urlguard.py"              "${PKG_DIR}/opt/${APP_NAME}/"
+cp "${SCRIPT_DIR}/clamav-antivirus-native-host"    "${PKG_DIR}/opt/${APP_NAME}/"
+cp "${SCRIPT_DIR}/clamav-antivirus-browser-setup"  "${PKG_DIR}/opt/${APP_NAME}/"
+# Extensions Thunderbird / navigateurs (XPI, CRX, dossiers décompressés, update.xml, identifiants)
+"${SCRIPT_DIR}/build-extensions.sh" --quiet
+mkdir -p "${PKG_DIR}/opt/${APP_NAME}/extensions"
+cp -r "${SCRIPT_DIR}/dist/extensions/." "${PKG_DIR}/opt/${APP_NAME}/extensions/"
 cp "${SCRIPT_DIR}/clamav-antivirus-tray"           "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav-scan-nemo.sh"             "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/systemd/"*.service               "${PKG_DIR}/lib/systemd/system/"
@@ -166,6 +173,8 @@ fi
 
 systemctl daemon-reload 2>/dev/null || true
 udevadm control --reload-rules 2>/dev/null || true
+# Extensions : hôte natif et politiques pour Thunderbird, Firefox, Chrome, Chromium, Edge, Brave
+/opt/clamav-antivirus/clamav-antivirus-browser-setup install 2>/dev/null || true
 systemctl enable clamav-antivirus-daemon.service 2>/dev/null || true
 systemctl enable clamav-antivirus-update.timer 2>/dev/null || true
 systemctl restart clamav-antivirus-daemon.service 2>/dev/null || true
@@ -191,6 +200,8 @@ echo "  Service système : clamav-antivirus-daemon (actif)"
 echo "  Mises à jour    : tous les jours à 07:00 et"
 echo "                    5 minutes après le démarrage"
 echo "  Surveillance    : écritures (fanotify), clés USB (udev)"
+echo "  Extensions      : Thunderbird, Chrome/Edge/Brave au prochain"
+echo "                    démarrage ; Firefox : voir Sécurité › Liens"
 if [ "$FIRST_INSTALL" = "1" ]; then
 echo "  Scan initial    : un scan complet du système va"
 echo "                    démarrer automatiquement."
@@ -209,6 +220,7 @@ set -e
 # Kill running instances
 pkill -f "/opt/clamav-antivirus/clamav-antivirus.py" 2>/dev/null || true
 if [ "$1" = "remove" ]; then
+    /opt/clamav-antivirus/clamav-antivirus-browser-setup remove 2>/dev/null || true
     systemctl stop clamav-antivirus-update.timer 2>/dev/null || true
     systemctl disable clamav-antivirus-update.timer 2>/dev/null || true
     systemctl stop clamav-antivirus-daemon.service 2>/dev/null || true
