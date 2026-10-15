@@ -47,15 +47,15 @@ seule si l'option est activée dans Paramètres.
 
 ### Téléchargement direct
 
-- Mint / Ubuntu : [clamav-antivirus_1.24.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.24.1_all.deb)
-- Fedora : [clamav-antivirus-1.24.1-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.24.1-1.noarch.rpm)
+- Mint / Ubuntu : [clamav-antivirus_1.24.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.24.2_all.deb)
+- Fedora : [clamav-antivirus-1.24.2-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.24.2-1.noarch.rpm)
 - Toutes les versions : [www.dukiwi.com/repo](https://www.dukiwi.com/repo)
 
 ### Installer le paquet téléchargé à la main
 
 ```bash
-sudo apt install ./clamav-antivirus_1.24.1_all.deb          # Mint / Ubuntu
-sudo dnf install ./clamav-antivirus-1.24.1-1.noarch.rpm      # Fedora
+sudo apt install ./clamav-antivirus_1.24.2_all.deb          # Mint / Ubuntu
+sudo dnf install ./clamav-antivirus-1.24.2-1.noarch.rpm      # Fedora
 ```
 
 L'installation active le service système et le planificateur, puis lance le scan initial :
@@ -224,6 +224,12 @@ sudo dnf remove clamav-antivirus   # Fedora
 - **Télémétrie après le premier scan complet et à la demande** — le premier scan complet terminé après l'accord
   déclenche l'envoi du rapport anonyme sans attendre la semaine (mesures de performance) ; bouton « Envoyer la
   télémétrie maintenant » dans Paramètres.
+- **Plus de fenêtre fantôme après une mise à jour (Ubuntu/GNOME)** — le bouclier relancé après la mise à niveau du
+  paquet mappait puis cachait sa fenêtre (`show_all()` + `hide()`) : GNOME gardait une entrée « clamav-antivirus.py »
+  dans le dock sans rien de visible. En mode bouclier la fenêtre n'est plus jamais mappée tant qu'on ne l'ouvre pas ;
+  `StartupWMClass` dans le lanceur donne au dock le bon nom et la bonne icône quelle que soit la façon de lancer.
+  Et si la fenêtre était ouverte au moment de la mise à jour (SIGTERM du postinst), elle se rouvre d'elle-même une
+  fois la nouvelle version chargée (témoin `window_open_at`, valable 5 min).
 - **chkrootkit « INFECTED » : quatre règles de faux positifs vérifiées** — un media center Ubuntu affichait des
   constats « INFECTED » de chkrootkit alors que le scan ClamAV complet (221 788 fichiers) était sain. Règles
   intégrées (version 6, relevés existants reclassés au démarrage sans relancer l'outil) : « Checking `ls'...
@@ -538,8 +544,8 @@ python3 clamav-antivirus.py
 ## Construire les paquets
 
 ```bash
-./build-deb.sh        # clamav-antivirus_1.24.1_all.deb   (Mint / Ubuntu)
-./build-rpm.sh        # clamav-antivirus-1.24.1-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
+./build-deb.sh        # clamav-antivirus_1.24.2_all.deb   (Mint / Ubuntu)
+./build-rpm.sh        # clamav-antivirus-1.24.2-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
 ```
 
 Les deux paquets partagent la même arborescence de fichiers (`build-deb.sh --stage-only`) et le même manifeste

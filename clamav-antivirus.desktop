@@ -9,4 +9,5 @@ Type=Application
 Categories=System;Security;
 Keywords=antivirus;clamav;security;virus;scan;
 StartupNotify=true
+StartupWMClass=clamav-antivirus.py
 X-GNOME-Autostart-enabled=true

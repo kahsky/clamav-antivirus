@@ -35,6 +35,7 @@ except (ValueError, ImportError):
 
 from gi.repository import Gtk, Gdk, WebKit2, GLib
 import subprocess
+import signal
 import threading
 import socket
 import fcntl
@@ -1072,17 +1073,49 @@ class ClamAVAntivirusApp:
         self.tray = TrayIcon(self)
         self.daemon = DaemonClient(self.on_daemon_event)
 
-        self.window.show_all()
         if start_hidden:
-            self.window.hide()
+            # Mode bouclier : les enfants sont prêts mais la fenêtre n'est jamais mappée (un show_all() suivi d'un hide()
+            # laissait sur GNOME/Ubuntu une entrée « clamav-antivirus.py » dans le dock sans fenêtre visible)
+            self.webview.show_all()
         else:
+            self.window.show_all()
             self.window.present()
+        # Relance après une mise à jour du paquet (le GUI est arrêté par SIGTERM puis relancé en mode bouclier) :
+        # si la fenêtre était ouverte à ce moment-là, elle est rouverte une fois la page chargée
+        self.reopen_after_restart = start_hidden and self._window_was_open()
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            try:
+                GLib.unix_signal_add(GLib.PRIORITY_HIGH, signum, self.on_terminate, signum)
+            except Exception:  # noqa: BLE001
+                pass
         GLib.timeout_add_seconds(25, self.show_daily_tip)
         self.backup_runner = None
         self.backup_progress = None
         GLib.timeout_add_seconds(120, self._backup_first_check)
         self.restore_runner = None
         GLib.timeout_add_seconds(90, self._weekly_first_check)
+
+    @staticmethod
+    def _window_was_open():
+        """La fenêtre était visible lors de l'arrêt précédent (moins de 5 min) ? Témoin effacé après lecture."""
+        state = load_state()
+        at = state.get("window_open_at")
+        if not at:
+            return False
+        save_state({"window_open_at": None})
+        try:
+            return (datetime.now() - datetime.fromisoformat(at)).total_seconds() < 300
+        except ValueError:
+            return False
+
+    def on_terminate(self, signum):
+        """SIGTERM (mise à jour du paquet, arrêt de session) : mémoriser si la fenêtre était ouverte, puis quitter."""
+        try:
+            save_state({"window_open_at": now_iso() if self.window.get_visible() else None})
+        except Exception:  # noqa: BLE001
+            pass
+        Gtk.main_quit()
+        return False
 
     # ── Conseil de sécurité du jour (sensibilisation) ───────────────────
     def show_daily_tip(self, force=False):
@@ -1156,6 +1189,9 @@ class ClamAVAntivirusApp:
     def on_load_changed(self, _webview, load_event):
         if load_event == WebKit2.LoadEvent.FINISHED:
             self.page_loaded = True
+            if self.reopen_after_restart:
+                self.reopen_after_restart = False
+                GLib.timeout_add(400, lambda: (self.window.present(), False)[1])
             self.run_js(f'if(typeof setLanguage==="function")setLanguage({json.dumps(self.lang)});')
 
     def run_js(self, js):
