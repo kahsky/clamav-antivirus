@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.22.2 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.23.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -803,6 +803,23 @@
                 <details class="ports-details" id="portsDetails"><summary data-i18n="security.ports.title">Ports en écoute</summary><div id="portsList" class="ports-list"></div></details>
             </div>
 
+            <div class="card card-honeypot" id="cardHoneypot">
+                <div class="card-title-row">
+                    <h4 data-i18n="honeypot.title">Pot de miel réseau</h4>
+                    <div class="log-actions-right">
+                        <span class="text-muted" id="honeypotState"></span>
+                        <button class="btn btn-secondary btn-sm" onclick="loadSecurityData('honeypot', true)" data-i18n="system.refresh">Actualiser</button>
+                    </div>
+                </div>
+                <p class="text-muted alerts-intro" data-i18n="honeypot.intro">Quelques ports « leurres » sont mis à l'écoute (deux ports tirés au sort et le port telnet). Aucun programme légitime ne s'y connecte jamais : tout appareil qui les touche est en train d'explorer cet ordinateur. Le service note qui c'est (adresse, nom, adresse matérielle), ce qu'il tente (simple sondage, SSH, HTTP, requête d'exploitation, tentative de connexion…) et signale un balayage de ports, aussi à partir des refus du pare-feu.</p>
+                <div class="honeypot-enable" id="honeypotEnableRow" hidden>
+                    <span class="text-muted" data-i18n="honeypot.disabled_note">Désactivé. Activez-le pour savoir si un appareil du réseau sonde cet ordinateur.</span>
+                    <button class="btn btn-primary btn-sm" onclick="honeypotEnable()" data-i18n="honeypot.enable">Activer le pot de miel</button>
+                </div>
+                <div id="honeypotList" class="honeypot-list"><p class="text-muted" data-i18n="sidebar.loading">Chargement…</p></div>
+                <details class="ports-details" id="honeypotEventsDetails"><summary data-i18n="honeypot.events">Dernières connexions aux leurres</summary><div id="honeypotEvents" class="honeypot-events"></div></details>
+            </div>
+
             <div class="card card-vulns">
                 <div class="card-title-row">
                     <h4 data-i18n="security.vulns.title">Failles connues des programmes installés</h4>
@@ -1170,6 +1187,8 @@
                     <label class="setting-row toggle"><span data-i18n="settings.family_mode">Mode famille : réglages et actions sensibles réservés à un administrateur</span><input type="checkbox" id="setFamilyMode"></label>
                     <label class="setting-row toggle"><span data-i18n="settings.auto_response">Suspendre automatiquement un programme jugé dangereux, puis demander</span><input type="checkbox" id="setAutoResponse"></label>
                     <label class="setting-row toggle"><span data-i18n="settings.connection_monitor">Surveiller les connexions sortantes</span><input type="checkbox" id="setConnectionMonitor"></label>
+                    <label class="setting-row toggle"><span data-i18n="settings.honeypot">Pot de miel réseau : ports leurres à l'écoute, balayages de ports signalés</span><input type="checkbox" id="setHoneypot"></label>
+                    <p class="text-muted setting-note" data-i18n="settings.honeypot.note">Actif par défaut. Les ports leurres (deux ports hauts tirés au sort, 23 et 2323) sont ouverts dans le pare-feu et apparaissent comme « pot de miel » dans les ports en écoute ; aucun service ne tourne derrière. Un appareil qui les touche ou balaie d'autres ports fermés est signalé par un popup, avec un bouton pour le bloquer.</p>
                     <label class="setting-row toggle"><span data-i18n="settings.geoip">Géolocaliser les adresses distantes (ip-api.com)</span><input type="checkbox" id="setGeoip"></label>
                     <label class="setting-row"><span data-i18n="settings.geoip_key">Clé API ip-api.com Pro (optionnelle)</span><input type="text" id="setGeoipKey" class="input-field input-sm input-key" placeholder="—" autocomplete="off" spellcheck="false"></label>
                     <p class="text-muted setting-note" id="geoipStats"></p>
@@ -1512,6 +1531,23 @@
             <div class="modal-actions consent-actions">
                 <button class="btn btn-secondary" onclick="answerTelemetry(false)" data-i18n="telemetry.decline">Non merci</button>
                 <button class="btn btn-primary" onclick="answerTelemetry(true)" data-i18n="telemetry.accept">Oui, envoyer ce relevé anonyme</button>
+            </div>
+        </div>
+    </div>
+    <div class="modal-overlay consent-overlay" id="featureModal">
+        <div class="modal consent-modal" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
+            <div class="modal-header"><h2 id="featureTitle"></h2></div>
+            <div class="modal-body consent-body">
+                <p class="consent-lead" id="featureLead"></p>
+                <div class="consent-grid">
+                    <div class="consent-col"><h3 id="featureWhatTitle"></h3><ul id="featureWhat"></ul></div>
+                    <div class="consent-col"><h3 id="featureKnowTitle"></h3><ul id="featureKnow"></ul></div>
+                </div>
+                <p class="text-muted consent-note" id="featureNote"></p>
+            </div>
+            <div class="modal-actions consent-actions">
+                <button class="btn btn-secondary" id="featureDecline" onclick="answerFeature(false)"></button>
+                <button class="btn btn-primary" id="featureAccept" onclick="answerFeature(true)"></button>
             </div>
         </div>
     </div>

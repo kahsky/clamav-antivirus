@@ -65,6 +65,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import clamav_harden as harden  # noqa: E402
 import clamav_distro as distro  # noqa: E402
+import clamav_honeypot  # noqa: E402
 from clamav_common import (  # noqa: E402
     VERSION, SYSTEM_STATE_DIR, SYSTEM_LOG_DIR, DAEMON_SOCKET,
     SYSTEM_STATE_FILE, SYSTEM_QUARANTINE_DIR, SYSTEM_PROGRESS_FILE, SYSTEM_SCAN_CACHE_DB, SYSTEM_SECRET_FILE,
@@ -1340,6 +1341,7 @@ def network_identity():
 
 
 UFW_RULE_COMMANDS = ("allow", "deny", "reject", "limit", "insert", "prepend")
+FEATURES_OPT_IN = ("honeypot",)               # protections avancées proposées à l'utilisateur (jamais activées d'office)
 
 
 UFW_INIT = os.environ.get("CLAMAV_ANTIVIRUS_UFW_INIT") or next((p for p in ("/lib/ufw/ufw-init", "/usr/lib/ufw/ufw-init") if os.path.exists(p)), "/lib/ufw/ufw-init")
@@ -2481,7 +2483,10 @@ def collect_checklist(daemon):
         else:
             p["verdict"] = "reachable"
     acks = daemon.state.get("acknowledged_ports") or {}
+    hp_ports = set(daemon.honeypot.ports)
     for p in ports:
+        if p["port"] in hp_ports and p["proto"] == "tcp" and (p["pid"] == os.getpid() or not p["pid"]):
+            p["verdict"] = "honeypot"                   # leurre du pot de miel : voulu, surveillé
         p["key"] = port_key(p)
         p["acknowledged"] = p["verdict"] == "reachable" and p["key"] in acks     # « Ignorer » : port voulu (développement web…)
     exposed = [p for p in ports if p["verdict"] == "reachable" and not p["acknowledged"] and p["port"] not in (5353, 68, 546, 67)]
@@ -3903,6 +3908,8 @@ class Daemon:
         self.connections = ConnectionMonitor(self)
         self.updater = UpdateChecker(self)
         self.usb = UsbWatcher(self)
+        self.honeypot = clamav_honeypot.Honeypot(self, {"log": log, "write_log": self.write_log, "ufw": self.ufw,
+                                                         "parse_ufw_numbered": parse_ufw_numbered})
         self.unlocked = {}          # uid -> expiry (session administrateur)
         self.suspended = {}         # pid -> info (processus suspendus par la réponse automatique)
         self._trusted_set = {t.get("exe") for t in (self.state.get("trusted_programs") or []) if t.get("exe")}
@@ -4006,6 +4013,9 @@ class Daemon:
             self.write_log(f"⚠ connection {alert['severity']}: {alert.get('comm')} (pid {alert.get('pid')}) → {alert.get('ip')}:{alert.get('port')} {alert.get('country', '')}")
         elif alert.get("kind") in ("persistence", "integrity", "update", "timeshift"):
             self.write_log(f"⚠ {alert.get('kind')}: {alert.get('title', '')} {alert.get('detail', '')}")
+        elif alert.get("kind") == "honeypot":
+            self.write_log(f"⚠ honeypot {alert.get('severity')}: {alert.get('ip')} ({alert.get('host') or '?'}) "
+                           f"{alert.get('detail', '')} — {', '.join(alert.get('reasons') or [])}")
         else:
             self.write_log(f"⚠ {alert['severity']}: {alert['comm']} (pid {alert['pid']}, {alert.get('exe')}) "
                            f"modified {alert['count']} files in {alert['window']} s — {alert['top_dir']}")
@@ -5230,6 +5240,8 @@ class Daemon:
         if "upload_window_hours" in changed:
             self.network.samples.clear()
             applied.append("upload_window")
+        if "honeypot" in changed:
+            applied.append("honeypot")                  # le fil du pot de miel suit le réglage (≤ 2 s)
         return applied
 
     def check_weekly_scan(self):
@@ -5961,7 +5973,7 @@ class Daemon:
         vulns = (self.state.get("vulns") or {}).get("counts") or {}
         payload = {
             "install_id": install_id, "version": VERSION, "os": pretty, "kernel": os.uname().release, "arch": os.uname().machine,
-            "settings": {k: self.settings.get(k) for k in ("family_mode", "firewall_profile", "backup_check", "timeshift_check", "auto_response", "connection_monitor",
+            "settings": {k: self.settings.get(k) for k in ("family_mode", "firewall_profile", "backup_check", "timeshift_check", "auto_response", "connection_monitor", "honeypot",
                                                              "auto_harden", "scan_cache_days", "integrity_weekly", "weekly_scan")},
             "checklist": {"score": checklist.get("score"), "grade": checklist.get("grade"),
                           "fail": [i["key"] for i in checklist.get("items", []) if i.get("status") == "fail"],
@@ -6038,9 +6050,11 @@ class Daemon:
                 continue
             if ts < cutoff:
                 continue
-            if a.get("severity") == "danger":
+            if a.get("severity") == "danger" and a.get("kind") != "honeypot":
                 raise_to("red", "danger_alert")
                 break
+        if (self.honeypot.summary() or {}).get("danger_24h"):
+            raise_to("yellow", "network_scan")           # un appareil balaie cet ordinateur : bloquer ou ignorer
         if self.suspended:
             raise_to("red", "suspended_process")
         integ = self.state.get("integrity") or {}
@@ -6107,6 +6121,10 @@ class Daemon:
             return True
         if cmd == "ssh_set":
             return bool(req.get("enabled"))
+        if cmd == "feature_answer":
+            # Proposer / activer une protection avancée : jamais de mot de passe. La désactiver : administrateur en mode famille.
+            feature = str(req.get("feature") or "")
+            return bool(self.settings.get("family_mode")) and not req.get("enabled") and bool(self.settings.get(feature))
         if cmd in ("firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "install_update", "install_tools",
                    "install_phased", "install_package"):
             return True
@@ -6210,6 +6228,7 @@ class Daemon:
                                       todo=sum(1 for i in (state.get("checklist") or {}).get("items", []) if i.get("status") in ("warn", "fail")))
             if state.get("checklist") else None,
             "integrity_summary": self.integrity_summary(),
+            "honeypot_summary": self.honeypot.summary(),
             "persistence_summary": (state.get("persistence") or {}).get("counts"),
             "connections_active": self.connections.active,
             "alerts": (state.get("alerts") or [])[:10],
@@ -6334,6 +6353,40 @@ class Daemon:
 
         if cmd == "connections":
             return {"ok": True, "connections": self.connections.snapshot()}
+
+        if cmd == "honeypot":
+            return {"ok": True, "honeypot": self.honeypot.snapshot()}
+
+        if cmd == "honeypot_block":
+            ok, text = self.honeypot.block(str(req.get("ip") or ""), remove=bool(req.get("remove")))
+            if ok:
+                self.refresh_overall()
+                threading.Thread(target=self.refresh_security, kwargs={"force": True}, daemon=True).start()
+            return {"ok": ok, "error": "" if ok else ("invalid_ip" if text == "invalid_ip" else "command_failed"), "detail": text}
+
+        if cmd == "honeypot_ignore":
+            ok = self.honeypot.ignore(str(req.get("ip") or ""), remove=bool(req.get("remove")))
+            self.refresh_overall()
+            return {"ok": ok, "error": "" if ok else "invalid_ip"}
+
+        if cmd == "honeypot_forget":
+            self.honeypot.forget(str(req.get("ip") or ""))
+            self.refresh_overall()
+            return {"ok": True}
+
+        if cmd == "feature_answer":
+            # Protections avancées (pot de miel…) : toujours proposées, jamais activées sans l'accord de l'utilisateur
+            feature = str(req.get("feature") or "")
+            if feature not in FEATURES_OPT_IN:
+                return {"ok": False, "error": "invalid_feature"}
+            enabled = bool(req.get("enabled"))
+            changed, _ = self.settings.update({feature: enabled})
+            self.state.update(**{f"{feature}_answered": now_iso()})
+            self.apply_settings(changed)
+            self.write_log(f"feature {feature}: {'enabled' if enabled else 'declined'} (uid {uid})")
+            self.broadcast({"event": "settings", "settings": self.settings.snapshot()})
+            self.refresh_overall()
+            return {"ok": True, "feature": feature, "enabled": enabled}
 
         if cmd == "persistence":
             if req.get("refresh"):
@@ -7092,6 +7145,7 @@ class Daemon:
         self.network.start()
         self.connections.start()
         self.usb.start()
+        self.honeypot.start()
         os.makedirs(UPDATES_DIR, exist_ok=True)
 
         def warmup():
@@ -7127,6 +7181,10 @@ class Daemon:
             while self.current is not None and time.time() < deadline:
                 time.sleep(0.2)
         self.monitor.stop()
+        try:
+            self.honeypot.close()
+        except Exception as e:  # noqa: BLE001
+            log(f"Pot de miel : arrêt : {e}")
         for devnode in list(self.usb.mounted):
             self.usb.unmount(devnode)
         with self.sub_lock:
@@ -7234,6 +7292,15 @@ def main():
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
     daemon.serve()
+    # Sortie immédiate : les pools de threads encore en vol (requêtes OSV des tâches quotidiennes…) sont joints par
+    # concurrent.futures à la fin de l'interpréteur et retenaient le service plusieurs minutes après « Daemon arrêté »
+    # (systemd stop / mise à niveau du paquet). Tout l'état est déjà écrit de façon synchrone.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            pass
+    os._exit(0)
 
 
 if __name__ == "__main__":

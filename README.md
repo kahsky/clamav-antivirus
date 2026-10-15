@@ -47,15 +47,15 @@ seule si l'option est activée dans Paramètres.
 
 ### Téléchargement direct
 
-- Mint / Ubuntu : [clamav-antivirus_1.22.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.22.2_all.deb)
-- Fedora : [clamav-antivirus-1.22.2-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.22.2-1.noarch.rpm)
+- Mint / Ubuntu : [clamav-antivirus_1.23.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.23.1_all.deb)
+- Fedora : [clamav-antivirus-1.23.1-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.23.1-1.noarch.rpm)
 - Toutes les versions : [www.dukiwi.com/repo](https://www.dukiwi.com/repo)
 
 ### Installer le paquet téléchargé à la main
 
 ```bash
-sudo apt install ./clamav-antivirus_1.22.2_all.deb          # Mint / Ubuntu
-sudo dnf install ./clamav-antivirus-1.22.2-1.noarch.rpm      # Fedora
+sudo apt install ./clamav-antivirus_1.23.1_all.deb          # Mint / Ubuntu
+sudo dnf install ./clamav-antivirus-1.23.1-1.noarch.rpm      # Fedora
 ```
 
 L'installation active le service système et le planificateur, puis lance le scan initial :
@@ -224,6 +224,27 @@ sudo dnf remove clamav-antivirus   # Fedora
 - **Télémétrie après le premier scan complet et à la demande** — le premier scan complet terminé après l'accord
   déclenche l'envoi du rapport anonyme sans attendre la semaine (mesures de performance) ; bouton « Envoyer la
   télémétrie maintenant » dans Paramètres.
+- **Arrêt du service immédiat** — après « Daemon arrêté », l'interpréteur attendait les pools de threads encore en
+  vol (requêtes OSV des tâches quotidiennes, lancées 15 s après le démarrage) : `systemctl stop` et la mise à niveau
+  du paquet pouvaient patienter plusieurs minutes. Le service sort maintenant tout de suite (état déjà écrit de
+  façon synchrone) ; les leurres du pot de miel et le lecteur du journal du pare-feu sont fermés explicitement.
+- **Pot de miel réseau** — **actif par défaut** (réglage dans Paramètres › Sécurité et famille ; désactivation
+  réservée à l'administrateur en mode famille ; carte Sécurité › Pot de miel réseau avec bouton « Activer » s'il a
+  été coupé). Le service met à l'écoute
+  des ports leurres sans aucun service derrière : deux ports hauts tirés au sort (20000–32000, hors ports
+  « bindshell » de chkrootkit, mémorisés) et telnet 23 / 2323, ouverts dans le pare-feu (ufw ou firewalld, règles
+  `cav-honeypot`, réappliquées toutes les 5 min) et marqués « pot de miel » dans les ports en écoute. Chaque
+  connexion est journalisée avec la source (adresse, nom DNS/mDNS, adresse MAC, passerelle ou non) et l'intention
+  déduite des premiers octets (sondage, SSH, HTTP, requête d'exploitation, TLS, SMB, RDP, SOCKS, SIP, tentative de
+  connexion sur le faux telnet avec l'identifiant essayé, jamais le mot de passe). Un même appareil qui touche
+  plusieurs leurres, tente une connexion ou une exploitation, ou dont le journal du pare-feu (`[UFW BLOCK]`,
+  `LogDenied=unicast` sur firewalld) montre des SYN vers ≥ 5 ports fermés est signalé comme balayage : popup rouge
+  « Un appareil sonde cet ordinateur » avec « Bloquer cet appareil » (règle DENY en tête du pare-feu, jamais la
+  passerelle ni soi-même), « Ignorer » (appareil connu) et « Détails » ; carte Sécurité › Pot de miel réseau
+  (sources, intentions, derniers événements, bloquer / débloquer / oublier), ligne « Réseau local » de la vue
+  simple, état global jaune tant qu'un appareil suspect n'est ni bloqué ni ignoré, courrier si les notifications
+  sont activées. Les connexions venant de cet ordinateur sont ignorées. Rien n'est envoyé à l'extérieur
+  (module `clamav_honeypot.py`).
 - **Fedora : socket clamd activé** — scan.conf livré avec LocalSocket commenté : décommenté par le paquet et par le
   service, sinon pas de moteur clamd. Paquet RPM construit, signé, installé et vérifié dans un conteneur Fedora 44
   depuis le dépôt dnf signé.
@@ -478,8 +499,8 @@ python3 clamav-antivirus.py
 ## Construire les paquets
 
 ```bash
-./build-deb.sh        # clamav-antivirus_1.22.2_all.deb   (Mint / Ubuntu)
-./build-rpm.sh        # clamav-antivirus-1.22.2-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
+./build-deb.sh        # clamav-antivirus_1.23.1_all.deb   (Mint / Ubuntu)
+./build-rpm.sh        # clamav-antivirus-1.23.1-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
 ```
 
 Les deux paquets partagent la même arborescence de fichiers (`build-deb.sh --stage-only`) et le même manifeste

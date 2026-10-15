@@ -2987,3 +2987,28 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .settings-grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px 16px; }
 .settings-grid-2 .setting-col .input-field { width: 100%; }
 .mail-warning { color: var(--accent-amber); border: 1px solid rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); border-radius: var(--radius-sm); padding: 8px 10px; }
+
+/* ── v1.23.0 : pot de miel réseau (opt-in) ── */
+.honeypot-enable { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: var(--radius-sm); margin-bottom: 10px; }
+.honeypot-enable .btn-sm { margin-left: auto; }
+.honeypot-list { display: flex; flex-direction: column; gap: 8px; }
+.honeypot-item { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: rgba(255,255,255,0.02); }
+.honeypot-item.severity-danger { border-color: rgba(239,68,68,0.45); background: rgba(239,68,68,0.05); }
+.honeypot-item.severity-warn { border-color: rgba(245,158,11,0.35); }
+.honeypot-item.blocked { border-color: rgba(148,163,184,0.35); opacity: 0.85; }
+.honeypot-item.ignored { opacity: 0.7; }
+.honeypot-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.honeypot-host { font-family: var(--font-mono); font-weight: 700; font-size: 13px; }
+.honeypot-ip { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+.honeypot-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.honeypot-body { font-size: 12px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5; }
+.honeypot-body .hp-ports { font-family: var(--font-mono); }
+.honeypot-intents { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.honeypot-samples { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 4px; overflow-wrap: anywhere; }
+.honeypot-events { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; font-size: 12px; }
+.honeypot-event { display: grid; grid-template-columns: 150px 150px 70px 1fr; gap: 10px; padding: 4px 8px; border-radius: 6px; font-family: var(--font-mono); font-size: 11px; }
+.honeypot-event:nth-child(odd) { background: rgba(255,255,255,0.03); }
+.honeypot-event.fw { color: var(--text-muted); }
+.honeypot-ports-line { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+.ports-list .port-item.verdict-honeypot { border-color: rgba(59,130,246,0.35); }
+@media (max-width: 900px) { .honeypot-event { grid-template-columns: 1fr 1fr; } }

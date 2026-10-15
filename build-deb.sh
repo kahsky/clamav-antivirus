@@ -8,7 +8,7 @@
 set -e
 
 APP_NAME="clamav-antivirus"
-VERSION="1.22.2"
+VERSION="1.23.1"
 ARCH="all"
 PKG_DIR="${APP_NAME}_${VERSION}_${ARCH}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -45,6 +45,7 @@ cp "${SCRIPT_DIR}/clamav_backup.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_extras.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_harden.py"                "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav_distro.py"                "${PKG_DIR}/opt/${APP_NAME}/"
+cp "${SCRIPT_DIR}/clamav_honeypot.py"              "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav-antivirus-tray"           "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/clamav-scan-nemo.sh"             "${PKG_DIR}/opt/${APP_NAME}/"
 cp "${SCRIPT_DIR}/systemd/"*.service               "${PKG_DIR}/lib/systemd/system/"

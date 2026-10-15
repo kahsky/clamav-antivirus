@@ -13,7 +13,7 @@ import struct
 import subprocess
 from datetime import datetime
 
-VERSION = "1.22.2"
+VERSION = "1.23.1"
 
 # ─── Chemins système (daemon root) ───────────────────────────────────────────
 # Surchargeables par variables d'environnement pour les tests sans root.
@@ -114,6 +114,9 @@ DEFAULT_SETTINGS = {
     # Mises à jour de l'application (manifeste signé sur le dépôt Dukiwi)
     "app_update_check": True,
     "app_update_auto": False,
+    # Pot de miel réseau : ports leurres à l'écoute, balayages signalés. Actif par défaut (décision 2026-10-15),
+    # désactivable dans Paramètres › Sécurité et famille (administrateur en mode famille)
+    "honeypot": True,
 }
 
 SETTINGS_LIMITS = {

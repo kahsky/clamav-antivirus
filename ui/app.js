@@ -116,7 +116,7 @@ function locale() {
 // « Ignorer », « C'est normal », « Faire confiance », « Réafficher »… : le service recalcule bouclier, score et listes.
 // Trois secondes après, tout l'état affiché est relu pour montrer le nouveau statut sans changer d'onglet.
 const RELOAD_AFTER_ACTIONS = new Set(['acknowledge_vuln', 'acknowledge_port', 'acknowledge_integrity', 'acknowledge_persistence',
-    'ignore_check', 'timeshift_ignore', 'trust_program', 'untrust_program', 'untrust_usb']);
+    'ignore_check', 'timeshift_ignore', 'trust_program', 'untrust_program', 'untrust_usb', 'honeypot_block', 'honeypot_ignore', 'honeypot_forget', 'feature_answer']);
 let statusReloadTimer = null;
 
 function scheduleStatusReload(delay = 3000) {
@@ -178,6 +178,7 @@ function onBackendMessage(msg) {
         case 'backupDone':      onBackupDone(data); break;
         case 'backupTimeshift': if (backupData) { backupData.timeshift = data; renderBackupTab(); renderBackupWizard(); } if (lastStatus && lastStatus.backup) { lastStatus.backup.timeshift = data; renderSimpleView(); } break;
         case 'securityData':    onSecurityData(data); break;
+        case 'honeypotUpdate':  onHoneypotUpdate(data); break;
         case 'overall':         overall = data; renderSimpleView(); renderAdmin(); break;
         case 'error':           showToast(data.message, 'error'); break;
     }
@@ -226,7 +227,7 @@ function switchTab(tabId) {
     } else if (tabId === 'settings') {
         loadSettings();
     } else if (tabId === 'security') {
-        ['checklist', 'vulns', 'integrity', 'app_update'].forEach(k => loadSecurityData(k));
+        ['checklist', 'vulns', 'integrity', 'app_update', 'honeypot'].forEach(k => loadSecurityData(k));
     }
     if (tabId === 'system') { loadSecurityData('connections'); loadSecurityData('persistence'); }
     if (tabId === 'awareness') renderAwareness('awarenessList');
@@ -417,11 +418,12 @@ function onSecurityData(data) {
     else if (type === 'persistence') renderPersistence();
     else if (type === 'connections') renderConnections();
     else if (type === 'app_update') renderAppUpdate();
+    else if (type === 'honeypot') renderHoneypot();
     renderSecurityBadge();
 }
 
 function renderSecurityUnavailable(type) {
-    const map = { vulns: 'vulnList', checklist: 'checklistList', integrity: 'integrityList', persistence: 'persistenceList', connections: 'connectionsList' };
+    const map = { vulns: 'vulnList', checklist: 'checklistList', integrity: 'integrityList', persistence: 'persistenceList', connections: 'connectionsList', honeypot: 'honeypotList' };
     if (map[type]) $(map[type]).innerHTML = `<p class="text-muted">${t('system.unavailable')}</p>`;
     if (type === 'app_update') { $('appUpdateSummary').textContent = t('system.unavailable'); }
 }
@@ -468,7 +470,7 @@ function renderChecklist() {
     const ports = c.ports || [];
     $('portsList').innerHTML = `<p class="text-muted ports-intro">${t('ports.intro')}</p>` + (ports.length ? ports.map(p => {
         const v = p.verdict || (p.exposed ? 'reachable' : 'local');
-        const hintKey = p.service ? `ports.hint.${p.service}` : `ports.hint.proc.${p.process || ''}`;
+        const hintKey = v === 'honeypot' ? 'ports.hint.honeypot' : p.service ? `ports.hint.${p.service}` : `ports.hint.proc.${p.process || ''}`;
         const hint = t(hintKey) !== hintKey ? t(hintKey) : t('ports.hint.generic', { proc: p.process || '?' });
         const key = p.key || `${p.port}/${p.proto}:${p.process || p.service || ''}`;
         return `<div class="port-item verdict-${v}${p.acknowledged ? ' acked' : ''}">
@@ -874,6 +876,16 @@ function simpleOverall() {
     rows.push({ state: sshState, label: t('simple.row.ssh'), value: sshValue,
         action: sshState === 'warn' ? { label: t('simple.disable'), fn: 'sshToggle(false)' } : null });
 
+    // Réseau local (pot de miel, s'il est activé) : un appareil sonde-t-il cet ordinateur ?
+    const hp = (lastStatus && lastStatus.honeypot_summary) || null;
+    if (hp && hp.enabled) {
+        const hpState = hp.danger_24h ? 'warn' : hp.active ? 'ok' : 'neutral';
+        bump(hpState === 'neutral' ? 'ok' : hpState);
+        rows.push({ state: hpState, label: t('simple.row.network'),
+            value: hp.danger_24h ? t('simple.network.scan', { n: hp.danger_24h }) : hp.active ? t('simple.network.ok', { n: hp.sources_24h || 0 }) : t('simple.network.starting'),
+            action: hp.danger_24h ? { label: t('popup.btn.details'), fn: "setViewMode('advanced'); switchTab('security'); scrollToHoneypot()" } : null });
+    }
+
     // Mises à jour système
     const sysState = systemState(sys);
     const sysRowState = sysState === 'security' ? 'danger' : (sysState === 'reboot' || sysState === 'updates') ? 'warn' : sysState === 'ok' ? 'ok' : 'neutral';
@@ -1203,6 +1215,7 @@ function onSettingsData(data) {
     $('setFamilyMode').checked = !!sys.family_mode;
     $('setAutoResponse').checked = sys.auto_response !== false;
     $('setConnectionMonitor').checked = sys.connection_monitor !== false;
+    if ($('setHoneypot')) $('setHoneypot').checked = !!sys.honeypot;
     $('setGeoip').checked = sys.geoip_lookup !== false;
     if ($('setGeoipKey')) $('setGeoipKey').value = sys.geoip_api_key || '';
     if ($('geoipStats')) {
@@ -1217,7 +1230,7 @@ function onSettingsData(data) {
     if ($('setScanCacheDays')) $('setScanCacheDays').value = sys.scan_cache_days ?? 30;
     if ($('telemetryLast')) $('telemetryLast').textContent = data.telemetry_sent ? t('settings.telemetry.last', { rel: formatRelative(data.telemetry_sent) }) : '';
     const locked = new Set(data.locked || []);
-    const map = { setUploadMonitor: 'upload_monitor', setUploadGb: 'upload_alert_gb', setUploadHours: 'upload_window_hours', setBurstMonitor: 'burst_monitor', setBurstInfo: 'burst_info_threshold', setBurstDanger: 'burst_danger_threshold', setBurstWindow: 'burst_window_sec', setUsbAuto: 'usb_auto_scan', setUsbMax: 'usb_auto_scan_max_gib', setUpdateTime: 'update_hour', setFamilyMode: 'family_mode', setAutoResponse: 'auto_response', setConnectionMonitor: 'connection_monitor', setGeoip: 'geoip_lookup', setGeoipKey: 'geoip_api_key', setIntegrityWeekly: 'integrity_weekly', setIntegrityDay: 'integrity_day', setIntegrityHour: 'integrity_hour', setAppUpdateCheck: 'app_update_check', setAppUpdateAuto: 'app_update_auto', setWeekly: 'weekly_scan', setWeeklyDay: 'weekly_scan_day', setWeeklyHour: 'weekly_scan_hour', setBackupCheck: 'backup_check', setTimeshiftCheck: 'timeshift_check', setTelemetry: 'telemetry', setAutoHarden: 'auto_harden', setScanCacheDays: 'scan_cache_days' };
+    const map = { setUploadMonitor: 'upload_monitor', setUploadGb: 'upload_alert_gb', setUploadHours: 'upload_window_hours', setBurstMonitor: 'burst_monitor', setBurstInfo: 'burst_info_threshold', setBurstDanger: 'burst_danger_threshold', setBurstWindow: 'burst_window_sec', setUsbAuto: 'usb_auto_scan', setUsbMax: 'usb_auto_scan_max_gib', setUpdateTime: 'update_hour', setFamilyMode: 'family_mode', setAutoResponse: 'auto_response', setConnectionMonitor: 'connection_monitor', setHoneypot: 'honeypot', setGeoip: 'geoip_lookup', setGeoipKey: 'geoip_api_key', setIntegrityWeekly: 'integrity_weekly', setIntegrityDay: 'integrity_day', setIntegrityHour: 'integrity_hour', setAppUpdateCheck: 'app_update_check', setAppUpdateAuto: 'app_update_auto', setWeekly: 'weekly_scan', setWeeklyDay: 'weekly_scan_day', setWeeklyHour: 'weekly_scan_hour', setBackupCheck: 'backup_check', setTimeshiftCheck: 'timeshift_check', setTelemetry: 'telemetry', setAutoHarden: 'auto_harden', setScanCacheDays: 'scan_cache_days' };
     Object.entries(map).forEach(([id, key]) => { const el = $(id); if (!el) return; const row = el.closest('.setting-row'); if (locked.has(key)) { el.disabled = true; if (row) { row.classList.add('locked'); row.title = t('settings.locked_note'); } } else if (row) { row.classList.remove('locked'); row.title = ''; } });
     const banner = $('policyBanner');
     if (banner) { banner.hidden = !data.policy; if (data.policy) banner.textContent = t('settings.policy.banner', { name: data.policy.name || '—', signed: data.policy.signed ? t('settings.policy.signed') : '', n: (data.locked || []).length }) + (data.allowlist && data.allowlist.version ? ' · ' + t('settings.allowlist', { version: data.allowlist.version, n: data.allowlist.patterns || 0 }) : ''); }
@@ -1291,6 +1304,7 @@ function saveSettings() {
         family_mode: $('setFamilyMode').checked,
         auto_response: $('setAutoResponse').checked,
         connection_monitor: $('setConnectionMonitor').checked,
+        honeypot: $('setHoneypot') ? $('setHoneypot').checked : false,
         geoip_lookup: $('setGeoip').checked,
         geoip_api_key: $('setGeoipKey') ? $('setGeoipKey').value.trim() : '',
         integrity_weekly: $('setIntegrityWeekly').checked,
@@ -1341,6 +1355,8 @@ function updateDashboardStatus(data) {
     if (data.disclaimer_accepted === false && legalAccepted) { legalAccepted = false; openLegal(); }
     else if (data.disclaimer_accepted === true) legalAccepted = true;
     if (data.disclaimer_accepted === true && data.telemetry_answered === false) openTelemetryConsent();   // première fois, jamais répondu
+    // Protections avancées (pot de miel…) : toujours proposées, jamais activées sans l'accord de l'utilisateur
+    if (data.disclaimer_accepted === true && data.telemetry_answered !== false && Array.isArray(data.features_to_ask) && data.features_to_ask.length) openFeatureProposal(data.features_to_ask[0]);
     renderAdmin();
     renderSecurityBadge();
     updateStatusUI(data.color, data.message);
@@ -1678,6 +1694,19 @@ function renderAlerts(available = true) {
             <div class="alert-body">${t('popup.connection.body', { program: escapeHtml(a.comm || '?'), ip: escapeHtml(a.ip || ''), port: escapeHtml(String(a.port || '')), where: escapeHtml([a.country, a.org].filter(Boolean).join(' · ') || '?') })}</div>
             ${a.exe ? `<div class="alert-exe">${escapeHtml(a.exe)}${a.exe_replaced ? ` · ${t('system.exe_replaced')}` : ''}</div>` : ''}
             <div class="alert-actions">${a.flagged || !a.exe ? '' : `<button class="btn btn-secondary btn-sm" onclick="trustProgram('${escapeJs(a.exe)}','${escapeJs(a.comm || '')}')">${t('popup.btn.its_me')}</button> `}${a.suspended ? `<button class="btn btn-danger btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'kill'})">${t('popup.btn.kill')}</button> <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'process_action', pid:${a.pid}, action:'continue'})">${t('popup.btn.resume')}</button>` : ''}</div>
+        </div>`;
+        }
+        if (a.kind === 'honeypot') {
+            const who = a.host ? `${a.host} (${a.ip})` : (a.ip || '?');
+            return `
+        <div class="alert-item ${a.severity === 'danger' ? 'alert-danger' : 'alert-warn'}">
+            <div class="alert-head">
+                <span class="badge ${a.severity === 'danger' ? 'badge-red' : 'badge-amber'}">${t('system.alert.honeypot')}</span>
+                <span class="alert-program">${escapeHtml(who)}</span>
+                <span class="alert-meta">${formatDateTime(a.time)}${a.mac ? ` · ${escapeHtml(a.mac)}` : ''}${a.gateway ? ` · ${t('honeypot.source.gateway')}` : ''}</span>
+            </div>
+            <div class="alert-body">${t('popup.honeypot.body', { who: escapeHtml(who), n: (a.ports || []).length, ports: escapeHtml((a.ports || []).join(', ') || '—') })}${(a.fw_ports || []).length ? ` ${t('popup.honeypot.fw_ports', { ports: escapeHtml(a.fw_ports.join(', ')) })}` : ''}${(a.reasons || []).length ? ` — ${a.reasons.map(r => t(`alert.reason.${r}`)).join(', ')}` : ''}${(a.samples || []).length ? `<div class="honeypot-samples">${a.samples.map(x => escapeHtml(x)).join(' · ')}</div>` : ''}</div>
+            <div class="alert-actions">${a.gateway ? '' : `<button class="btn btn-danger btn-sm" onclick="honeypotBlock('${escapeJs(a.ip || '')}')">${t('honeypot.block')}</button> `}<button class="btn btn-secondary btn-sm" onclick="setViewMode('advanced'); switchTab('security'); scrollToHoneypot()">${t('popup.btn.details')}</button></div>
         </div>`;
         }
         if (a.kind === 'persistence' || a.kind === 'integrity' || a.kind === 'update') {
@@ -2642,6 +2671,11 @@ function simulateBackend(data) {
                 persistence: { checked_at: now, counts: { items: 5, untrusted: 1, extensions: 2, ext_outside_store: 1 }, items: [{ kind: 'autostart', path: '/home/user/.config/autostart/Conky.desktop', name: 'Conky', exec: 'conky -d', user: 'user', trusted: false, owner: '' }, { kind: 'cron', path: '/etc/cron.daily/apt-compat', name: 'apt-compat', exec: '', trusted: true, owner: 'apt' }], extensions: [{ browser: 'chrome', user: 'user', id: 'abcd', name: 'uBlock Origin', version: '1.60', from_store: true, enabled: true }, { browser: 'chrome', user: 'user', id: 'efgh', name: 'Mystery Helper', version: '0.1', from_store: false, enabled: true }] },
                 connections: { checked_at: now, blocklist_size: 1234, processes: [{ pid: 5099, comm: 'chrome', exe: '/opt/google/chrome/chrome', user: 'user', trusted: true, remotes: { '140.82.112.26': { ip: '140.82.112.26', ports: ['443'], flagged: false, country: 'US', org: 'GitHub' } } }, { pid: 777, comm: 'miner', exe: '/tmp/miner', user: 'user', trusted: false, remotes: { '185.220.101.1': { ip: '185.220.101.1', ports: ['4444'], flagged: true, country: 'DE', org: 'Hetzner' } } }] },
                 app_update: { checked_at: now, current: '1.7.0', available: true, verified: true, downloaded: true, version: '1.8.0', size: 102400, date: now, error: '' },
+                honeypot: { enabled: true, active: true, ports: [23, 2323, 24187, 29901], fw_log: true, fw_managed: true, backend: 'ufw', sources_24h: 2, danger_24h: 1, blocked: 0, answered: true, started_at: now,
+                    sources: [{ ip: '192.168.1.77', host: 'android-7f3a.local', mac: 'a4:50:46:12:9b:c0', local: true, gateway: false, first: new Date(Date.now() - 1800e3).toISOString(), last: new Date(Date.now() - 120e3).toISOString(), count: 4, ports: [23, 2323, 24187], fw_ports: ['22/tcp', '80/tcp', '445/tcp', '3389/tcp', '8080/tcp'], intents: { probe: 2, login: 1, http: 1 }, samples: ['login=admin +password', 'GET /'], severity: 'danger', blocked: false, ignored: false },
+                              { ip: '192.168.1.1', host: 'fritz.box', mac: '3c:37:12:aa:bb:cc', local: true, gateway: true, first: new Date(Date.now() - 86000e3).toISOString(), last: new Date(Date.now() - 7200e3).toISOString(), count: 1, ports: [2323], fw_ports: [], intents: { probe: 1 }, samples: [], severity: 'warn', blocked: false, ignored: true },
+                              { ip: '45.142.212.61', host: '', mac: '', local: false, gateway: false, first: new Date(Date.now() - 3600e3).toISOString(), last: new Date(Date.now() - 3500e3).toISOString(), count: 2, ports: [23], fw_ports: ['22/tcp', '2222/tcp'], intents: { exploit: 1, ssh: 1 }, samples: ['GET /cgi-bin/luci', 'SSH-2.0-libssh_0.9.6'], severity: 'danger', blocked: true, ignored: false }],
+                    events: [{ t: new Date(Date.now() - 120e3).toISOString(), ip: '192.168.1.77', port: 23, intent: 'login', detail: 'login=admin +password', fw: false }, { t: new Date(Date.now() - 130e3).toISOString(), ip: '192.168.1.77', port: 445, intent: 'fw', detail: 'tcp', fw: true }, { t: new Date(Date.now() - 131e3).toISOString(), ip: '192.168.1.77', port: 2323, intent: 'probe', detail: '', fw: false }, { t: new Date(Date.now() - 132e3).toISOString(), ip: '192.168.1.77', port: 24187, intent: 'http', detail: 'GET /', fw: false }, { t: new Date(Date.now() - 3500e3).toISOString(), ip: '45.142.212.61', port: 23, intent: 'exploit', detail: 'GET /cgi-bin/luci', fw: false }] },
             };
             reply('securityData', { type: data.type, data: sim[data.type], available: true });
             break;
@@ -2722,6 +2756,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (params.get('autoscan') === '1') setTimeout(() => startFullSystemScan(true), 500);   // dev : scan en cours
     if (params.get('integrity') === '1') setTimeout(() => runIntegrityOnly(), 500);           // dev : intégrité en cours
     if (params.get('consent') === '1') setTimeout(() => { openTelemetryConsent(); onTelemetryPreview({ available: false }); }, 400);
+    if (params.get('feature')) setTimeout(() => openFeatureProposal(params.get('feature')), 400);   // dev : proposition d'une protection avancée
     if (params.get('modal') === '1') setTimeout(() => appConfirm({ title: t('quarantine.delete_title'), message: t('quarantine.confirm_delete', { name: 'eicar.com' }), ok: t('quarantine.delete'), danger: true }), 500);
     if (params.get('lesson')) setTimeout(() => openLesson(params.get('lesson')), 300);   // dev : ouvre une leçon
     if (location.hash && $(`tab-${location.hash.slice(1)}`)) { setViewMode('advanced', false); switchTab(location.hash.slice(1)); }
@@ -3065,6 +3100,78 @@ const CHECK_FIX_LABEL = { auto_updates: 'check.auto_updates.action' };
 const CHECK_ACK = { open_ports: () => ackAllPorts(), open_vulns: () => ackAllVulns() };
 
 // ─── Ports joignables voulus : ignorés par port+programme, ne comptent plus dans la checklist ni le score ───
+// ─── Protections avancées proposées (pot de miel…) : toujours demander, jamais activer d'office ────
+let featureProposalOpen = null;
+const FEATURE_PROPOSALS = ['honeypot'];
+
+function openFeatureProposal(feature) {
+    if (featureProposalOpen || telemetryConsentOpen || !$('featureModal') || !FEATURE_PROPOSALS.includes(feature)) return;
+    featureProposalOpen = feature;
+    const k = `feature.${feature}`;
+    $('featureTitle').textContent = t(`${k}.title`);
+    $('featureLead').textContent = t(`${k}.lead`);
+    $('featureWhatTitle').textContent = t(`${k}.what_title`);
+    $('featureKnowTitle').textContent = t(`${k}.know_title`);
+    $('featureWhat').innerHTML = [1, 2, 3].map(i => `<li>${escapeHtml(t(`${k}.what_${i}`))}</li>`).join('');
+    $('featureKnow').innerHTML = [1, 2, 3].map(i => `<li>${escapeHtml(t(`${k}.know_${i}`))}</li>`).join('');
+    $('featureNote').textContent = t('feature.note');
+    $('featureDecline').textContent = t(`${k}.decline`);
+    $('featureAccept').textContent = t(`${k}.accept`);
+    $('featureModal').classList.add('open');
+}
+
+function answerFeature(accepted) {
+    const feature = featureProposalOpen;
+    if (!feature) return;
+    sendToBackend({ action: 'feature_answer', feature, enabled: !!accepted });
+    $('featureModal').classList.remove('open');
+    featureProposalOpen = null;
+    showToast(t(accepted ? 'feature.thanks' : 'feature.declined', { name: t(`feature.${feature}.name`) }), 'info');
+}
+
+// ─── Pot de miel réseau ─────────────────────────────────────────────────────
+function honeypotEnable() { sendToBackend({ action: 'feature_answer', feature: 'honeypot', enabled: true }); }
+function honeypotBlock(ip, remove = false) { if (ip) sendToBackend({ action: 'honeypot_block', ip, remove }); }
+function honeypotIgnore(ip, remove = false) { if (ip) sendToBackend({ action: 'honeypot_ignore', ip, remove }); }
+function honeypotForget(ip) { if (ip) sendToBackend({ action: 'honeypot_forget', ip }); }
+function scrollToHoneypot() { setTimeout(() => { const el = $('cardHoneypot'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150); }
+
+function onHoneypotUpdate(summary) {
+    if (lastStatus && summary) { lastStatus.honeypot_summary = summary; renderSimpleView(); }
+    if (currentTab === 'security') loadSecurityData('honeypot');
+}
+
+function renderHoneypot() {
+    const h = secData.honeypot;
+    const list = $('honeypotList'), ev = $('honeypotEvents');
+    if (!list) return;
+    if (!h) { list.innerHTML = `<p class="text-muted">${t('system.unavailable')}</p>`; ev.innerHTML = ''; $('honeypotState').textContent = ''; $('honeypotEnableRow').hidden = true; return; }
+    $('honeypotEnableRow').hidden = !!h.enabled;
+    const ports = (h.ports || []).join(', ');
+    $('honeypotState').textContent = h.enabled ? (h.active ? t('honeypot.state.active', { n: (h.ports || []).length }) : t('honeypot.state.starting')) : t('honeypot.state.inactive');
+    const head = h.enabled && h.active ? `<p class="honeypot-ports-line">${t('honeypot.ports_line', { ports: escapeHtml(ports) })}${h.fw_log ? ` · ${t('honeypot.state.fwlog')}` : ''}${h.fw_managed === false ? ` · ${t('honeypot.state.no_fw')}` : ''}</p>` : '';
+    const srcs = h.sources || [];
+    list.innerHTML = head + (srcs.length ? srcs.map(s => {
+        const who = s.host ? `<span class="honeypot-host">${escapeHtml(s.host)}</span><span class="honeypot-ip">${escapeHtml(s.ip)}</span>` : `<span class="honeypot-host">${escapeHtml(s.ip)}</span>`;
+        const sev = s.blocked ? `<span class="scope-badge scope-user">${t('honeypot.source.blocked')}</span>` : s.ignored ? `<span class="scope-badge scope-user">${t('honeypot.source.ignored')}</span>`
+            : s.severity === 'danger' ? `<span class="scope-badge scope-danger">${t('honeypot.severity.danger')}</span>` : s.severity === 'warn' ? `<span class="scope-badge scope-phased">${t('honeypot.severity.warn')}</span>` : `<span class="scope-badge scope-user">${t('honeypot.severity.none')}</span>`;
+        const where = `<span class="alert-meta">${s.gateway ? t('honeypot.source.gateway') : s.local ? t('honeypot.source.local') : t('honeypot.source.internet')}${s.mac ? ` · ${escapeHtml(s.mac)}` : ''}</span>`;
+        const intents = Object.entries(s.intents || {}).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<span class="scope-badge ${k === 'exploit' || k === 'login' ? 'scope-danger' : 'scope-user'}" title="${escapeHtml(t(`honeypot.intent_hint.${k}`) !== `honeypot.intent_hint.${k}` ? t(`honeypot.intent_hint.${k}`) : '')}">${t(`honeypot.intent.${k}`)}${n > 1 ? ` ×${n}` : ''}</span>`).join('');
+        const actions = [];
+        if (!s.gateway) actions.push(s.blocked ? `<button class="btn btn-secondary btn-sm" onclick="honeypotBlock('${escapeJs(s.ip)}', true)">${t('honeypot.unblock')}</button>` : `<button class="btn ${s.severity === 'danger' ? 'btn-danger' : 'btn-secondary'} btn-sm" onclick="honeypotBlock('${escapeJs(s.ip)}')" title="${escapeHtml(t('honeypot.block_hint'))}">${t('honeypot.block')}</button>`);
+        if (!s.blocked) actions.push(s.ignored ? `<button class="btn btn-secondary btn-sm" onclick="honeypotIgnore('${escapeJs(s.ip)}', true)">${t('honeypot.unignore')}</button>` : `<button class="btn btn-secondary btn-sm" onclick="honeypotIgnore('${escapeJs(s.ip)}')" title="${escapeHtml(t('honeypot.ignore_hint'))}">${t('security.ignore')}</button>`);
+        actions.push(`<button class="btn btn-secondary btn-sm" onclick="honeypotForget('${escapeJs(s.ip)}')">${t('honeypot.forget')}</button>`);
+        return `<div class="honeypot-item severity-${s.severity || 'none'}${s.blocked ? ' blocked' : ''}${s.ignored ? ' ignored' : ''}">
+            <div class="honeypot-head">${who}${sev}${where}<span class="honeypot-actions">${actions.join('')}</span></div>
+            <div class="honeypot-body">${t('honeypot.source.seen', { count: s.count || 0, first: formatDateTime(s.first), last: formatRelative(s.last) })}${(s.ports || []).length ? ` · ${t('honeypot.source.ports')} <span class="hp-ports">${(s.ports || []).join(', ')}</span>` : ''}${(s.fw_ports || []).length ? ` · ${t('honeypot.source.fw_ports')} <span class="hp-ports">${escapeHtml((s.fw_ports || []).slice(-12).join(', '))}</span>` : ''}</div>
+            ${intents ? `<div class="honeypot-intents">${intents}</div>` : ''}
+            ${(s.samples || []).length ? `<div class="honeypot-samples">${(s.samples || []).map(x => escapeHtml(x)).join(' · ')}</div>` : ''}
+        </div>`;
+    }).join('') : `<p class="text-muted">${t(h.enabled ? 'honeypot.sources.none' : 'honeypot.sources.off')}</p>`);
+    const events = h.events || [];
+    ev.innerHTML = events.length ? events.slice(0, 60).map(e => `<div class="honeypot-event${e.fw ? ' fw' : ''}"><span>${formatDateTime(e.t)}</span><span>${escapeHtml(e.ip || '')}</span><span>${e.port}${e.fw ? '/' + escapeHtml(e.detail || '') : ''}</span><span>${e.fw ? t('honeypot.intent.fw') : t(`honeypot.intent.${e.intent}`)}${!e.fw && e.detail ? ` — ${escapeHtml(e.detail)}` : ''}</span></div>`).join('') : `<p class="text-muted">${t('honeypot.events.none')}</p>`;
+}
+
 function ackPort(key, remove = false) {
     if (key) sendToBackend({ action: 'acknowledge_port', keys: [key], remove });
 }

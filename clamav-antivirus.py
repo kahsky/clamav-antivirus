@@ -65,6 +65,7 @@ USER_DEFAULTS = {
     "popups": {"info": True, "upload": True, "scan": True, "update": True, "security": True, "tip": True},
 }
 DISCLAIMER_VERSION = 1
+FEATURES_PROPOSED = ()      # protections proposées par une modale au démarrage (aucune : le pot de miel est actif par défaut)
 SECURITY_COMMANDS = ("firewall_set", "firewall_defaults", "firewall_rule_add", "firewall_rule_delete", "ssh_set", "firewall_profile",
                      "forget_network")
 UNLOCK_HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clamav-antivirus-unlock")
@@ -1234,6 +1235,9 @@ class ClamAVAntivirusApp:
                        buttons=[(T("popup.btn.install"), "primary", lambda: self.act_install_update({})),
                                 (T("popup.btn.details"), None, lambda: self.show_tab("security"))])
             return
+        if kind == "honeypot":
+            self.show_honeypot_alert(alert)
+            return
         if kind == "upload":
             if not self.popups_enabled("upload"):
                 return
@@ -1286,6 +1290,45 @@ class ClamAVAntivirusApp:
                        buttons=[(T("popup.btn.its_me"), None, lambda e=alert.get("exe"), c=comm: self.trust_program(e, c))] if alert.get("exe") else None,
                        on_activate=lambda: self.show_tab("system"))
 
+    def show_honeypot_alert(self, alert):
+        """Pot de miel : un appareil du réseau a touché un leurre (avertissement) ou balaie les ports / tente de se
+        connecter (danger). Boutons : bloquer l'appareil au pare-feu, l'ignorer (appareil connu), détails."""
+        T = self.T
+        danger = alert.get("severity") == "danger"
+        if not danger and not self.popups_enabled("info"):
+            return
+        ip = alert.get("ip") or "?"
+        host = alert.get("host") or ""
+        who = f"{host} ({ip})" if host else ip
+        ports = ", ".join(str(p) for p in (alert.get("ports") or [])[:8])
+        fw_ports = ", ".join(str(p) for p in (alert.get("fw_ports") or [])[:8])
+        intents = alert.get("intents") or {}
+        top = [k for k, _ in sorted(intents.items(), key=lambda kv: -kv[1])[:3]]
+        intent_text = ", ".join(T(f"honeypot.intent.{k}") for k in top if T(f"honeypot.intent.{k}") != f"honeypot.intent.{k}")
+        body = T("popup.honeypot.body", who=who, n=len(alert.get("ports") or []), ports=ports or "—")
+        if fw_ports:
+            body += "\n" + T("popup.honeypot.fw_ports", ports=fw_ports)
+        if intent_text:
+            body += "\n" + T("popup.honeypot.intent", intent=intent_text)
+        samples = [s for s in (alert.get("samples") or []) if s][:2]
+        if samples:
+            body += "\n" + " · ".join(samples)
+        reasons = ", ".join(T(f"alert.reason.{r}") for r in (alert.get("reasons") or []) if T(f"alert.reason.{r}") != f"alert.reason.{r}")
+        if reasons:
+            body += "\n" + reasons
+        meta_parts = []
+        if alert.get("mac"):
+            meta_parts.append(alert["mac"])
+        meta_parts.append(T("honeypot.source.gateway") if alert.get("gateway") else T("honeypot.source.local") if alert.get("local") else T("honeypot.source.internet"))
+        buttons = []
+        if not alert.get("gateway"):
+            buttons.append((T("popup.btn.block_device"), "danger" if danger else "primary", lambda i=ip: self.act_honeypot_block({"ip": i})))
+        buttons.append((T("popup.btn.ignore_device"), None, lambda i=ip: self.act_honeypot_ignore({"ip": i})))
+        buttons.append((T("popup.btn.details"), None, lambda: self.show_tab("security")))
+        self.popup("danger" if danger else "warning", T("popup.honeypot.title" if danger else "popup.honeypot.title_warn"), body,
+                   timeout=None if danger else 25, meta=" · ".join(meta_parts) or None, buttons=buttons,
+                   on_activate=lambda: self.show_tab("security"))
+
     def request_scan(self, path):
         self.window.present()
         self.run_js(f'if(typeof startScan==="function")startScan({json.dumps(path)});')
@@ -1334,6 +1377,8 @@ class ClamAVAntivirusApp:
         elif et == "alert":
             self.show_alert(ev.get("alert") or {})
             self.send_to_js("alertEvent", ev.get("alert") or {})
+        elif et == "honeypot":
+            self.send_to_js("honeypotUpdate", ev.get("summary") or {})
         elif et == "usb_ask":
             self.ask_usb(ev.get("usb") or {})
         elif et == "usb_done":
@@ -1656,7 +1701,8 @@ class ClamAVAntivirusApp:
                "auto_updates_unavailable": "msg.auto_updates_unavailable", "busy_hardening": "msg.harden_busy",
                "nothing_to_harden": "msg.harden_nothing", "firewall_not_active": "msg.firewall_not_active",
                "mail_failed": "msg.mail_failed", "invalid_host": "msg.mail_invalid", "invalid_port": "msg.mail_invalid",
-               "invalid_from": "msg.mail_invalid", "invalid_to": "msg.mail_invalid", "incomplete": "msg.mail_incomplete"}.get(err)
+               "invalid_from": "msg.mail_invalid", "invalid_to": "msg.mail_invalid", "incomplete": "msg.mail_incomplete",
+               "invalid_ip": "msg.honeypot_invalid_ip", "invalid_feature": "msg.forbidden"}.get(err)
         if key:
             return self.T(key, path=resp.get("path", ""), detail=str(resp.get("detail") or "")[:200])
         return err or self.T("msg.daemon_unavailable")
@@ -1984,6 +2030,57 @@ class ClamAVAntivirusApp:
                 self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
             return False
         self.run_admin("acknowledge_integrity", {"tool": str(data.get("tool") or ""), "text": str(data.get("text") or ""), "remove": remove}, done)
+
+    # ── Pot de miel : bloquer / ignorer un appareil, proposer une protection avancée ──
+    def _honeypot_action(self, cmd, data, ok_key, remove_key=None):
+        """Commande du pot de miel hors du fil principal (ufw / firewall-cmd peuvent dépasser 3 s), puis rechargement."""
+        ip = str(data.get("ip") or "").strip()
+        remove = bool(data.get("remove"))
+        if not ip:
+            return
+
+        def worker():
+            resp = daemon_request(cmd, timeout=90, ip=ip, remove=remove)
+            GLib.idle_add(done, resp)
+
+        def done(resp):
+            if resp.get("ok"):
+                key = remove_key if remove and remove_key else ok_key
+                self.send_to_js("operationResult", {"status": "success", "op": "security", "message": self.T(key, ip=ip)})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
+            self.act_get_security_data({"type": "honeypot"})
+            self.refresh_daemon_status_now()
+            return False
+        threading.Thread(target=worker, daemon=True).start()
+
+    def act_honeypot_block(self, data):
+        self._honeypot_action("honeypot_block", data, "msg.honeypot_blocked", "msg.honeypot_unblocked")
+
+    def act_honeypot_ignore(self, data):
+        self._honeypot_action("honeypot_ignore", data, "msg.honeypot_ignored", "msg.honeypot_unignored")
+
+    def act_honeypot_forget(self, data):
+        self._honeypot_action("honeypot_forget", data, "msg.honeypot_forgotten")
+
+    def act_feature_answer(self, data):
+        """Réponse à la proposition d'une protection avancée (pot de miel…) : activer ou non, mémorisée côté service.
+        Jamais de mot de passe pour activer ; la désactivation reste administrateur en mode famille."""
+        feature = str(data.get("feature") or "")
+        enabled = bool(data.get("enabled"))
+
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "security",
+                                                    "message": self.T("msg.feature_enabled" if enabled else "msg.feature_disabled",
+                                                                      name=self.T(f"feature.{feature}.name"))})
+            else:
+                self.send_to_js("operationResult", {"status": "error", "op": "security", "message": self.daemon_error(resp)})
+            self.act_get_security_data({"type": "honeypot"})
+            self.act_get_settings({})
+            self.refresh_daemon_status_now()
+            return False
+        self.run_admin("feature_answer", {"feature": feature, "enabled": enabled}, done)
 
     def act_acknowledge_port(self, data):
         """« Ignorer » un port joignable voulu (ou le réafficher avec remove) : la checklist ne le compte plus."""
@@ -2831,7 +2928,7 @@ class ClamAVAntivirusApp:
         """Données du centre de sécurité : vulns, checklist, intégrité, persistance, connexions, mise à jour."""
         kind = data.get("type")
         cmd = {"vulns": "vulns", "checklist": "checklist", "integrity": "integrity", "persistence": "persistence",
-               "connections": "connections", "app_update": "check_update"}.get(kind)
+               "connections": "connections", "app_update": "check_update", "honeypot": "honeypot"}.get(kind)
         if not cmd:
             return
         params = {}
@@ -3133,6 +3230,10 @@ class ClamAVAntivirusApp:
             "vulns_summary": (ds or {}).get("vulns_summary"),
             "checklist_summary": (ds or {}).get("checklist_summary"),
             "integrity_summary": (ds or {}).get("integrity_summary"),
+            "honeypot_summary": (ds or {}).get("honeypot_summary"),
+            # Protections à proposer au démarrage (réponse mémorisée par le service). Le pot de miel est actif par
+            # défaut (décision 2026-10-15) : liste vide, mécanisme conservé pour de futures protections.
+            "features_to_ask": [f for f in FEATURES_PROPOSED if ds is not None and not dstate.get(f"{f}_answered")],
             "persistence_summary": (ds or {}).get("persistence_summary"),
             "schedule": {
                 "next_update": next_update.isoformat(timespec="seconds") if next_update else None,
