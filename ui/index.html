@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.22.1 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.22.2 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -1179,6 +1179,7 @@
                     <label class="setting-row toggle"><span data-i18n="settings.telemetry">Télémétrie anonyme (opt-in) : aider Dukiwi à réduire les faux positifs</span><input type="checkbox" id="setTelemetry"></label>
                     <p class="text-muted setting-note" data-i18n="settings.telemetry.note">Une fois par semaine, si activé : version, système, réglages, score de la checklist, types d'alertes, programmes et entrées de démarrage approuvés (chemins anonymisés), avertissements d'intégrité approuvés et classés, mesures du dernier scan (durée, fichiers, cache, moteur), réglages de durcissement appliqués, paquets avec failles hautes, compteurs de failles. Jamais de nom d'utilisateur, d'ordinateur, de contenu de fichier ni d'adresse IP en clair. Sert à la liste blanche centrale signée et aux règles intégrées de faux positifs.</p>
                     <p class="text-muted setting-note" id="telemetryLast"></p>
+                    <div class="log-actions-right"><button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'telemetry_send'})" data-i18n="settings.telemetry.send">Envoyer la télémétrie maintenant</button></div>
                     <label class="setting-row toggle"><span data-i18n="settings.auto_harden">Appliquer automatiquement les recommandations Lynis sans risque après chaque audit</span><input type="checkbox" id="setAutoHarden"></label>
                     <p class="text-muted setting-note" data-i18n="settings.auto_harden.note">Seules les recommandations marquées sans risque (paramètres du noyau, core dumps, bannières, protocoles inutiles, outils d'audit, anciens noyaux…) sont appliquées ; celles « à lire avant d'appliquer » (umask, SSH, TMPDIR) restent manuelles.</p>
                     <label class="setting-row toggle"><span data-i18n="settings.integrity_weekly">Vérification d'intégrité hebdomadaire</span><input type="checkbox" id="setIntegrityWeekly"></label>

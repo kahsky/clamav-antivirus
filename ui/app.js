@@ -2566,6 +2566,9 @@ function simulateBackend(data) {
             reply('operationResult', { status: 'success', message: t('msg.mail_saved') });
             reply('mailStatus', { available: true, mail: Object.assign({ transport: 'msmtp', queued: 0, password_set: !!data.password }, data.mail, { to: String(data.mail.to || '').split(/[,;\s]+/).filter(Boolean) }) });
             break;
+        case 'telemetry_send':
+            reply('operationResult', { status: 'success', message: t('msg.telemetry_sent') });
+            break;
         case 'mail_test': case 'mail_flush':
             reply('operationResult', { status: 'success', message: t(data.action === 'mail_test' ? 'msg.mail_test_ok' : 'msg.mail_flushed') });
             break;

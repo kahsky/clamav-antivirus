@@ -4118,6 +4118,11 @@ class Daemon:
         })
         if job.kind == "scan" and status in ("clean", "infected") and (not job.usb or job.infected):
             self.mail_scan_event(job, status)
+        if job.kind == "scan" and not job.usb and status in ("clean", "infected") and self.settings.get("telemetry") \
+                and not self.state.get("telemetry_scan_sent"):
+            # Premier scan complet depuis l'accord : rapport envoyé sans attendre la semaine (mesures de performance)
+            self.state.update(telemetry_scan_sent=True)
+            threading.Thread(target=lambda: self.send_telemetry(force=True), daemon=True).start()
 
     # ── Scan ─────────────────────────────────────────────────────────────
     def _save_progress(self, job, in_progress=True):
@@ -5909,13 +5914,14 @@ class Daemon:
             "known_networks": len(self.state.get("network_profiles") or {}),
         }
 
-    def send_telemetry(self):
-        """Télémétrie anonyme, opt-in, une fois par semaine : version, système, score, faux positifs approuvés (chemins anonymisés)."""
+    def send_telemetry(self, force=False):
+        """Télémétrie anonyme, opt-in, une fois par semaine (force : à la demande, ou après le premier scan complet) :
+        version, système, score, faux positifs approuvés (chemins anonymisés)."""
         if not self.settings.get("telemetry"):
             return False
         last = self.state.get("telemetry_sent") or ""
         try:
-            if last and (time.time() - datetime.fromisoformat(last).timestamp()) < 7 * 86400:
+            if last and not force and (time.time() - datetime.fromisoformat(last).timestamp()) < 7 * 86400:
                 return False
         except ValueError:
             pass
@@ -6765,6 +6771,13 @@ class Daemon:
             self.tray_stopped[uid] = ids
             self.write_log(f"tray quit by uid {uid} (sessions {sorted(ids)})")
             return {"ok": True, "sessions": sorted(ids)}
+
+        if cmd == "telemetry_send":
+            # « Envoyer maintenant » (Paramètres) : rapport anonyme immédiat si la télémétrie est acceptée
+            if not self.settings.get("telemetry"):
+                return {"ok": False, "error": "telemetry_disabled"}
+            ok = self.send_telemetry(force=True)
+            return {"ok": ok, "error": "" if ok else "telemetry_failed", "sent": self.state.get("telemetry_sent")}
 
         if cmd == "telemetry_preview":
             # Aperçu de la charge utile telle qu'elle serait envoyée (rien n'est transmis)

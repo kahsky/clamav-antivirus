@@ -47,15 +47,15 @@ seule si l'option est activée dans Paramètres.
 
 ### Téléchargement direct
 
-- Mint / Ubuntu : [clamav-antivirus_1.22.1_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.22.1_all.deb)
-- Fedora : [clamav-antivirus-1.22.1-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.22.1-1.noarch.rpm)
+- Mint / Ubuntu : [clamav-antivirus_1.22.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.22.2_all.deb)
+- Fedora : [clamav-antivirus-1.22.2-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.22.2-1.noarch.rpm)
 - Toutes les versions : [www.dukiwi.com/repo](https://www.dukiwi.com/repo)
 
 ### Installer le paquet téléchargé à la main
 
 ```bash
-sudo apt install ./clamav-antivirus_1.22.1_all.deb          # Mint / Ubuntu
-sudo dnf install ./clamav-antivirus-1.22.1-1.noarch.rpm      # Fedora
+sudo apt install ./clamav-antivirus_1.22.2_all.deb          # Mint / Ubuntu
+sudo dnf install ./clamav-antivirus-1.22.2-1.noarch.rpm      # Fedora
 ```
 
 L'installation active le service système et le planificateur, puis lance le scan initial :
@@ -221,6 +221,9 @@ sudo dnf remove clamav-antivirus   # Fedora
   `ufw-init start` pour obtenir l'erreur, l'affiche (« Le pare-feu n'a pas pu être chargé : … »), active
   `ufw.service` au démarrage et signale un autre gestionnaire de pare-feu actif (firewalld, nftables avec
   `flush ruleset`, netfilter-persistent). Checklist et score recalculés après chaque action pare-feu/SSH.
+- **Télémétrie après le premier scan complet et à la demande** — le premier scan complet terminé après l'accord
+  déclenche l'envoi du rapport anonyme sans attendre la semaine (mesures de performance) ; bouton « Envoyer la
+  télémétrie maintenant » dans Paramètres.
 - **Fedora : socket clamd activé** — scan.conf livré avec LocalSocket commenté : décommenté par le paquet et par le
   service, sinon pas de moteur clamd. Paquet RPM construit, signé, installé et vérifié dans un conteneur Fedora 44
   depuis le dépôt dnf signé.
@@ -475,8 +478,8 @@ python3 clamav-antivirus.py
 ## Construire les paquets
 
 ```bash
-./build-deb.sh        # clamav-antivirus_1.22.1_all.deb   (Mint / Ubuntu)
-./build-rpm.sh        # clamav-antivirus-1.22.1-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
+./build-deb.sh        # clamav-antivirus_1.22.2_all.deb   (Mint / Ubuntu)
+./build-rpm.sh        # clamav-antivirus-1.22.2-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
 ```
 
 Les deux paquets partagent la même arborescence de fichiers (`build-deb.sh --stage-only`) et le même manifeste

@@ -1875,6 +1875,24 @@ class ClamAVAntivirusApp:
         self.send_status()
 
     # ── Télémétrie : consentement explicite à la première utilisation ──
+    def act_telemetry_send(self, _data):
+        """« Envoyer la télémétrie maintenant » : hors du fil principal (requête HTTP côté service)."""
+        self.send_to_js("operationResult", {"status": "info", "op": "settings", "message": self.T("msg.telemetry_sending")})
+
+        def worker():
+            resp = daemon_request("telemetry_send", timeout=90)
+            GLib.idle_add(done, resp)
+
+        def done(resp):
+            if resp.get("ok"):
+                self.send_to_js("operationResult", {"status": "success", "op": "settings", "message": self.T("msg.telemetry_sent")})
+                self.act_get_settings({})
+            else:
+                key = {"telemetry_disabled": "msg.telemetry_disabled", "telemetry_failed": "msg.telemetry_failed"}.get(resp.get("error"))
+                self.send_to_js("operationResult", {"status": "error", "op": "settings", "message": self.T(key) if key else self.daemon_error(resp)})
+            return False
+        threading.Thread(target=worker, daemon=True).start()
+
     def act_telemetry_preview(self, _data):
         """Charge utile exacte que le service enverrait (sans envoi), pour la montrer avant de décider."""
         def worker():
