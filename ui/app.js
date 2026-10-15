@@ -1187,6 +1187,7 @@ function onSettingsData(data) {
     $('setPopupUpdate').checked = p.update !== false;
     $('setPopupSecurity').checked = p.security !== false;
     if ($('setPopupTip')) $('setPopupTip').checked = p.tip !== false;
+    if ($('setPopupCorner')) $('setPopupCorner').value = user.popup_corner || 'right';
     $('setUploadMonitor').checked = sys.upload_monitor !== false;
     $('setUploadGb').value = sys.upload_alert_gb ?? 5;
     $('setUploadHours').value = sys.upload_window_hours ?? 1;
@@ -1306,6 +1307,7 @@ function saveSettings() {
     const user = {
         language: $('setLanguage').value,
         view_mode: $('setViewMode').value,
+        popup_corner: $('setPopupCorner') ? $('setPopupCorner').value : 'right',
         popups: { info: $('setPopupInfo').checked, upload: $('setPopupUpload').checked, scan: $('setPopupScan').checked,
                   update: $('setPopupUpdate').checked, security: $('setPopupSecurity').checked,
                   tip: $('setPopupTip') ? $('setPopupTip').checked : true },

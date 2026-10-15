@@ -15,6 +15,12 @@ scan terminé, analyse des clés USB, question pour les disques durs USB.
 (c) 2026 Dukiwi SA - Estavayer-le-Lac
 """
 
+import os as _os
+# Sous Wayland (Ubuntu), une application ne peut pas placer ses fenêtres : le compositeur centre les popups en plein
+# écran. Avec XWayland (toujours présent sur Ubuntu), le backend X11 de GTK retrouve le glissement depuis le bas.
+if _os.environ.get("WAYLAND_DISPLAY") and _os.environ.get("DISPLAY") and not _os.environ.get("GDK_BACKEND"):
+    _os.environ["GDK_BACKEND"] = "x11"
+
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
@@ -137,7 +143,8 @@ def user_settings():
     popups = dict(USER_DEFAULTS["popups"])
     popups.update({k: bool(v) for k, v in (state.get("popups") or {}).items() if k in popups})
     mode = state.get("view_mode") if state.get("view_mode") in ("simple", "advanced") else USER_DEFAULTS["view_mode"]
-    return {"view_mode": mode, "popups": popups, "language": state.get("language")}
+    corner = state.get("popup_corner") if state.get("popup_corner") in ("right", "left") else "right"
+    return {"view_mode": mode, "popups": popups, "language": state.get("language"), "popup_corner": corner}
 
 
 def add_history(entry):
@@ -884,7 +891,7 @@ class PopupManager:
         height = popup.get_preferred_height()[1]
         wa = self.workarea()
         geo = self.monitor_geometry()
-        x = wa.x + wa.width - Popup.WIDTH - Popup.MARGIN
+        x = self.corner_x(wa)
         offset = sum(p.get_preferred_height()[1] + Popup.GAP
                      for p in self.popups if p is not popup and not p.closing)
         y = wa.y + wa.height - height - Popup.MARGIN - offset
@@ -907,9 +914,16 @@ class PopupManager:
             self.popups.remove(popup)
         self.relayout()
 
+    @staticmethod
+    def corner_x(wa):
+        """Coin bas droite (défaut) ou bas gauche (réglage « Position des notifications »)."""
+        if user_settings().get("popup_corner") == "left":
+            return wa.x + Popup.MARGIN
+        return wa.x + wa.width - Popup.WIDTH - Popup.MARGIN
+
     def relayout(self):
         wa = self.workarea()
-        x = wa.x + wa.width - Popup.WIDTH - Popup.MARGIN
+        x = self.corner_x(wa)
         offset = 0
         for p in [p for p in self.popups if not p.closing]:
             height = p.get_preferred_height()[1]
@@ -2736,6 +2750,9 @@ class ClamAVAntivirusApp:
             save_state({"popups": popups})
         if user.get("view_mode") in ("simple", "advanced"):
             save_state({"view_mode": user["view_mode"]})
+        if user.get("popup_corner") in ("right", "left"):
+            save_state({"popup_corner": user["popup_corner"]})
+            GLib.idle_add(self.popups.relayout)
         if user.get("language") in LANGUAGES and user["language"] != self.lang:
             self.act_set_language({"lang": user["language"]})
         system = data.get("system") or {}
