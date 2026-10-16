@@ -42,6 +42,44 @@ def is_rpm():
     return FAMILY == "rpm"
 
 
+# ── Ubuntu sous-jacente (Linux Mint, Pop!_OS, Zorin… reposent sur une version d'Ubuntu) ──────────────
+UPSTREAM_RELEASE = os.environ.get("CLAMAV_ANTIVIRUS_UPSTREAM_RELEASE") or \
+    ("" if os.environ.get("CLAMAV_ANTIVIRUS_OS_RELEASE") else "/etc/upstream-release/lsb-release")
+UBUNTU_CODENAMES = {"focal": "20.04", "jammy": "22.04", "noble": "24.04", "oracular": "24.10",
+                    "plucky": "25.04", "questing": "25.10", "resolute": "26.04"}
+_UBUNTU_VERSION_RE = re.compile(r"^\d\d\.\d\d$")
+
+
+def ubuntu_release():
+    """Version d'Ubuntu sous-jacente (« 24.04 », « 26.04 »…) : VERSION_ID sur Ubuntu même,
+    /etc/upstream-release/lsb-release sur Linux Mint, sinon UBUNTU_CODENAME ou VERSION_ID d'un dérivé.
+    Chaîne vide si elle est inconnue : une version devinée afficherait les failles d'un autre système."""
+    d = _os_release()
+    ident, version = d.get("ID", "").lower(), d.get("VERSION_ID", "")
+    if ident == "ubuntu" and _UBUNTU_VERSION_RE.match(version):
+        return version
+    try:
+        with open(UPSTREAM_RELEASE, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                if ln.startswith("DISTRIB_RELEASE="):
+                    v = ln.split("=", 1)[1].strip().strip('"')
+                    if _UBUNTU_VERSION_RE.match(v):
+                        return v
+    except OSError:
+        pass
+    codename = d.get("UBUNTU_CODENAME", "").lower()
+    if codename in UBUNTU_CODENAMES:
+        return UBUNTU_CODENAMES[codename]
+    if "ubuntu" in d.get("ID_LIKE", "").lower().split() and _UBUNTU_VERSION_RE.match(version):
+        return version
+    return ""
+
+
+def ubuntu_is_lts(release):
+    """Les LTS sortent en avril des années paires (20.04, 22.04, 24.04, 26.04…)."""
+    return bool(_UBUNTU_VERSION_RE.match(release or "")) and release.endswith(".04") and int(release[:2]) % 2 == 0
+
+
 def run(cmd, timeout=60, env=None):
     e = dict(os.environ, LC_ALL="C.UTF-8")
     if env:

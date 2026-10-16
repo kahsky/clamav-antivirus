@@ -229,7 +229,7 @@
                     <option value="de">Deutsch</option>
                     <option value="it">Italiano</option>
                 </select></label>
-                <small class="version">v1.24.2 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
+                <small class="version">v1.24.3 — <a href="#" class="credits-link" onclick="openCredits(); return false;" data-i18n="sidebar.credits">Crédits</a> · <a href="#" class="credits-link" onclick="openLegal(); return false;" data-i18n="legal.link">Avertissement</a></small>
             </div>
         </div>
     </aside>
@@ -1089,13 +1089,13 @@
         <section class="tab-panel" id="tab-firewall">
             <div class="page-header">
                 <h1 data-i18n="firewall.title">Pare-feu et accès à distance</h1>
-                <p class="subtitle" data-i18n="firewall.subtitle">Pare-feu UFW et service SSH, appliqués par le service système sans mot de passe</p>
+                <p class="subtitle" data-i18n="firewall.subtitle">Pare-feu (UFW ou firewalld) et service SSH, appliqués par le service système sans mot de passe</p>
             </div>
 
             <div class="cards-grid">
                 <div class="card card-fw" id="cardFirewall" data-state="unknown">
                     <div class="card-title-row">
-                        <h4 data-i18n="firewall.ufw.title">Pare-feu (UFW)</h4>
+                        <h4 data-i18n="firewall.ufw.title">Pare-feu</h4>
                         <span class="badge" id="fwBadge">…</span>
                     </div>
                     <p class="text-muted" id="fwSummary"></p>

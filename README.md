@@ -47,15 +47,15 @@ seule si l'option est activée dans Paramètres.
 
 ### Téléchargement direct
 
-- Mint / Ubuntu : [clamav-antivirus_1.24.2_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.24.2_all.deb)
-- Fedora : [clamav-antivirus-1.24.2-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.24.2-1.noarch.rpm)
+- Mint / Ubuntu : [clamav-antivirus_1.24.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.24.3_all.deb)
+- Fedora : [clamav-antivirus-1.24.3-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.24.3-1.noarch.rpm)
 - Toutes les versions : [www.dukiwi.com/repo](https://www.dukiwi.com/repo)
 
 ### Installer le paquet téléchargé à la main
 
 ```bash
-sudo apt install ./clamav-antivirus_1.24.2_all.deb          # Mint / Ubuntu
-sudo dnf install ./clamav-antivirus-1.24.2-1.noarch.rpm      # Fedora
+sudo apt install ./clamav-antivirus_1.24.3_all.deb          # Mint / Ubuntu
+sudo dnf install ./clamav-antivirus-1.24.3-1.noarch.rpm      # Fedora
 ```
 
 L'installation active le service système et le planificateur, puis lance le scan initial :
@@ -224,6 +224,17 @@ sudo dnf remove clamav-antivirus   # Fedora
 - **Télémétrie après le premier scan complet et à la demande** — le premier scan complet terminé après l'accord
   déclenche l'envoi du rapport anonyme sans attendre la semaine (mesures de performance) ; bouton « Envoyer la
   télémétrie maintenant » dans Paramètres.
+- **Ubuntu 26.04 : failles de la bonne version** — l'inventaire OSV interrogeait l'écosystème d'Ubuntu 24.04 pour
+  toute version inconnue (26.04 « resolute » compris) : un Ubuntu 26.04 en noyau 7.0 voyait les failles et l'alerte
+  « noyau 6.8 » de 24.04 / Mint 22 (issue #1). La version d'Ubuntu est maintenant lue dans os-release (Ubuntu) ou
+  /etc/upstream-release (Mint), les LTS déduites (avril des années paires) ; sans version connue (LMDE…),
+  l'inventaire est « non pris en charge » plutôt que faux. Le contrôle « Noyau » et la note HWE citent le noyau en
+  cours, la version d'Ubuntu, les noyaux HWE trouvés et le paquet `linux-generic-hwe-<version>` réels, sans plus
+  supposer Linux Mint ni le 6.8 ; les conseils chiffrement, Secure Boot et sudo ne supposent plus Mint non plus.
+  Sur Fedora, l'inventaire reste « non pris en charge » (avis dnf dans État du système) et les textes qui citaient
+  UFW, apt ou debsums en dur (pare-feu, mises à jour, intégrité, descriptions Lynis, mentions légales) nomment
+  aussi firewalld, dnf et rpm -V ; l'indice de dépôt de la carte Mise à jour devient celui du dépôt dnf, le service
+  exposant désormais la famille de distribution dans son état.
 - **Plus de fenêtre fantôme après une mise à jour (Ubuntu/GNOME)** — le bouclier relancé après la mise à niveau du
   paquet mappait puis cachait sa fenêtre (`show_all()` + `hide()`) : GNOME gardait une entrée « clamav-antivirus.py »
   dans le dock sans rien de visible. En mode bouclier la fenêtre n'est plus jamais mappée tant qu'on ne l'ouvre pas ;
@@ -434,9 +445,11 @@ sudo dnf remove clamav-antivirus   # Fedora
 - **Noyaux inactifs** — les failles des noyaux installés mais non démarrés (par exemple le 6.8 GA
   quand le système tourne sur un noyau HWE 7.0) sont comptées à part et n'entrent plus dans le total ;
   une note indique le noyau en cours (`uname -r`) et comment retirer les anciens.
-- **Noyau HWE** — les failles du noyau 6.8 de Mint déjà corrigées dans un noyau HWE (6.11, 6.14) sont
-  marquées « corrigée dans le noyau HWE » et comptées ; la carte des failles explique comment installer
-  ce noyau (Gestionnaire de mises à jour → Noyaux Linux, ou `linux-generic-hwe-24.04`).
+- **Noyau HWE** — les failles du noyau d'origine de la version d'Ubuntu (par exemple le 6.8 de 24.04 / Mint 22)
+  déjà corrigées dans un noyau HWE (6.14, 7.0…) sont marquées « corrigée dans le noyau HWE » et comptées ; la
+  carte des failles explique comment installer ce noyau (Mint : Gestionnaire de mises à jour → Noyaux Linux ;
+  Ubuntu : `linux-generic-hwe-<version>`). Le noyau, la version d'Ubuntu et les noyaux HWE cités sont ceux du
+  système, jamais fixés d'avance.
 - **Bouton « Régler »** — chaque contrôle de la checklist qui n'est pas au vert propose « Régler »
   (action directe : pare-feu, mise à jour, scan, paramètres, liste des ports…) ou « Comment faire »
   (explication pas à pas : chiffrement, Secure Boot, AppArmor, sudo, comptes…). La liste des ports
@@ -544,8 +557,8 @@ python3 clamav-antivirus.py
 ## Construire les paquets
 
 ```bash
-./build-deb.sh        # clamav-antivirus_1.24.2_all.deb   (Mint / Ubuntu)
-./build-rpm.sh        # clamav-antivirus-1.24.2-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
+./build-deb.sh        # clamav-antivirus_1.24.3_all.deb   (Mint / Ubuntu)
+./build-rpm.sh        # clamav-antivirus-1.24.3-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
 ```
 
 Les deux paquets partagent la même arborescence de fichiers (`build-deb.sh --stage-only`) et le même manifeste

@@ -200,16 +200,13 @@ def is_public_ip(ip):
 
 
 def ubuntu_osv_ecosystem():
-    codename = ""
-    try:
-        with open("/etc/os-release") as f:
-            for line in f:
-                if line.startswith("UBUNTU_CODENAME="):
-                    codename = line.split("=", 1)[1].strip().strip('"')
-    except OSError:
-        pass
-    return {"noble": "Ubuntu:24.04:LTS", "jammy": "Ubuntu:22.04:LTS", "focal": "Ubuntu:20.04:LTS",
-            "questing": "Ubuntu:25.10", "plucky": "Ubuntu:25.04"}.get(codename, "Ubuntu:24.04:LTS")
+    """Écosystème OSV de l'Ubuntu sous-jacente : « Ubuntu:24.04:LTS » (Ubuntu 24.04, Linux Mint 22), « Ubuntu:26.04:LTS »,
+    « Ubuntu:25.10 »… Vide si la version n'est pas connue : l'inventaire est alors « non pris en charge » plutôt que
+    construit sur les paquets d'une autre version (noyau 6.8 de 24.04 signalé sur un 26.04 en 7.0, par exemple)."""
+    rel = distro.ubuntu_release()
+    if not rel:
+        return ""
+    return f"Ubuntu:{rel}:LTS" if distro.ubuntu_is_lts(rel) else f"Ubuntu:{rel}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1994,6 +1991,12 @@ def running_kernel_source(sources):
     return src.replace("linux-signed", "linux") if src else "", release
 
 
+def hwe_version_key(name):
+    """linux-hwe-6.14 → (6, 14) : tri numérique des noyaux HWE (6.8 avant 6.11, 7.0 après)."""
+    m = re.search(r"(\d+)\.(\d+)$", name)
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
 def osv_query(sources, ecosystem, skip=()):
     """Interroge OSV par lots, avec pagination (un noyau dépasse les 1000 fiches d'une page) ; {source: [ids]}."""
     names = sorted(n for n in sources if n not in skip)
@@ -2201,8 +2204,9 @@ def collect_vulnerabilities(previous=None):
               "embedded": {}, "vendor": {},
               "running_kernel": {}, "dormant_kernels": [],
               "by_priority": {}, "flatpak": [], "snap": [], "cache": {}}
-    if distro.is_rpm():
-        # OSV ne couvre pas Fedora : les avis de sécurité (CVE) viennent de dnf updateinfo (État du système)
+    if distro.is_rpm() or not ecosystem:
+        # OSV ne couvre pas Fedora (les avis CVE viennent de dnf updateinfo, État du système) ; sans version d'Ubuntu
+        # connue (LMDE, Debian…), pas d'inventaire plutôt qu'un inventaire fait pour une autre version.
         result.update(ecosystem="unsupported", unsupported=True)
         return result
     try:
@@ -2216,11 +2220,17 @@ def collect_vulnerabilities(previous=None):
         kernel_sources = {n for n, info in sources.items() if n.startswith("linux")
                           and any(re.match(r"linux-(image|modules)(-unsigned)?-\d", b) for b in info.get("binaries", []))}
         dormant = {n for n in kernel_sources if running_src and kernel_family(n) != kernel_family(running_src)}
-        result["running_kernel"] = {"release": release, "source": running_src}
+        ubuntu_rel = distro.ubuntu_release()
+        result["running_kernel"] = {"release": release, "source": running_src,
+                                    "version": (sources.get(running_src) or {}).get("version", ""),
+                                    "ubuntu": ubuntu_rel, "hwe_package": f"linux-generic-hwe-{ubuntu_rel}", "hwe_sources": []}
         result["dormant_kernels"] = sorted(dormant)
+        hwe_sources = set()
         found = osv_query(sources, ecosystem, skip=dormant)
         ids = sorted({vid for lst in found.values() for vid in lst})
-        cache = (previous or {}).get("cache") or {}
+        # Les détails en cache (versions corrigées, Ubuntu Pro) sont propres à un écosystème : relevé d'une autre
+        # version d'Ubuntu (mise à niveau, ou 24.04 pris par défaut avant 1.24.3) → tout re-télécharger.
+        cache = ((previous or {}).get("cache") or {}) if (previous or {}).get("ecosystem") == ecosystem else {}
         details = osv_details(ids, cache, ecosystem)
         result["cache"] = details
         for source, vids in found.items():
@@ -2259,13 +2269,16 @@ def collect_vulnerabilities(previous=None):
                     result["counts"]["dormant"] += 1
                 else:
                     result["counts"][status] += 1
-                # Noyau GA (linux 6.8) : la faille est souvent déjà corrigée dans un noyau HWE plus récent
+                # Noyau d'origine de la version (source « linux », ex. 6.8 sur 24.04) : la faille est souvent déjà corrigée
+                # dans un noyau HWE de la même version d'Ubuntu (linux-hwe-6.14, linux-hwe-7.0…) ; une version sans HWE
+                # (26.04 en 7.0 aujourd'hui) n'a rien de tel, la fiche OSV ne cite que ses propres paquets.
                 hwe = ""
                 if status in ("unfixed", "kernel_pending") and source == "linux" and not is_dormant:
                     fixed_hwe = {k: v for k, v in (d.get("fixed_by_pkg") or {}).items() if k.startswith("linux-hwe-") and v}
                     if fixed_hwe:
-                        k = sorted(fixed_hwe)[0]
+                        k = min(fixed_hwe, key=hwe_version_key)
                         hwe = f"{k} {fixed_hwe[k]}"
+                        hwe_sources.add(k)
                         result["counts"]["kernel_hwe_fixed"] += 1
                 pr = d["priority"] or "untriaged"
                 if status not in ("kernel_pending", "not_applicable"):
@@ -2274,6 +2287,7 @@ def collect_vulnerabilities(previous=None):
                                         "installed": installed, "fixed": fixed, "status": status, "hwe_fixed": hwe, "dormant": is_dormant,
                                         "priority": pr, "cvss": d["cvss"], "summary": d["summary"],
                                         "url": f"https://ubuntu.com/security/{d['cve']}" if d["cve"] else f"https://osv.dev/vulnerability/{d['id']}"})
+        result["running_kernel"]["hwe_sources"] = sorted(hwe_sources, key=hwe_version_key)
         result["items"].sort(key=lambda it: (PRIORITY_RANK.get(it["priority"], 6), it["status"] != "unfixed", it["package"]))
         annotate_vulns(result)
     except Exception as e:  # noqa: BLE001
@@ -2403,8 +2417,10 @@ def collect_checklist(daemon):
     vulns = daemon.state.get("vulns") or {}
     persistence = daemon.state.get("persistence") or {}
 
-    def add(key, status, weight, detail=""):
+    def add(key, status, weight, detail="", params=None):
         items.append({"key": key, "status": status, "weight": weight, "detail": str(detail)[:200]})
+        if params:
+            items[-1]["params"] = params           # textes hint / fix paramétrés ({kernel}, {pkg}…)
 
     add("firewall", "ok" if ufw.get("active") else ("fail" if ufw.get("installed") else "warn"), 15,
         f"{ufw.get('default_incoming', '')}/{ufw.get('default_outgoing', '')}" if ufw.get("active") else "")
@@ -2537,7 +2553,12 @@ def collect_checklist(daemon):
         f"{idx}/100" if idx is not None else "")
     # Noyau GA : failles déjà corrigées dans un noyau HWE (indication seulement, la distribution gère le déploiement)
     hwe_fixed = ((vulns or {}).get("counts") or {}).get("kernel_hwe_fixed") or 0
-    add("kernel_hwe", "na" if (vulns or {}).get("unsupported") or distro.is_rpm() else ("unknown" if not vulns else ("warn" if hwe_fixed else "ok")), 3, f"{hwe_fixed}" if hwe_fixed else "")
+    rk = (vulns or {}).get("running_kernel") or {}
+    ubuntu_rel = rk.get("ubuntu") or distro.ubuntu_release()
+    add("kernel_hwe", "na" if (vulns or {}).get("unsupported") or distro.is_rpm() else ("unknown" if not vulns else ("warn" if hwe_fixed else "ok")), 3,
+        f"{hwe_fixed}" if hwe_fixed else "",
+        params={"kernel": rk.get("release") or os.uname().release, "release": ubuntu_rel,
+                "hwe": ", ".join(rk.get("hwe_sources") or []) or "HWE", "pkg": rk.get("hwe_package") or f"linux-generic-hwe-{ubuntu_rel}"})
     # Réponse automatique
     add("auto_response", "ok" if settings.get("auto_response") else "warn", 2)
 
@@ -4012,6 +4033,12 @@ class Daemon:
         self.load_central_allowlist()
         try:
             stored_vulns = self.state.get("vulns") or {}
+            current_eco = ubuntu_osv_ecosystem() if not distro.is_rpm() else ""
+            if stored_vulns and stored_vulns.get("ecosystem") != (current_eco or "unsupported"):
+                # Relevé fait pour une autre version d'Ubuntu (mise à niveau, ou 24.04 pris par défaut avant 1.24.3) :
+                # écarté, le relevé quotidien le refait dans la minute sur le bon écosystème.
+                log(f"Failles : relevé {stored_vulns.get('ecosystem')!r} écarté, le système est {current_eco or 'unsupported'!r}")
+                stored_vulns = {}
             if stored_vulns.get("items") and ("na_vendor" not in (stored_vulns.get("counts") or {}) or "context" not in stored_vulns):
                 stored_vulns = reclassify_vulns(stored_vulns)
                 log("Failles : relevé reclassé (moteur JavaScript intégré)")
@@ -6301,6 +6328,7 @@ class Daemon:
         sys_status = state.get("system_status") or {}
         return {
             "ok": True, "version": VERSION, "job": job, "queue": queue,
+            "distro": {"family": distro.FAMILY, "id": distro.DISTRO["id"], "pretty": distro.DISTRO["pretty"]},
             "state": {k: v for k, v in state.items() if k not in ("system_status", "alerts", "vulns", "checklist", "integrity", "persistence", "app_update", "trusted_programs", "acknowledged_persistence")},
             "resumable": resumable,
             "first_scan_pending": os.path.exists(FIRST_SCAN_FLAG),

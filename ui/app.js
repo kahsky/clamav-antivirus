@@ -463,11 +463,11 @@ function renderChecklist() {
             <span class="check-icon">${i.status === 'ok' ? '✓' : i.status === 'fail' ? '✕' : i.status === 'warn' ? '!' : '?'}</span>
             <div class="check-text">
                 <span class="check-title">${t(`check.${i.key}.title`)}</span>
-                <span class="check-detail">${i.extras ? t('check.auto_updates.extras', { list: checkExtrasText(i.extras) }) : t(`check.${i.key}.${i.status === 'ok' ? 'ok' : 'hint'}`)}${i.detail_key ? ` — ${escapeHtml(t(i.detail_key, i.detail_params || {}))}` : i.detail ? ` — ${escapeHtml(i.detail)}` : ''}</span>
+                <span class="check-detail">${i.extras ? t('check.auto_updates.extras', { list: checkExtrasText(i.extras) }) : t(`check.${i.key}.${i.status === 'ok' ? 'ok' : 'hint'}`, i.params || {})}${i.detail_key ? ` — ${escapeHtml(t(i.detail_key, i.detail_params || {}))}` : i.detail ? ` — ${escapeHtml(i.detail)}` : ''}</span>
             </div>
             ${i.status !== 'ok' && i.status !== 'na' ? `<span class="check-actions">${CHECK_ACK[i.key] ? `<button class="btn btn-secondary btn-sm" onclick="CHECK_ACK['${escapeJs(i.key)}']()" title="${escapeHtml(t('security.ignore_hint'))}">${t('security.ignore')}</button>` : ''}<button class="btn ${i.status === 'fail' ? 'btn-danger' : 'btn-secondary'} btn-sm check-fix-btn" onclick="fixCheck('${escapeJs(i.key)}')">${CHECK_FIX_LABEL[i.key] ? t(CHECK_FIX_LABEL[i.key]) : CHECK_FIX[i.key] ? t('security.fix') : t('security.fix.how')}</button></span>` : ''}
             <span class="check-weight">${i.weight}</span>
-            ${t(`check.${i.key}.fix`) !== `check.${i.key}.fix` ? `<div class="check-fix" id="fix-${escapeHtml(i.key)}" hidden>${escapeHtml(t(`check.${i.key}.fix`))}</div>` : ''}
+            ${t(`check.${i.key}.fix`) !== `check.${i.key}.fix` ? `<div class="check-fix" id="fix-${escapeHtml(i.key)}" hidden>${escapeHtml(t(`check.${i.key}.fix`, i.params || {}))}</div>` : ''}
         </div>`).join('');
     const ports = c.ports || [];
     $('portsList').innerHTML = `<p class="text-muted ports-intro">${t('ports.intro')}</p>` + (ports.length ? ports.map(p => {
@@ -544,7 +544,8 @@ function renderVulns(refreshing = false) {
     if (hweNote) {
         const n = c.kernel_hwe_fixed || 0;
         hweNote.hidden = !n;
-        if (n) hweNote.innerHTML = `${escapeHtml(t('security.vulns.hwe_note', { n: formatNumber(n) }))} <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'open_update_manager'})">${t('security.vulns.hwe_action')}</button>`;
+        const rk = v.running_kernel || {};
+        if (n) hweNote.innerHTML = `${escapeHtml(t('security.vulns.hwe_note', { n: formatNumber(n), kernel: rk.release || '', release: rk.ubuntu || '', hwe: (rk.hwe_sources || []).join(', ') || 'HWE', pkg: rk.hwe_package || 'linux-generic-hwe-' + (rk.ubuntu || '') }))} <button class="btn btn-secondary btn-sm" onclick="sendToBackend({action:'open_update_manager'})">${t('security.vulns.hwe_action')}</button>`;
     }
     $('vulnList').innerHTML = items.length ? items.slice(0, 300).map(i => `
         <div class="cve-item vuln-${i.status} prio-${i.priority}">
@@ -755,7 +756,7 @@ function renderAppUpdate() {
         $('appUpdateSummary').textContent = t('security.update.uptodate', { current, rel: formatRelative(u.checked_at) }) + (u.verified ? ` · ${t('security.update.verified')}` : '');
         $('btnInstallUpdate').hidden = true;
     }
-    $('appUpdateRepo').textContent = t('security.update.repo_hint');
+    $('appUpdateRepo').textContent = t(((lastStatus || {}).distro || {}).family === 'rpm' ? 'security.update.repo_hint_rpm' : 'security.update.repo_hint');
 }
 
 function renderConnections() {
