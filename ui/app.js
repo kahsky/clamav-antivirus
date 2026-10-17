@@ -671,6 +671,11 @@ async function unackAllVulns() {
     if (cves.length) sendToBackend({ action: 'acknowledge_vuln', cves, remove: true });
 }
 
+function ackWatchAlert(time) {
+    const a = alerts.find(x => x.kind === 'integrity' && x.time === time && x.text);
+    if (a) sendToBackend({ action: 'acknowledge_integrity', tool: a.check, text: a.text });
+}
+
 function acknowledgeIntegrity(ref, remove = false) {
     const r = integrityWarnRefs[ref];
     if (r) sendToBackend({ action: 'acknowledge_integrity', tool: r.tool, text: r.text, remove });
@@ -1737,7 +1742,14 @@ function renderAlerts(available = true) {
             const reasonKey = a.kind === 'integrity' && a.reason ? `security.integrity.reason.${a.reason}` : '';
             const body = reasonKey && t(reasonKey) !== reasonKey
                 ? `${escapeHtml(a.title || '')} — ${escapeHtml(t(reasonKey))}${(a.items || []).length ? `<div class="alert-exe">${(a.items || []).map(escapeHtml).join('<br>')}</div>` : ''}`
-                : `${escapeHtml(a.kind === 'update' ? '' : a.title || '')}${a.detail ? ` — ${escapeHtml(a.detail)}` : ''}`;
+                : a.kind === 'integrity' && !a.text
+                    ? escapeHtml(t('popup.integrity.body', { n: a.title || '0', tools: a.detail || '' }))   // ancien format (avant 1.24.4) : détail non conservé
+                    : `${escapeHtml(a.kind === 'update' ? '' : a.title || '')}${a.detail ? ` — ${escapeHtml(a.detail)}` : ''}`;
+            // Veille des processus : « C'est normal » (avertissement approuvé, même après la fin du processus) et « Faire confiance » (programme)
+            const actions = a.kind === 'integrity' && a.check && a.text
+                ? (a.approved ? `<div class="alert-actions"><span class="badge badge-green">${t('security.integrity.ignored_badge')}</span></div>`
+                    : `<div class="alert-actions"><button class="btn btn-secondary btn-sm" onclick="ackWatchAlert('${escapeJs(a.time)}')">${t('security.integrity.ack')}</button>${a.exe ? ` <button class="btn btn-secondary btn-sm" onclick="trustProgram('${escapeJs(a.exe)}','${escapeJs(a.comm || '')}')">${t('popup.btn.its_me')}</button>` : ''}</div>`)
+                : '';
             return `
         <div class="alert-item ${a.severity === 'danger' ? 'alert-danger' : a.severity === 'warn' ? 'alert-warn' : 'alert-info'}">
             <div class="alert-head">
@@ -1746,6 +1758,7 @@ function renderAlerts(available = true) {
                 <span class="alert-meta">${formatDateTime(a.time)}</span>
             </div>
             <div class="alert-body">${body}</div>
+            ${actions}
         </div>`;
         }
         if (a.kind === 'upload') {
@@ -2574,6 +2587,7 @@ function simulateBackend(data) {
             break;
         case 'trust_program': case 'untrust_program': case 'acknowledge_persistence':
             reply('operationResult', { status: 'success', message: data.action === 'trust_program' ? t('msg.program_trusted', { program: data.comm || data.exe }) : data.action === 'untrust_program' ? t('msg.program_untrusted') : t('msg.persistence_acknowledged') });
+            sendToBackend({ action: 'get_alerts' });
             break;
         case 'system_upgrade':
             reply('operationResult', { status: 'info', message: t('msg.system_upgrading') });
@@ -2602,6 +2616,7 @@ function simulateBackend(data) {
             break;
         case 'acknowledge_integrity':
             reply('operationResult', { status: 'success', message: t(data.remove ? 'msg.integrity_unacknowledged' : 'msg.integrity_acknowledged') });
+            sendToBackend({ action: 'get_alerts' });                                   // badge « approuvé » sur l'événement
             break;
         case 'acknowledge_port': {
             const c = secData.checklist; const set = new Set(data.keys || []);

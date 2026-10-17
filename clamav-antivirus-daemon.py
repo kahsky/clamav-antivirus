@@ -3098,12 +3098,16 @@ DEBUGGER_NAMES = {"gdb", "strace", "ltrace", "lldb", "lldb-server", "rr", "valgr
 STEAM_PRELOAD_RE = re.compile(r"/(\.steam|\.local/share/Steam|Steam)/")
 
 
-def process_check():
+def process_check(trusted=None):
     """Balayage de /proc (comportement) : exécutable supprimé du disque, exécution depuis un dossier temporaire,
     bibliothèque injectée par LD_PRELOAD, processus suivi par ptrace. Verdicts intégrés : programme mis à jour
-    (fichier remplacé), AppImage, bibliothèque livrée par un paquet / Steam / magasin, débogueur connu → bénins."""
-    findings = {"exe_deleted": [], "exe_upgraded": [], "exe_tmp": [], "exe_appimage": []}
+    (fichier remplacé), AppImage, bibliothèque livrée par un paquet / Steam / magasin, débogueur connu → bénins.
+    `trusted` {exe: nom} (« Faire confiance ») : programme de confiance par chemin, ou par nom quand le chemin de
+    confiance est lui-même un dossier temporaire (binaire de test recompilé sous /tmp à chaque fois)."""
+    findings = {"exe_deleted": [], "exe_upgraded": [], "exe_tmp": [], "exe_appimage": [], "exe_trusted": []}
     preload_libs, tracers = {}, {}
+    trusted = trusted or {}
+    tmp_trusted_names = {c for e, c in trusted.items() if e.startswith(TMP_EXE_DIRS) and c}
     scanned = 0
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
@@ -3118,14 +3122,19 @@ def process_check():
         deleted = exe.endswith(" (deleted)")
         path = exe[:-10] if deleted else exe
         label = f"{pid} {comm} {path}"
+        is_trusted = path in trusted or (path.startswith(TMP_EXE_DIRS) and comm in tmp_trusted_names)
         if deleted:
             if os.path.exists(path) or path.startswith(SYSTEM_EXE_DIRS):
                 findings["exe_upgraded"].append(label)     # programme mis à jour (ou paquet retiré) pendant qu'il tourne
+            elif is_trusted:
+                findings["exe_trusted"].append(label)
             else:
                 findings["exe_deleted"].append(label)
         elif path.startswith(TMP_EXE_DIRS):
             if "/.mount_" in path or "appimage" in path.lower():
                 findings["exe_appimage"].append(label)
+            elif is_trusted:
+                findings["exe_trusted"].append(label)
             else:
                 findings["exe_tmp"].append(label)
         try:
@@ -3157,6 +3166,7 @@ def process_check():
     add(findings["exe_tmp"], "unknown", "exe_tmp", "Process(es) running from a temporary directory:")
     add(findings["exe_upgraded"], "benign", "exe_upgraded", "Process(es) still running an executable replaced on disk (program updated):")
     add(findings["exe_appimage"], "benign", "exe_appimage", "AppImage(s) mounted under /tmp:")
+    add(findings["exe_trusted"], "benign", "trusted_program", "Process(es) of a trusted program:")
     if preload_libs:
         owners = dpkg_owners([lib for lib in preload_libs if lib.startswith("/")])
         ns_b, ns_u = [], []
@@ -3206,8 +3216,8 @@ def process_check():
             "rules": PROC_RULES_VERSION, "info": {"scanned": scanned}}
 
 
-def builtin_check(name):
-    return kernel_check() if name == "kernel" else process_check()
+def builtin_check(name, trusted=None):
+    return kernel_check() if name == "kernel" else process_check(trusted)
 
 
 def integrity_tools_now():
@@ -3808,7 +3818,7 @@ def lynis_analysis(warnings):
     return {"warnings": out[:80], "benign": benign[:40], "notes": notes}
 
 
-def run_integrity_checks(collect_verified=False, cancel_event=None, progress=None):
+def run_integrity_checks(collect_verified=False, cancel_event=None, progress=None, trusted=None):
     """Lynis (audit de durcissement), unhide (processus et ports cachés), chkrootkit, debsums et fichiers de
     l'application. Avec collect_verified, retourne aussi l'ensemble (hashes) des fichiers système vérifiés
     par debsums, que l'antivirus peut ignorer. `progress(outil, pourcentage, étape, état, avertissements)`
@@ -3836,7 +3846,7 @@ def run_integrity_checks(collect_verified=False, cancel_event=None, progress=Non
         if name in BUILTIN_CHECKS:
             report(name, 0, "", "running")
             try:
-                entry = builtin_check(name)
+                entry = builtin_check(name, trusted)
             except Exception as e:  # noqa: BLE001
                 log(f"Contrôle intégré {name} : {e}")
                 entry = {"installed": True, "ran": False, "warnings": [], "rc": 1}
@@ -4430,7 +4440,7 @@ class Daemon:
                 self.emit_line("info", "▶ integrity (Lynis, unhide, chkrootkit, debsums)")
                 self.integrity_progress = None
                 result, skip = run_integrity_checks(collect_verified=True, cancel_event=job.cancel_event,
-                                                    progress=self.integrity_progress_cb)
+                                                    progress=self.integrity_progress_cb, trusted=self.trusted_map())
                 self.integrity_progress = None
                 if not job.cancel_event.is_set():
                     self._store_integrity(result, after_scan=True)
@@ -5833,6 +5843,10 @@ class Daemon:
         if due:
             self.mail_flush()
 
+    def trusted_map(self):
+        """{exe: nom} des programmes de confiance (« Faire confiance »), pour la veille des processus."""
+        return {p["exe"]: p.get("comm") or os.path.basename(p["exe"]) for p in (self.state.get("trusted_programs") or []) if p.get("exe")}
+
     def _builtin_refresh(self, initial=False):
         """Contrôles intégrés (noyau, processus) recalculés sur place : nouvel avertissement non approuvé → alerte
         (popup) et bouclier rouge ; disparition (processus terminé) → retour au vert. Pas de relance des outils."""
@@ -5844,9 +5858,10 @@ class Daemon:
         integ = dict(stored)
         tools = dict(integ.get("tools") or {})
         new_unknown = []
+        trusted = self.trusted_map()
         for name in BUILTIN_CHECKS:
             try:
-                entry = builtin_check(name)
+                entry = builtin_check(name, trusted)
             except Exception as e:  # noqa: BLE001
                 log(f"Contrôle intégré {name} : {e}")
                 continue
@@ -5874,7 +5889,7 @@ class Daemon:
                 f"{t}: {x.splitlines()[0][:100]} {' | '.join(ln.strip() for ln in x.splitlines()[1:4])[:200]}" for t, x in fresh[:4]))
             self.publish_alert({"kind": "integrity", "severity": "danger", "time": now_iso(), "title": f["comm"],
                                 "detail": f"{f['head']} {f['label']}"[:300] + (f" (+{len(fresh) - 1})" if len(fresh) > 1 else ""),
-                                "check": n, "reason": f["reason"], "items": f["items"],
+                                "check": n, "reason": f["reason"], "items": f["items"], "text": w,
                                 "pid": f["pid"], "comm": f["comm"], "exe": f["exe"], "count": len(fresh), "top_dir": "", "reasons": [], "sample": []})
 
     def _chkrootkit_rescan(self):
@@ -5923,7 +5938,7 @@ class Daemon:
         try:
             self.broadcast({"event": "integrity_running"})
             self.integrity_progress = None
-            self._store_integrity(run_integrity_checks(progress=self.integrity_progress_cb), after_scan=after_scan)
+            self._store_integrity(run_integrity_checks(progress=self.integrity_progress_cb, trusted=self.trusted_map()), after_scan=after_scan)
             return True
         finally:
             self.integrity_running = False
@@ -7023,7 +7038,11 @@ class Daemon:
             self._trusted_set = {p["exe"] for p in programs}
             alerts = [a for a in (self.state.get("alerts") or [])
                       if not (a.get("kind") in ("burst", "connection") and normalize_exe(a.get("exe")) == exe)]
+            for a in alerts:                                   # veille des processus : alerte « approuvée »
+                if a.get("kind") == "integrity" and a.get("exe") and normalize_exe(a.get("exe")) == exe:
+                    a["approved"] = True
             self.state.update(alerts=alerts)
+            threading.Thread(target=self._builtin_refresh, daemon=True).start()   # avertissement retiré sans attendre 5 min
             for spid, info in list(self.suspended.items()):
                 if normalize_exe(info.get("exe")) == exe:
                     try:
@@ -7095,6 +7114,14 @@ class Daemon:
             if not req.get("remove"):
                 ack.insert(0, key)
             self.state.update(acknowledged_integrity=ack[:500])
+            # Alertes de la veille portant cet avertissement : « approuvé » dans les événements (bouton « C'est normal »)
+            alerts = list(self.state.get("alerts") or [])
+            marked = [a for a in alerts if a.get("kind") == "integrity" and a.get("text")
+                      and integrity_ack_key(a.get("check") or tool, a["text"]) == key]
+            for a in marked:
+                a["approved"] = not req.get("remove")
+            if marked:
+                self.state.update(alerts=alerts)
             integ = self.apply_integrity_acks(dict(self.state.get("integrity") or {}))
             if integ:
                 self.state.update(integrity=integ)

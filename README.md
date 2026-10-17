@@ -47,15 +47,15 @@ seule si l'option est activée dans Paramètres.
 
 ### Téléchargement direct
 
-- Mint / Ubuntu : [clamav-antivirus_1.24.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.24.4_all.deb)
-- Fedora : [clamav-antivirus-1.24.4-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.24.4-1.noarch.rpm)
+- Mint / Ubuntu : [clamav-antivirus_1.24.5_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.24.5_all.deb)
+- Fedora : [clamav-antivirus-1.24.5-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.24.5-1.noarch.rpm)
 - Toutes les versions : [www.dukiwi.com/repo](https://www.dukiwi.com/repo)
 
 ### Installer le paquet téléchargé à la main
 
 ```bash
-sudo apt install ./clamav-antivirus_1.24.4_all.deb          # Mint / Ubuntu
-sudo dnf install ./clamav-antivirus-1.24.4-1.noarch.rpm      # Fedora
+sudo apt install ./clamav-antivirus_1.24.5_all.deb          # Mint / Ubuntu
+sudo dnf install ./clamav-antivirus-1.24.5-1.noarch.rpm      # Fedora
 ```
 
 L'installation active le service système et le planificateur, puis lance le scan initial :
@@ -224,6 +224,13 @@ sudo dnf remove clamav-antivirus   # Fedora
 - **Télémétrie après le premier scan complet et à la demande** — le premier scan complet terminé après l'accord
   déclenche l'envoi du rapport anonyme sans attendre la semaine (mesures de performance) ; bouton « Envoyer la
   télémétrie maintenant » dans Paramètres.
+- **Veille des processus : approuver ou faire confiance depuis l'événement** — l'alerte garde le texte complet de
+  l'avertissement : les événements proposent « C'est normal » (avertissement approuvé, même si le processus a déjà
+  disparu, sans PID) et « Faire confiance » (programme), puis affichent « approuvé ». Les programmes de confiance sont
+  reconnus par la veille et par l'audit complet : par chemin, et par nom quand le chemin de confiance est lui-même un
+  dossier temporaire (binaire de test recompilé sous /tmp). Les anciennes alertes sans détail (avant 1.24.5) sont
+  affichées comme « N avertissement(s) lors de la vérification d'intégrité (processes) » ; le journal (Journaux) garde
+  la trace de chaque passage avec, désormais, le programme et son chemin.
 - **Veille des processus : alerte lisible, plus de rouge bloqué** — un processus suspect (exécutable supprimé du
   disque, lancé depuis /tmp, LD_PRELOAD inconnu, ptrace) relancé avec un nouveau PID était un « nouvel »
   avertissement à chaque passage de la veille (toutes les 5 min) : alerte rouge « 1 — processes » sans aucun
@@ -565,8 +572,8 @@ python3 clamav-antivirus.py
 ## Construire les paquets
 
 ```bash
-./build-deb.sh        # clamav-antivirus_1.24.4_all.deb   (Mint / Ubuntu)
-./build-rpm.sh        # clamav-antivirus-1.24.4-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
+./build-deb.sh        # clamav-antivirus_1.24.5_all.deb   (Mint / Ubuntu)
+./build-rpm.sh        # clamav-antivirus-1.24.5-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
 ```
 
 Les deux paquets partagent la même arborescence de fichiers (`build-deb.sh --stage-only`) et le même manifeste
