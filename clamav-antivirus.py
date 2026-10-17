@@ -1257,8 +1257,12 @@ class ClamAVAntivirusApp:
                        buttons=[(T("popup.btn.details"), None, lambda: self.show_tab("system"))])
             return
         if kind == "integrity":
-            self.popup("danger" if alert.get("severity") == "danger" else "warning", T("popup.integrity.title"), T("popup.integrity.body", n=alert.get("title", "0"),
-                       tools=alert.get("detail", "")), on_activate=lambda: self.show_tab("security"),
+            reason_key = f"security.integrity.reason.{alert.get('reason')}" if alert.get("reason") else ""
+            body = (T("popup.integrity.watch", program=alert.get("title") or "?", what=T(reason_key))
+                    if reason_key and T(reason_key) != reason_key else
+                    T("popup.integrity.body", n=alert.get("title", "0"), tools=alert.get("detail", "")))
+            self.popup("danger" if alert.get("severity") == "danger" else "warning", T("popup.integrity.title"), body,
+                       on_activate=lambda: self.show_tab("security"),
                        buttons=[(T("popup.btn.details"), None, lambda: self.show_tab("security"))])
             return
         if kind == "update":

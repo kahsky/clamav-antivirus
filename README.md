@@ -47,15 +47,15 @@ seule si l'option est activée dans Paramètres.
 
 ### Téléchargement direct
 
-- Mint / Ubuntu : [clamav-antivirus_1.24.3_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.24.3_all.deb)
-- Fedora : [clamav-antivirus-1.24.3-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.24.3-1.noarch.rpm)
+- Mint / Ubuntu : [clamav-antivirus_1.24.4_all.deb](https://www.dukiwi.com/repo/clamav-antivirus/clamav-antivirus_1.24.4_all.deb)
+- Fedora : [clamav-antivirus-1.24.4-1.noarch.rpm](https://www.dukiwi.com/repo/rpm/fedora/noarch/clamav-antivirus-1.24.4-1.noarch.rpm)
 - Toutes les versions : [www.dukiwi.com/repo](https://www.dukiwi.com/repo)
 
 ### Installer le paquet téléchargé à la main
 
 ```bash
-sudo apt install ./clamav-antivirus_1.24.3_all.deb          # Mint / Ubuntu
-sudo dnf install ./clamav-antivirus-1.24.3-1.noarch.rpm      # Fedora
+sudo apt install ./clamav-antivirus_1.24.4_all.deb          # Mint / Ubuntu
+sudo dnf install ./clamav-antivirus-1.24.4-1.noarch.rpm      # Fedora
 ```
 
 L'installation active le service système et le planificateur, puis lance le scan initial :
@@ -224,6 +224,14 @@ sudo dnf remove clamav-antivirus   # Fedora
 - **Télémétrie après le premier scan complet et à la demande** — le premier scan complet terminé après l'accord
   déclenche l'envoi du rapport anonyme sans attendre la semaine (mesures de performance) ; bouton « Envoyer la
   télémétrie maintenant » dans Paramètres.
+- **Veille des processus : alerte lisible, plus de rouge bloqué** — un processus suspect (exécutable supprimé du
+  disque, lancé depuis /tmp, LD_PRELOAD inconnu, ptrace) relancé avec un nouveau PID était un « nouvel »
+  avertissement à chaque passage de la veille (toutes les 5 min) : alerte rouge « 1 — processes » sans aucun
+  détail, « C'est normal » sans effet dès que le PID changeait, et l'état global restait « danger » 24 h après la
+  dernière alerte même une fois le relevé redevenu propre. L'avertissement est comparé et approuvé sans les PID ni
+  l'ordre des lignes ; l'alerte, la popup, le courrier et le journal nomment le programme, le motif (traduit) et les
+  lignes pid / nom / chemin ; l'état global et la ligne « Menaces » de la vue simple suivent le relevé d'intégrité
+  courant (vert dès que le processus a disparu ou a été approuvé) au lieu de l'historique des alertes.
 - **Ubuntu 26.04 : failles de la bonne version** — l'inventaire OSV interrogeait l'écosystème d'Ubuntu 24.04 pour
   toute version inconnue (26.04 « resolute » compris) : un Ubuntu 26.04 en noyau 7.0 voyait les failles et l'alerte
   « noyau 6.8 » de 24.04 / Mint 22 (issue #1). La version d'Ubuntu est maintenant lue dans os-release (Ubuntu) ou
@@ -557,8 +565,8 @@ python3 clamav-antivirus.py
 ## Construire les paquets
 
 ```bash
-./build-deb.sh        # clamav-antivirus_1.24.3_all.deb   (Mint / Ubuntu)
-./build-rpm.sh        # clamav-antivirus-1.24.3-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
+./build-deb.sh        # clamav-antivirus_1.24.4_all.deb   (Mint / Ubuntu)
+./build-rpm.sh        # clamav-antivirus-1.24.4-1.noarch.rpm (Fedora ; nécessite rpmbuild : sudo apt install rpm)
 ```
 
 Les deux paquets partagent la même arborescence de fichiers (`build-deb.sh --stage-only`) et le même manifeste

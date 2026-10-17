@@ -3739,9 +3739,37 @@ def debsums_analysis(lines):
     return {"warnings": out[:80], "benign": benign[:80], "notes": notes}
 
 
+_PROC_PID_RE = re.compile(r"^\d+ (?=\S)")        # « 1234 comm /chemin » → « comm /chemin »
+_TRACER_PID_RE = re.compile(r" \(\d+\) -> ")      # « gdb (4321) -> victime » → « gdb -> victime »
+
+
+def integrity_warning_norm(tool, text):
+    """Texte d'un avertissement sans ce qui change d'une exécution à l'autre. Pour la veille des processus : sans les
+    PID ni l'ordre des lignes, sinon un programme relancé est un « nouvel » avertissement à chaque passage (alerte
+    rouge toutes les 5 min, « C'est normal » sans effet dès que le PID change)."""
+    if tool == "processes":
+        lines = [re.sub(r"\s+", " ", ln).strip() for ln in (text or "").strip().splitlines() if ln.strip()]
+        if len(lines) > 1:
+            return "\n".join([lines[0]] + sorted({_TRACER_PID_RE.sub(" -> ", _PROC_PID_RE.sub("", ln)) for ln in lines[1:]}))
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
 def integrity_ack_key(tool, text):
     """Clé d'un avertissement approuvé (« C'est normal ») : outil + empreinte du texte normalisé."""
-    return f"{tool}:{hashlib.sha1(re.sub(r'\s+', ' ', (text or '').strip()).encode()).hexdigest()[:16]}"
+    return f"{tool}:{hashlib.sha1(integrity_warning_norm(tool, text).encode()).hexdigest()[:16]}"
+
+
+def watch_alert_fields(tool, text, notes):
+    """Programme, exécutable, motif et lignes d'un avertissement de la veille noyau/processus, pour une alerte lisible
+    (« evilsleep — exécutable supprimé du disque » plutôt que « 1 — processes »)."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    note = next((x for x in (notes or []) if x.get("verdict") == "unknown"), None) or {}
+    label = note.get("path") or (lines[1] if len(lines) > 1 else "")
+    parts = label.split(" ", 2)
+    by_pid = len(parts) >= 2 and parts[0].isdigit()
+    comm = parts[1] if by_pid else (label.split(" (")[0].split(" <- ")[0].strip() or tool)
+    return {"pid": int(parts[0]) if by_pid else 0, "comm": comm, "exe": parts[2] if by_pid and len(parts) == 3 else "",
+            "reason": note.get("reason") or "", "items": lines[1:7], "head": lines[0] if lines else "", "label": label}
 
 
 LYNIS_RULES_VERSION = 1
@@ -5823,8 +5851,8 @@ class Daemon:
                 log(f"Contrôle intégré {name} : {e}")
                 continue
             prev = tools.get(name) or {}
-            prev_all = set(prev.get("all_warnings") or prev.get("warnings") or [])
-            new_unknown += [(name, w) for w in entry["warnings"] if w not in prev_all]
+            prev_all = {integrity_warning_norm(name, w) for w in (prev.get("all_warnings") or prev.get("warnings") or [])}
+            new_unknown += [(name, w) for w in entry["warnings"] if integrity_warning_norm(name, w) not in prev_all]
             entry["all_warnings"] = list(entry["warnings"])
             tools[name] = entry
         integ["tools"] = tools
@@ -5840,10 +5868,14 @@ class Daemon:
         self.refresh_overall()
         fresh = [(n, w) for n, w in new_unknown if w in (tools[n].get("warnings") or [])]
         if fresh and not initial:
-            self.write_log("⚠ kernel/process watch: " + "; ".join(f"{n}: {w.splitlines()[0][:100]}" for n, w in fresh[:4]))
-            self.publish_alert({"kind": "integrity", "severity": "danger", "time": now_iso(), "title": str(len(fresh)),
-                                "detail": ", ".join(sorted({n for n, _ in fresh})),
-                                "pid": 0, "comm": "", "exe": "", "count": 0, "top_dir": "", "reasons": [], "sample": []})
+            n, w = fresh[0]
+            f = watch_alert_fields(n, w, (tools[n].get("notes") or {}).get(w))
+            self.write_log("⚠ kernel/process watch: " + "; ".join(
+                f"{t}: {x.splitlines()[0][:100]} {' | '.join(ln.strip() for ln in x.splitlines()[1:4])[:200]}" for t, x in fresh[:4]))
+            self.publish_alert({"kind": "integrity", "severity": "danger", "time": now_iso(), "title": f["comm"],
+                                "detail": f"{f['head']} {f['label']}"[:300] + (f" (+{len(fresh) - 1})" if len(fresh) > 1 else ""),
+                                "check": n, "reason": f["reason"], "items": f["items"],
+                                "pid": f["pid"], "comm": f["comm"], "exe": f["exe"], "count": len(fresh), "top_dir": "", "reasons": [], "sample": []})
 
     def _chkrootkit_rescan(self):
         """chkrootkit seul (moins d'une minute) quand le relevé stocké est incomplet ; classification intégrée."""
@@ -6172,7 +6204,9 @@ class Daemon:
                 continue
             if ts < cutoff:
                 continue
-            if a.get("severity") == "danger" and a.get("kind") != "honeypot":
+            # Veille noyau/processus (kind integrity) : c'est le relevé d'intégrité courant qui fait foi (rouge tant que
+            # l'avertissement est là, vert dès que le processus a disparu ou a été approuvé), pas l'alerte de 24 h.
+            if a.get("severity") == "danger" and a.get("kind") not in ("honeypot", "integrity"):
                 raise_to("red", "danger_alert")
                 break
         if (self.honeypot.summary() or {}).get("danger_24h"):

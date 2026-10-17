@@ -903,7 +903,9 @@ function simpleOverall() {
         action: (sysState === 'security' || sysState === 'updates') ? { label: t('simple.update_system'), fn: "sendToBackend({action:'system_upgrade'})" } : (openVulns ? { label: t('security.ignore'), fn: "ackAllVulns()" } : null) });
 
     // Menaces / quarantaine
-    const danger = alerts.find(a => a.severity === 'danger');
+    // Même règle que le service : alertes graves des dernières 24 h, hors pot de miel (ligne Réseau local) et hors veille
+    // d'intégrité (ligne Intégrité du système, qui suit le relevé courant)
+    const danger = alerts.find(a => a.severity === 'danger' && a.kind !== 'integrity' && a.kind !== 'honeypot' && Date.now() - new Date(a.time).getTime() < 86400e3);
     const lastScan = lastStatus && lastStatus.last_scan;
     let thrState = 'ok', thrValue = t('simple.threats.none');
     const suspended = (lastStatus && lastStatus.suspended) || [];
@@ -1731,14 +1733,19 @@ function renderAlerts(available = true) {
         }
         if (a.kind === 'persistence' || a.kind === 'integrity' || a.kind === 'update') {
             const titles = { persistence: t('popup.persistence.title'), integrity: t('popup.integrity.title'), update: t('popup.appupdate.title', { version: a.title || '' }) };
+            // Veille noyau/processus : programme, motif traduit et lignes concernées (pid, nom, chemin)
+            const reasonKey = a.kind === 'integrity' && a.reason ? `security.integrity.reason.${a.reason}` : '';
+            const body = reasonKey && t(reasonKey) !== reasonKey
+                ? `${escapeHtml(a.title || '')} — ${escapeHtml(t(reasonKey))}${(a.items || []).length ? `<div class="alert-exe">${(a.items || []).map(escapeHtml).join('<br>')}</div>` : ''}`
+                : `${escapeHtml(a.kind === 'update' ? '' : a.title || '')}${a.detail ? ` — ${escapeHtml(a.detail)}` : ''}`;
             return `
-        <div class="alert-item ${a.severity === 'warn' ? 'alert-warn' : 'alert-info'}">
+        <div class="alert-item ${a.severity === 'danger' ? 'alert-danger' : a.severity === 'warn' ? 'alert-warn' : 'alert-info'}">
             <div class="alert-head">
-                <span class="badge ${a.severity === 'warn' ? 'badge-amber' : 'badge-blue'}">${t(`system.alert.${a.kind}`)}</span>
+                <span class="badge ${a.severity === 'danger' ? 'badge-red' : a.severity === 'warn' ? 'badge-amber' : 'badge-blue'}">${t(`system.alert.${a.kind}`)}</span>
                 <span class="alert-program">${escapeHtml(titles[a.kind])}</span>
                 <span class="alert-meta">${formatDateTime(a.time)}</span>
             </div>
-            <div class="alert-body">${escapeHtml(a.kind === 'update' ? '' : a.title || '')}${a.detail ? ` — ${escapeHtml(a.detail)}` : ''}</div>
+            <div class="alert-body">${body}</div>
         </div>`;
         }
         if (a.kind === 'upload') {
